@@ -1,0 +1,10 @@
+server:
+  host: 0.0.0.0
+  port: 3069
+
+thirdweb:
+  urls:
+    rpc: rpc.thirdweb-dev.com
+    bundler: bundler.thirdweb-dev.com
+    paymaster: bundler.thirdweb-dev.com
+    vault: https://d2w4ge7u2axqfk.cloudfront.net

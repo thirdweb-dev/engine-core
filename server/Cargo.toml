@@ -1,0 +1,22 @@
+[package]
+name = "thirdweb-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "0.15.10", features = ["serde"] }
+async-nats = "0.40.0"
+axum = { version = "0.8.4", features = ["macros"] }
+config = "0.15.11"
+serde = "1.0.219"
+serde_json = "1.0.140"
+vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
+vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
+engine-core = { path = "../core" }
+engine-aa-core = { path = "../aa-core" }
+tokio = { version = "1.44.2", features = ["full"] }
+tower-http = { version = "0.6.2", features = ["cors", "trace"] }
+tracing = "0.1.41"
+anyhow = "1.0.98"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+rand = "0.9.1"
