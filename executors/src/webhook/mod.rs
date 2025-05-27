@@ -1,0 +1,409 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH}; // Added SystemTime, UNIX_EPOCH
+
+use hex;
+use hmac::{Hmac, Mac};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
+use twmq::hooks::TransactionContext;
+use twmq::job::{Job, JobResult, RequeuePosition};
+use twmq::{DurableExecution, FailHookData, NackHookData, SuccessHookData};
+
+// --- Configuration ---
+#[derive(Clone, Debug)]
+pub struct WebhookRetryConfig {
+    pub max_attempts: u32,
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub backoff_factor: f64,
+}
+
+impl Default for WebhookRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 5,
+            initial_delay_ms: 1000, // 1 second
+            max_delay_ms: 30000,    // 30 seconds
+            backoff_factor: 2.0,
+        }
+    }
+}
+
+// --- Execution Context ---
+#[derive(Clone)]
+pub struct WebhookExecutionContext {
+    pub http_client: reqwest::Client,
+    pub retry_config: Arc<WebhookRetryConfig>,
+}
+
+// --- Webhook Job Data Structures ---
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WebhookJobPayload {
+    pub url: String,
+    pub body: String, // Assuming pre-serialized JSON or other content
+    pub headers: Option<HashMap<String, String>>,
+    pub hmac_secret: Option<String>, // Secret key for HMAC-SHA256
+    pub http_method: Option<String>, // e.g., "POST", "PUT". Defaults to "POST"
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WebhookJobOutput {
+    pub status_code: u16,
+    pub response_body: Option<String>,
+}
+
+// --- Webhook Error Enum ---
+#[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
+pub enum WebhookError {
+    #[error("Network error during webhook dispatch: {0}")]
+    Network(String),
+
+    #[error("Failed to construct webhook request: {0}")]
+    RequestConstruction(String),
+
+    #[error("HMAC signature generation failed: {0}")]
+    HmacGeneration(String),
+
+    #[error("Webhook request timed out: {0}")]
+    Timeout(String),
+
+    #[error("HTTP error from endpoint: status {status}, body: {body_preview}")]
+    Http {
+        status: u16,
+        body_preview: String, // Store a preview of the raw response body
+    },
+
+    #[error("Failed to read or decode webhook response body: {0}")]
+    ResponseReadError(String),
+
+    #[error("Unsupported HTTP method: {0}")]
+    UnsupportedHttpMethod(String),
+}
+
+// --- DurableExecution Implementation ---
+impl DurableExecution for WebhookJobPayload {
+    type Output = WebhookJobOutput;
+    type ErrorData = WebhookError;
+    type ExecutionContext = WebhookExecutionContext;
+
+    async fn process(
+        job: &Job<Self>,
+        ec: &Self::ExecutionContext,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
+        let payload = &job.data;
+        let mut request_headers = HeaderMap::new();
+
+        // Set default Content-Type if body is present, can be overridden by payload.headers
+        if !payload.body.is_empty() {
+            request_headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+        }
+
+        // Apply custom headers
+        if let Some(custom_headers) = &payload.headers {
+            for (key, value) in custom_headers {
+                match HeaderName::from_bytes(key.as_bytes()) {
+                    Ok(header_name) => match HeaderValue::from_str(value) {
+                        Ok(header_value) => {
+                            request_headers.insert(header_name, header_value);
+                        }
+                        Err(e) => {
+                            return JobResult::Fail(WebhookError::RequestConstruction(format!(
+                                "Invalid header value for '{}': {}",
+                                key, e
+                            )));
+                        }
+                    },
+                    Err(e) => {
+                        return JobResult::Fail(WebhookError::RequestConstruction(format!(
+                            "Invalid header name '{}': {}",
+                            key, e
+                        )));
+                    }
+                }
+            }
+        }
+
+        // HMAC Signature with Timestamp
+        if let Some(secret) = &payload.hmac_secret {
+            if secret.is_empty() {
+                return JobResult::Fail(WebhookError::HmacGeneration(
+                    "HMAC secret cannot be empty".to_string(),
+                ));
+            }
+
+            let timestamp_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                Ok(duration) => duration.as_secs(),
+                Err(e) => {
+                    // This is highly unlikely to fail but good to handle
+                    return JobResult::Fail(WebhookError::RequestConstruction(format!(
+                        "Failed to get system time for timestamp: {}",
+                        e
+                    )));
+                }
+            };
+            let timestamp_str = timestamp_secs.to_string();
+
+            // Canonical message to sign: "timestamp.body"
+            // The dot (.) is a common separator.
+            let message_to_sign = format!("{}.{}", timestamp_str, payload.body);
+
+            type HmacSha256 = Hmac<sha2::Sha256>;
+            let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+                Ok(m) => m,
+                Err(e) => {
+                    return JobResult::Fail(WebhookError::HmacGeneration(format!(
+                        "Failed to initialize HMAC: {}",
+                        e
+                    )));
+                }
+            };
+            mac.update(message_to_sign.as_bytes());
+            let signature_bytes = mac.finalize().into_bytes();
+            let signature_hex = hex::encode(signature_bytes);
+
+            // Standard header names (you can customize these if needed, but be consistent)
+            let signature_header_name = "X-Signature-SHA256";
+            let timestamp_header_name = "X-Request-Timestamp";
+
+            match HeaderValue::from_str(&signature_hex) {
+                Ok(val) => {
+                    request_headers.insert(HeaderName::from_static(signature_header_name), val);
+                }
+                Err(_) => {
+                    // Should not happen with hex string
+                    return JobResult::Fail(WebhookError::HmacGeneration(
+                        "Generated HMAC signature is not a valid header value".to_string(),
+                    ));
+                }
+            }
+
+            match HeaderValue::from_str(&timestamp_str) {
+                Ok(val) => {
+                    request_headers.insert(HeaderName::from_static(timestamp_header_name), val);
+                }
+                Err(_) => {
+                    // Should not happen with a string representation of u64
+                    return JobResult::Fail(WebhookError::RequestConstruction(
+                        "Timestamp is not a valid header value".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let http_method_str = payload
+            .http_method
+            .as_deref()
+            .unwrap_or("POST")
+            .to_uppercase();
+        let method = match reqwest::Method::from_bytes(http_method_str.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                return JobResult::Fail(WebhookError::UnsupportedHttpMethod(http_method_str));
+            }
+        };
+
+        let request_builder = ec
+            .http_client
+            .request(method, &payload.url)
+            .headers(request_headers)
+            .body(payload.body.clone());
+
+        tracing::debug!(
+            job_id = %job.id,
+            url = %payload.url,
+            method = %http_method_str,
+            attempt = %job.attempts,
+            "Sending webhook request"
+        );
+
+        match request_builder.send().await {
+            Ok(response) => {
+                let status = response.status();
+                let response_body_text_result = response.text().await;
+
+                let response_body_text = match response_body_text_result {
+                    Ok(text) => Some(text),
+                    Err(e) => {
+                        if status.is_success() {
+                            let err = WebhookError::ResponseReadError(format!(
+                                "Failed to read response body: {}",
+                                e
+                            ));
+                            return JobResult::Fail(err);
+                        }
+                        tracing::warn!(job_id = %job.id, "Failed to read response body for error status {}: {}", status, e);
+                        None
+                    }
+                };
+
+                if status.is_success() {
+                    tracing::info!(job_id = %job.id, status = %status, "Webhook delivered successfully");
+                    JobResult::Success(WebhookJobOutput {
+                        status_code: status.as_u16(),
+                        response_body: response_body_text,
+                    })
+                } else {
+                    let error_body_preview = response_body_text
+                        .map(|s| {
+                            if s.len() > 512 {
+                                format!("{}...", &s[..512])
+                            } else {
+                                s
+                            }
+                        })
+                        .unwrap_or_else(|| "No body or failed to read body".to_string());
+
+                    let webhook_error = WebhookError::Http {
+                        status: status.as_u16(),
+                        body_preview: error_body_preview,
+                    };
+
+                    if status.is_server_error() || status.as_u16() == 429 {
+                        if job.attempts < ec.retry_config.max_attempts {
+                            let delay_ms = ec.retry_config.initial_delay_ms as f64
+                                * ec.retry_config.backoff_factor.powi(job.attempts as i32 - 1); // Use current attempts for backoff
+                            let delay_ms =
+                                (delay_ms.min(ec.retry_config.max_delay_ms as f64)) as u64;
+                            let delay = Duration::from_millis(delay_ms);
+
+                            tracing::warn!(
+                                job_id = %job.id,
+                                status = %status,
+                                attempt = %job.attempts,
+                                max_attempts = %ec.retry_config.max_attempts,
+                                delay_ms = %delay.as_millis(),
+                                "Webhook failed with retryable status, NACKing."
+                            );
+                            JobResult::Nack {
+                                error: webhook_error,
+                                delay: Some(delay),
+                                position: RequeuePosition::Last,
+                            }
+                        } else {
+                            tracing::error!(
+                                job_id = %job.id,
+                                status = %status,
+                                attempt = %job.attempts,
+                                "Webhook failed after max attempts, FAILING."
+                            );
+                            JobResult::Fail(webhook_error)
+                        }
+                    } else {
+                        tracing::error!(
+                            job_id = %job.id,
+                            status = %status,
+                            "Webhook failed with non-retryable client error, FAILING."
+                        );
+                        JobResult::Fail(webhook_error)
+                    }
+                }
+            }
+            Err(e) => {
+                let webhook_error = if e.is_timeout() {
+                    WebhookError::Timeout(e.to_string())
+                } else if e.is_connect() || e.is_request() {
+                    WebhookError::Network(e.to_string())
+                } else {
+                    WebhookError::RequestConstruction(e.to_string())
+                };
+
+                if matches!(webhook_error, WebhookError::RequestConstruction(_))
+                    && !e.is_connect()
+                    && !e.is_timeout()
+                {
+                    tracing::error!(job_id = %job.id, error = %webhook_error, "Webhook construction error, FAILING.");
+                    return JobResult::Fail(webhook_error);
+                }
+
+                if job.attempts < ec.retry_config.max_attempts {
+                    let delay_ms = ec.retry_config.initial_delay_ms as f64
+                        * ec.retry_config.backoff_factor.powi(job.attempts as i32 - 1); // Use current attempts for backoff
+                    let delay_ms = (delay_ms.min(ec.retry_config.max_delay_ms as f64)) as u64;
+                    let delay = Duration::from_millis(delay_ms);
+
+                    tracing::warn!(
+                        job_id = %job.id,
+                        error = %webhook_error,
+                        attempt = %job.attempts,
+                        max_attempts = %ec.retry_config.max_attempts,
+                        delay_ms = %delay.as_millis(),
+                        "Webhook request failed, NACKing."
+                    );
+                    JobResult::Nack {
+                        error: webhook_error,
+                        delay: Some(delay),
+                        position: RequeuePosition::Last,
+                    }
+                } else {
+                    tracing::error!(
+                        job_id = %job.id,
+                        error = %webhook_error,
+                        attempt = %job.attempts,
+                        "Webhook request failed after max attempts, FAILING."
+                    );
+                    JobResult::Fail(webhook_error)
+                }
+            }
+        }
+    }
+
+    // on_success, on_nack, on_fail, on_timeout methods remain the same
+    async fn on_success(
+        &self,
+        job: &Job<Self>,
+        d: SuccessHookData<'_, Self::Output>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::info!(
+            job_id = %job.id,
+            url = %self.url,
+            status = %d.result.status_code,
+            "Webhook successfully processed (on_success hook)."
+        );
+    }
+
+    async fn on_nack(
+        &self,
+        job: &Job<Self>,
+        d: NackHookData<'_, Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::warn!(
+            job_id = %job.id,
+            url = %self.url,
+            attempt = %job.attempts,
+            error = ?d.error,
+            delay_ms = %d.delay.map_or(0, |dur| dur.as_millis()),
+            "Webhook NACKed (on_nack hook)."
+        );
+    }
+
+    async fn on_fail(
+        &self,
+        job: &Job<Self>,
+        d: FailHookData<'_, Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::error!(
+            job_id = %job.id,
+            url = %self.url,
+            attempt = %job.attempts,
+            error = ?d.error,
+            "Webhook FAILED permanently (on_fail hook)."
+        );
+    }
+
+    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {
+        tracing::warn!(
+            url = %self.url, // Assuming job_id is not directly available here
+            "Webhook job lease timed out (on_timeout hook)."
+        );
+    }
+}
