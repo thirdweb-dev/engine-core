@@ -16,3 +16,4 @@ tower = "0.5.2"
 tracing = "0.1.41"
 async-nats = "0.40.0"
 twmq = { version = "0.1.0", path = "../twmq" }
+uuid = { version = "1.17.0", features = ["v4"] }

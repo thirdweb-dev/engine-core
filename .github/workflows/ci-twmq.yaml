@@ -1,0 +1,66 @@
+name: twmq Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "twmq/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "twmq/**"
+  workflow_dispatch: # Allow manual triggering for testing (optional)
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #checkout@v4
+
+      - name: Install CI dependencies
+        uses: taiki-e/install-action@ab3728c7ba6948b9b429627f4d55a68842b27f18
+        with:
+          tool: cargo-nextest
+
+      - name: Install CI dependencies
+        uses: taiki-e/install-action@ab3728c7ba6948b9b429627f4d55a68842b27f18
+        with:
+          tool: cargo-nextest
+
+      - name: Cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests
+        run: cargo nextest run -p vault-integration-tests --profile ci
+
+      - name: Test Report
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # @v2
+        if: success() || failure() # run this step even if previous step failed
+        with:
+          name: Integration Tests # Name of the check run which will be created
+          path: target/nextest/ci/junit.xml # Path to test results
+          reporter: java-junit # Format of test results

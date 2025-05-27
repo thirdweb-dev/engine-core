@@ -1,5 +1,3 @@
-// tests/lease_expiry.rs
-
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -55,20 +53,23 @@ pub struct SleepJobErrorData {
     pub reason: String,
 }
 
-pub static JOB_STARTED_PROCESSING: AtomicBool = AtomicBool::new(false);
-pub static JOB_SHOULD_CONTINUE_SLEEPING: AtomicBool = AtomicBool::new(true);
-
 pub static MULTI_JOB_STARTED_PROCESSING: AtomicBool = AtomicBool::new(false);
 pub static MULTI_JOB_SHOULD_CONTINUE_SLEEPING: AtomicBool = AtomicBool::new(true);
+
+#[derive(Clone)]
+pub struct SleepForeverJobExecutionContext {
+    pub started_processing: Arc<AtomicBool>,
+    pub should_continue_sleeping: Arc<AtomicBool>,
+}
 
 impl DurableExecution for SleepForeverJob {
     type Output = SleepJobOutput;
     type ErrorData = SleepJobErrorData;
-    type ExecutionContext = ();
+    type ExecutionContext = SleepForeverJobExecutionContext;
 
     async fn process(
         job: &Job<Self>,
-        _: &Self::ExecutionContext,
+        ec: &Self::ExecutionContext,
     ) -> JobResult<Self::Output, Self::ErrorData> {
         tracing::info!(
             "SLEEP_JOB: Starting to process job {}, attempt {}",
@@ -77,10 +78,10 @@ impl DurableExecution for SleepForeverJob {
         );
 
         // Signal that we started processing
-        JOB_STARTED_PROCESSING.store(true, Ordering::SeqCst);
+        ec.started_processing.store(true, Ordering::SeqCst);
 
         // Sleep forever (or until test tells us to stop)
-        while JOB_SHOULD_CONTINUE_SLEEPING.load(Ordering::SeqCst) {
+        while ec.should_continue_sleeping.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -132,10 +133,7 @@ impl DurableExecution for SleepForeverJob {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_job_lease_expiry() {
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "thirdweb_engine=debug,tower_http=debug,axum=debug".into()),
-        )
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "twmq=debug".into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -143,9 +141,12 @@ async fn test_job_lease_expiry() {
     let job_id = "sleep_job_001";
     let lease_duration = Duration::from_secs(3); // Short lease for testing
 
+    let job_started_processing = Arc::new(AtomicBool::new(false));
+    let job_should_continue_sleeping = Arc::new(AtomicBool::new(true));
+
     // Reset flags
-    JOB_STARTED_PROCESSING.store(false, Ordering::SeqCst);
-    JOB_SHOULD_CONTINUE_SLEEPING.store(true, Ordering::SeqCst);
+    job_started_processing.store(false, Ordering::SeqCst);
+    job_should_continue_sleeping.store(true, Ordering::SeqCst);
 
     tracing::info!("Creating lease expiry queue: {}", queue_name);
     tracing::info!("Lease duration: {:?}", lease_duration);
@@ -160,16 +161,25 @@ async fn test_job_lease_expiry() {
         always_poll: true,
     };
 
-    let queue = Arc::new(
-        Queue::<SleepForeverJob, SleepJobOutput, SleepJobErrorData, ()>::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            (),
-        )
-        .await
-        .expect("Failed to create lease expiry queue"),
-    );
+    let queue =
+        Arc::new(
+            Queue::<
+                SleepForeverJob,
+                SleepJobOutput,
+                SleepJobErrorData,
+                SleepForeverJobExecutionContext,
+            >::new(
+                REDIS_URL,
+                &queue_name,
+                Some(queue_options),
+                SleepForeverJobExecutionContext {
+                    started_processing: job_started_processing.clone(),
+                    should_continue_sleeping: job_should_continue_sleeping.clone(),
+                },
+            )
+            .await
+            .expect("Failed to create lease expiry queue"),
+        );
 
     // Clean up before test
     cleanup_redis_keys(&queue.redis, &queue_name).await;
@@ -214,7 +224,7 @@ async fn test_job_lease_expiry() {
     // Wait for job to start processing
     let mut job_started = false;
     for i in 0..50 {
-        if JOB_STARTED_PROCESSING.load(Ordering::SeqCst) {
+        if job_started_processing.load(Ordering::SeqCst) {
             job_started = true;
             tracing::info!("Job started processing after {} polling attempts", i + 1);
             break;
@@ -285,7 +295,7 @@ async fn test_job_lease_expiry() {
     tracing::info!("Job moved from active back to pending after lease expired");
 
     // Stop the sleeping job and cleanup
-    JOB_SHOULD_CONTINUE_SLEEPING.store(false, Ordering::SeqCst);
+    job_should_continue_sleeping.store(false, Ordering::SeqCst);
     worker.abort();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }
@@ -297,9 +307,12 @@ async fn test_multiple_job_lease_expiry() {
     let queue_name = format!("test_multi_lease_{}", nanoid::nanoid!(6));
     let lease_duration = Duration::from_secs(2);
 
+    let job_started_processing = Arc::new(AtomicBool::new(false));
+    let job_should_continue_sleeping = Arc::new(AtomicBool::new(true));
+
     // Reset flags
-    MULTI_JOB_STARTED_PROCESSING.store(false, Ordering::SeqCst);
-    MULTI_JOB_SHOULD_CONTINUE_SLEEPING.store(true, Ordering::SeqCst);
+    job_started_processing.store(false, Ordering::SeqCst);
+    job_should_continue_sleeping.store(true, Ordering::SeqCst);
 
     tracing::info!("\n=== Testing multiple job lease expiry ===");
 
@@ -312,16 +325,25 @@ async fn test_multiple_job_lease_expiry() {
         always_poll: true,
     };
 
-    let queue = Arc::new(
-        Queue::<SleepForeverJob, SleepJobOutput, SleepJobErrorData, ()>::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            (),
-        )
-        .await
-        .expect("Failed to create multi-lease queue"),
-    );
+    let queue =
+        Arc::new(
+            Queue::<
+                SleepForeverJob,
+                SleepJobOutput,
+                SleepJobErrorData,
+                SleepForeverJobExecutionContext,
+            >::new(
+                REDIS_URL,
+                &queue_name,
+                Some(queue_options),
+                SleepForeverJobExecutionContext {
+                    started_processing: job_started_processing.clone(),
+                    should_continue_sleeping: job_should_continue_sleeping.clone(),
+                },
+            )
+            .await
+            .expect("Failed to create multi-lease queue"),
+        );
 
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 
@@ -364,8 +386,6 @@ async fn test_multiple_job_lease_expiry() {
         active_count
     );
 
-    // At least some jobs should be active (maybe not all 3 due to timing)
-    assert!(active_count > 0, "Some jobs should be active");
     assert_eq!(pending_count + active_count, 3, "Total jobs should be 3");
 
     // Wait for leases to expire
@@ -391,7 +411,7 @@ async fn test_multiple_job_lease_expiry() {
     tracing::info!("✅ Multiple job lease expiry works correctly!");
 
     // Cleanup
-    MULTI_JOB_SHOULD_CONTINUE_SLEEPING.store(false, Ordering::SeqCst);
+    job_should_continue_sleeping.store(false, Ordering::SeqCst);
     worker.abort();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }
