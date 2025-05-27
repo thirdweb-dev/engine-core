@@ -15,3 +15,9 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tokio = { version = "1.45.0", features = ["full"] }
+criterion = { version = "0.6", features = ["html_reports", "async_tokio"] }
+rand = "0.8"
+
+[[bench]]
+name = "throughput"
+harness = false
