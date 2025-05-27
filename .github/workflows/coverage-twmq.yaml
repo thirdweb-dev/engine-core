@@ -1,4 +1,4 @@
-name: Coverage
+name: twmq Coverage
 
 on:
   push:
