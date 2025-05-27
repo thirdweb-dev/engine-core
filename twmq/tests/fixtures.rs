@@ -6,9 +6,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 // Assuming your library's root is `twmq` or you use `crate::` if in lib.rs
-use twmq::DurableExecution;
 use twmq::hooks::TransactionContext;
-use twmq::job::{Job, JobResult, RequeuePosition};
+use twmq::job::{Job, JobResult};
+use twmq::{DurableExecution, SuccessHookData};
 
 // --- Test Job Definition ---
 
@@ -47,7 +47,10 @@ impl DurableExecution for TestJobPayload {
 
     // If not using async_trait, the signature is:
     // fn process(&self) -> impl std::future::Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send + Sync {
-    async fn process(job: &Job<Self>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        job: &Job<Self>,
+        _: &Self::ExecutionContext,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         println!(
             "TEST_JOB: Processing job with id_to_check: {}",
             job.data.id_to_check
@@ -60,40 +63,15 @@ impl DurableExecution for TestJobPayload {
         })
     }
 
-    async fn on_success(&self, _result: &Self::Output, _tx: &mut TransactionContext<'_>, _: &()) {
-        println!(
-            "TEST_JOB: on_success hook for id_to_check: {}",
-            self.id_to_check
-        );
-    }
-
-    async fn on_nack(
+    async fn on_success(
         &self,
-        _error: &Self::ErrorData,
-        _delay: Option<Duration>,
-        _position: RequeuePosition,
+        _job: &Job<Self>,
+        _d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
-        _: &(),
+        _ec: &Self::ExecutionContext,
     ) {
-        // Not expected for this test
-        println!(
-            "TEST_JOB: on_nack hook for id_to_check: {}",
-            self.id_to_check
-        );
-    }
-
-    async fn on_fail(&self, _error: &Self::ErrorData, _tx: &mut TransactionContext<'_>, _: &()) {
-        // Not expected for this test
-        println!(
-            "TEST_JOB: on_fail hook for id_to_check: {}",
-            self.id_to_check
-        );
-    }
-
-    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {
-        // Not expected for this test
-        println!(
-            "TEST_JOB: on_timeout hook for id_to_check: {}",
+        tracing::info!(
+            "TEST_JOB: on_success hook for id_to_check: {}",
             self.id_to_check
         );
     }

@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use twmq::{
-    DurableExecution, Queue,
+    DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{Job, JobResult, JobStatus, RequeuePosition},
+    job::{Job, JobResult, JobStatus},
     queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
@@ -66,7 +66,10 @@ impl DurableExecution for SleepForeverJob {
     type ErrorData = SleepJobErrorData;
     type ExecutionContext = ();
 
-    async fn process(job: &Job<Self>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        job: &Job<Self>,
+        _: &Self::ExecutionContext,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         tracing::info!(
             "SLEEP_JOB: Starting to process job {}, attempt {}",
             job.id,
@@ -88,26 +91,37 @@ impl DurableExecution for SleepForeverJob {
         })
     }
 
-    async fn on_success(&self, result: &Self::Output, _tx: &mut TransactionContext<'_>, _: &()) {
-        tracing::info!("SLEEP_JOB: on_success hook - {}", result.message);
+    async fn on_success(
+        &self,
+        _job: &Job<Self>,
+        d: SuccessHookData<'_, Self::Output>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::info!("SLEEP_JOB: on_success hook - {}", d.result.message);
     }
 
     async fn on_nack(
         &self,
-        error: &Self::ErrorData,
-        delay: Option<Duration>,
-        _position: RequeuePosition,
+        _job: &Job<Self>,
+        d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _: &(),
+        _ec: &Self::ExecutionContext,
     ) {
-        tracing::info!("SLEEP_JOB: on_nack hook - {}", error.reason);
-        if let Some(delay_duration) = delay {
+        tracing::info!("SLEEP_JOB: on_nack hook - {}", d.error.reason);
+        if let Some(delay_duration) = d.delay {
             tracing::info!("Will retry after {:?}", delay_duration);
         }
     }
 
-    async fn on_fail(&self, error: &Self::ErrorData, _tx: &mut TransactionContext<'_>, _: &()) {
-        tracing::info!("SLEEP_JOB: on_fail hook - {}", error.reason);
+    async fn on_fail(
+        &self,
+        _job: &Job<Self>,
+        d: FailHookData<'_, Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::error!("SLEEP_JOB: on_fail hook - {}", d.error.reason);
     }
 
     async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {

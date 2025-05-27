@@ -4,6 +4,7 @@ pub mod job;
 pub mod queue;
 
 use std::marker::PhantomData;
+use std::process::Output;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,6 +24,20 @@ use tokio::time::sleep;
 pub use redis;
 use tracing::Instrument;
 
+pub struct SuccessHookData<'a, O> {
+    pub result: &'a O,
+}
+
+pub struct NackHookData<'a, E> {
+    pub error: &'a E,
+    pub delay: Option<Duration>,
+    pub position: RequeuePosition,
+}
+
+pub struct FailHookData<'a, E> {
+    pub error: &'a E,
+}
+
 // Main DurableExecution trait
 pub trait DurableExecution: Sized {
     type Output: Serialize + DeserializeOwned + Send + Sync;
@@ -32,33 +47,45 @@ pub trait DurableExecution: Sized {
     // Required method to process a job
     fn process(
         job: &Job<Self>,
+        c: &Self::ExecutionContext,
     ) -> impl Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send + Sync;
 
     fn on_success(
         &self,
-        result: &Self::Output,
-        tx: &mut TransactionContext<'_>,
-        c: &Self::ExecutionContext,
-    ) -> impl Future<Output = ()> + Send + Sync;
+        _job: &Job<Self>,
+        _d: SuccessHookData<Self::Output>,
+        _tx: &mut TransactionContext<'_>,
+        _c: &Self::ExecutionContext,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        std::future::ready(())
+    }
 
     fn on_nack(
         &self,
-        error: &Self::ErrorData,
-        delay: Option<Duration>,
-        position: RequeuePosition,
-        tx: &mut TransactionContext<'_>,
-        c: &Self::ExecutionContext,
-    ) -> impl Future<Output = ()> + Send + Sync;
+        _job: &Job<Self>,
+        _d: NackHookData<Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _c: &Self::ExecutionContext,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        std::future::ready(())
+    }
 
     fn on_fail(
         &self,
-        error: &Self::ErrorData,
-        tx: &mut TransactionContext<'_>,
-        c: &Self::ExecutionContext,
-    ) -> impl Future<Output = ()> + Send + Sync;
+        _job: &Job<Self>,
+        _d: FailHookData<Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _c: &Self::ExecutionContext,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        std::future::ready(())
+    }
 
-    fn on_timeout(&self, tx: &mut TransactionContext<'_>)
-    -> impl Future<Output = ()> + Send + Sync;
+    fn on_timeout(
+        &self,
+        _tx: &mut TransactionContext<'_>,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        std::future::ready(())
+    }
 }
 
 // Main Queue struct
@@ -358,7 +385,7 @@ where
 
                             tokio::spawn(async move {
                                 // Process job - note we don't pass a context here
-                                let result = DurableExecution::process(&job).await;
+                                let result = DurableExecution::process(&job, &execution_context).await;
 
                                 // Mark job as complete (automatically happens in completion handlers)
 
@@ -374,8 +401,12 @@ where
                                             queue_clone.name().to_string(),
                                         );
 
+                                        let success_hook_data = SuccessHookData {
+                                            result: &output,
+                                        };
+
                                         // Call success hook to populate transaction context
-                                        job.data.on_success(&output, &mut tx_context, &execution_context).await;
+                                        job.data.on_success(&job, success_hook_data, &mut tx_context, &execution_context).await;
 
                                         // Complete job with success and execute transaction
                                         if let Err(e) = queue_clone
@@ -408,9 +439,15 @@ where
                                             queue_clone.name().to_string(),
                                         );
 
+                                        let nack_hook_data = NackHookData {
+                                            error: &error,
+                                            delay,
+                                            position,
+                                        };
+
                                         // Call nack hook to populate transaction context
                                         job.data
-                                            .on_nack(&error, delay, position, &mut tx_context,&execution_context)
+                                            .on_nack(&job, nack_hook_data, &mut tx_context,&execution_context)
                                             .await;
 
                                         // Complete job with nack and execute transaction
@@ -442,8 +479,12 @@ where
                                             queue_clone.name.clone(),
                                         );
 
+                                        let fail_hook_data = FailHookData {
+                                            error: &error
+                                        };
+
                                         // Call fail hook to populate transaction context
-                                        job.data.on_fail(&error, &mut tx_context, &execution_context).await;
+                                        job.data.on_fail(&job, fail_hook_data, &mut tx_context, &execution_context).await;
 
                                         // Complete job with fail and execute transaction
                                         if let Err(e) = queue_clone

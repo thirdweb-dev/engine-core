@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use twmq::{
-    DurableExecution, Queue,
+    DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
     job::{Job, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
@@ -65,7 +65,10 @@ impl DurableExecution for RetryJobPayload {
     type ErrorData = RetryJobErrorData;
     type ExecutionContext = ();
 
-    async fn process(job: &Job<Self>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        job: &Job<Self>,
+        _: &Self::ExecutionContext,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         let current_attempt = job.attempts;
 
         tracing::info!(
@@ -112,35 +115,46 @@ impl DurableExecution for RetryJobPayload {
         }
     }
 
-    async fn on_success(&self, result: &Self::Output, _tx: &mut TransactionContext<'_>, _: &()) {
+    async fn on_success(
+        &self,
+        _job: &Job<Self>,
+        d: SuccessHookData<'_, Self::Output>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
         tracing::info!(
             "RETRY_JOB: on_success hook - final attempt was {}",
-            result.final_attempt
+            d.result.final_attempt
         );
     }
 
     async fn on_nack(
         &self,
-        error: &Self::ErrorData,
-        delay: Option<Duration>,
-        _position: RequeuePosition,
+        _job: &Job<Self>,
+        d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _: &(),
+        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!(
             "RETRY_JOB: on_nack hook - attempt {} failed: {}",
-            error.attempt,
-            error.reason
+            d.error.attempt,
+            d.error.reason
         );
-        if let Some(delay_duration) = delay {
+        if let Some(delay_duration) = d.delay {
             tracing::info!("Will retry after {:?}", delay_duration);
         }
     }
 
-    async fn on_fail(&self, error: &Self::ErrorData, _tx: &mut TransactionContext<'_>, _: &()) {
-        tracing::info!(
+    async fn on_fail(
+        &self,
+        _job: &Job<Self>,
+        d: FailHookData<'_, Self::ErrorData>,
+        _tx: &mut TransactionContext<'_>,
+        _ec: &Self::ExecutionContext,
+    ) {
+        tracing::error!(
             "RETRY_JOB: on_fail hook - permanently failed at attempt {}",
-            error.attempt
+            d.error.attempt
         );
     }
 
