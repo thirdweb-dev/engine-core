@@ -4,7 +4,6 @@ pub mod job;
 pub mod queue;
 
 use std::marker::PhantomData;
-use std::process::Output;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -156,43 +155,43 @@ where
     }
 
     pub fn pending_list_name(&self) -> String {
-        format!("{}:pending", self.name())
+        format!("twmq:{}:pending", self.name())
     }
 
     pub fn active_hash_name(&self) -> String {
-        format!("{}:active", self.name)
+        format!("twmq:{}:active", self.name)
     }
 
     pub fn delayed_zset_name(&self) -> String {
-        format!("{}:delayed", self.name)
+        format!("twmq:{}:delayed", self.name)
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("{}:success", self.name)
+        format!("twmq:{}:success", self.name)
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("{}:failed", self.name)
+        format!("twmq:{}:failed", self.name)
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!("{}:jobs:data", self.name)
+        format!("twmq:{}:jobs:data", self.name)
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!("{}:job:{}:meta", self.name, job_id)
+        format!("twmq:{}:job:{}:meta", self.name, job_id)
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!("{}:job:{}:errors", self.name, job_id)
+        format!("twmq:{}:job:{}:errors", self.name, job_id)
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!("{}:jobs:result", self.name)
+        format!("twmq:{}:jobs:result", self.name)
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("{}:dedup", self.name)
+        format!("twmq:{}:dedup", self.name)
     }
 
     pub async fn push(&self, job_options: JobOptions<T>) -> Result<Job<T>, TwmqError> {
@@ -533,8 +532,8 @@ where
             local delayed_zset_name = KEYS[2]
             local pending_list_name = KEYS[3]
             local active_hash_name = KEYS[4]
+            local job_data_hash_name = KEYS[5]
 
-            local job_data_hash_name = queue_id .. ':jobs:data'
 
             local result_jobs = {}
 
@@ -548,7 +547,7 @@ where
             for i = 1, #active_jobs, 2 do
                 local job_id = active_jobs[i]
                 local lease_expiry = tonumber(active_jobs[i + 1])
-                local job_meta_hash_name = queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
 
                 -- Check if lease has expired
                 if lease_expiry < now then
@@ -568,7 +567,7 @@ where
             for i, job_id in ipairs(delayed_jobs) do
                 -- Check position information
 
-                local job_meta_hash_name = queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
                 local reentry_position = redis.call('HGET', job_meta_hash_name, 'reentry_position') or 'last'
 
                 -- Remove from delayed
@@ -605,7 +604,7 @@ where
                 -- Only process if we have data
                 if job_data then
                     -- Update metadata
-                    local job_meta_hash_name = queue_id .. ':job:' .. job_id .. ':meta'
+                    local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
 
 
                     redis.call('HSET', job_meta_hash_name, 'processed_at', now)
@@ -637,6 +636,7 @@ where
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
             .key(self.active_hash_name())
+            .key(self.job_data_hash_name())
             .arg(now)
             .arg(batch_size)
             .arg(self.options.lease_duration.as_secs())
@@ -714,8 +714,8 @@ where
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local job_meta_hash = queue_id .. ':job:' .. j_id .. ':meta'
-                        local errors_list_name = queue_id .. ':job:' .. j_id .. ':errors'
+                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
                         redis.call('HDEL', job_data_hash, j_id)
                         redis.call('DEL', job_meta_hash)
@@ -841,8 +841,8 @@ where
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local errors_list_name = queue_id .. ':job:' .. j_id .. ':errors'
-                        local job_meta_hash = queue_id .. ':job:' .. j_id .. ':meta'
+                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
 
                         redis.call('HDEL', job_data_hash, j_id)
                         redis.call('DEL', job_meta_hash)

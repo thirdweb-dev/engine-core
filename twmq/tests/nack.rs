@@ -23,7 +23,7 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 // Helper to clean up Redis keys
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("{}:*", queue_name);
+    let keys_pattern = format!("twmq:{}:*", queue_name);
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)
