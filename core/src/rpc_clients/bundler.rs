@@ -7,9 +7,7 @@ use std::collections::HashMap;
 
 use crate::userop::UserOpVersion;
 
-use super::empty_params::JsonTransformerLayer;
-
-/// Gas buffer added for managed account factories (matches TypeScript)
+// Gas buffer added for managed account factories (matches TypeScript)
 pub const MANAGED_ACCOUNT_GAS_BUFFER: U256 = U256::from_limbs([21_000, 0, 0, 0]);
 
 /// A JSON-RPC client for interacting with an ERC-4337 bundler and paymaster

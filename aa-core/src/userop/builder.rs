@@ -46,6 +46,8 @@ impl<'a, C: Chain> UserOpBuilder<'a, C> {
             EntrypointVersion::V0_7 => UserOpBuilderV0_7::new(&self.config).build().await?,
         };
 
+        tracing::debug!("UserOp built, proceeding with signing");
+
         let signature = self
             .config
             .signer
@@ -60,12 +62,14 @@ impl<'a, C: Chain> UserOpBuilder<'a, C> {
 
         match &mut userop {
             UserOpVersion::V0_6(userop) => {
-                userop.signature = signature.into();
+                userop.signature = signature;
             }
             UserOpVersion::V0_7(userop) => {
-                userop.signature = signature.into();
+                userop.signature = signature;
             }
         }
+
+        tracing::debug!("UserOp signed succcessfully");
 
         Ok(userop)
     }
@@ -118,7 +122,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
             .await
             .map_err(|err| err.to_engine_error(self.chain))?;
 
-        tracing::info!("Gas prices determined");
+        tracing::debug!("Gas prices determined");
 
         self.userop.max_fee_per_gas = U256::from(prices.max_fee_per_gas);
         self.userop.max_priority_fee_per_gas = U256::from(prices.max_priority_fee_per_gas);
@@ -130,7 +134,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
             .await
             .map_err(|err| err.to_engine_paymaster_error(self.chain))?;
 
-        tracing::info!("Deployment status determined");
+        tracing::debug!("v6 Userop paymaster and data determined");
 
         self.userop.paymaster_and_data = pm_response.paymaster_and_data;
 
@@ -143,6 +147,8 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
                 (call_gas_limit, verification_gas_limit, pre_verification_gas)
             }
             _ => {
+                tracing::debug!("No paymaster provided gas limits, getting from bundler");
+
                 let bundler_response = self
                     .chain
                     .bundler_client()
@@ -235,7 +241,7 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
             .await
             .map_err(|err| err.to_engine_paymaster_error(self.chain))?;
 
-        tracing::info!("v7 Userop paymaster and data determined");
+        tracing::debug!("v7 Userop paymaster and data determined");
 
         // Apply paymaster data
         self.userop.paymaster = Some(pm_response.paymaster);
@@ -260,6 +266,8 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
             }
             _ => {
                 // If paymaster didn't provide all gas limits, get them from the bundler
+                tracing::debug!("No paymaster provided gas limits, getting from bundler");
+
                 let bundler_response = self
                     .chain
                     .bundler_client()
@@ -283,7 +291,7 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
             }
         };
 
-        tracing::info!("Gas limits determined");
+        tracing::debug!("Gas limits determined");
 
         // Set gas limits
         self.userop.call_gas_limit = call_gas_limit;
