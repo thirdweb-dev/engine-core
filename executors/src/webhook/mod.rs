@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH}; // Added SystemTime, UNIX_EPOCH
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hex;
 use hmac::{Hmac, Mac};
@@ -165,7 +165,7 @@ impl DurableExecution for WebhookJobPayload {
             let signature_bytes = mac.finalize().into_bytes();
             let signature_hex = hex::encode(signature_bytes);
 
-            // Standard header names (you can customize these if needed, but be consistent)
+            // Standard header names
             let signature_header_name = "X-Signature-SHA256";
             let timestamp_header_name = "X-Request-Timestamp";
 
@@ -351,7 +351,6 @@ impl DurableExecution for WebhookJobPayload {
         }
     }
 
-    // on_success, on_nack, on_fail, on_timeout methods remain the same
     async fn on_success(
         &self,
         job: &Job<Self>,
@@ -397,13 +396,6 @@ impl DurableExecution for WebhookJobPayload {
             attempt = %job.attempts,
             error = ?d.error,
             "Webhook FAILED permanently (on_fail hook)."
-        );
-    }
-
-    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {
-        tracing::warn!(
-            url = %self.url, // Assuming job_id is not directly available here
-            "Webhook job lease timed out (on_timeout hook)."
         );
     }
 }
