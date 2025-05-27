@@ -17,6 +17,7 @@ use twmq::{
     DurableExecution, Queue,
     hooks::TransactionContext,
     job::{Job, JobResult, JobStatus, RequeuePosition},
+    queue::QueueOptions,
 };
 
 // Helper to clean up Redis keys for a given queue name pattern
@@ -203,12 +204,15 @@ async fn test_cross_queue_job_scheduling() {
     println!("Creating main queue: {}", main_queue_name);
     println!("Creating webhook queue: {}", webhook_queue_name);
 
+    let mut queue_options = QueueOptions::default();
+    queue_options.local_concurrency = 1;
+
     // Create webhook queue
     let webhook_queue = Arc::new(
         Queue::<WebhookJobPayload, WebhookJobOutput, WebhookJobErrorData, ()>::new(
             REDIS_URL,
             &webhook_queue_name,
-            None,
+            Some(queue_options.clone()),
             (),
         )
         .await
@@ -220,7 +224,7 @@ async fn test_cross_queue_job_scheduling() {
         Queue::<MainJobPayload, TestJobOutput, TestJobErrorData, Arc<WebhookQueue>>::new(
             REDIS_URL,
             &main_queue_name,
-            None,
+            Some(queue_options),
             webhook_queue.clone(),
         )
         .await
@@ -252,7 +256,7 @@ async fn test_cross_queue_job_scheduling() {
     let main_worker = {
         let queue = main_queue.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue.work(1).await {
+            if let Err(e) = queue.work().await {
                 eprintln!("Main worker failed: {:?}", e);
             }
         })
@@ -261,7 +265,7 @@ async fn test_cross_queue_job_scheduling() {
     let webhook_worker = {
         let queue = webhook_queue.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue.work(1).await {
+            if let Err(e) = queue.work().await {
                 eprintln!("Webhook worker failed: {:?}", e);
             }
         })

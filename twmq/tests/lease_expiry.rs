@@ -141,6 +141,8 @@ async fn test_job_lease_expiry() {
         max_success: 1000,
         max_failed: 1000,
         lease_duration,
+        polling_interval: Duration::from_millis(100),
+        local_concurrency: 1,
         always_poll: true,
     };
 
@@ -189,7 +191,7 @@ async fn test_job_lease_expiry() {
     let worker = {
         let queue = queue.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue.work(1).await {
+            if let Err(e) = queue.work().await {
                 tracing::error!("Lease worker failed: {:?}", e);
             }
         })
@@ -290,7 +292,9 @@ async fn test_multiple_job_lease_expiry() {
     let queue_options = QueueOptions {
         max_success: 1000,
         max_failed: 1000,
+        local_concurrency: 3,
         lease_duration,
+        polling_interval: Duration::from_millis(100),
         always_poll: true,
     };
 
@@ -328,7 +332,7 @@ async fn test_multiple_job_lease_expiry() {
     let worker = {
         let queue = queue.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue.work(3).await {
+            if let Err(e) = queue.work().await {
                 tracing::error!("Multi-lease worker failed: {:?}", e);
             }
         })

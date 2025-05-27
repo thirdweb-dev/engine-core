@@ -327,13 +327,13 @@ where
         Ok(count)
     }
 
-    pub async fn work(self: Arc<Self>, local_concurrency: usize) -> Result<(), TwmqError> {
+    pub async fn work(self: Arc<Self>) -> Result<(), TwmqError> {
         // Local semaphore to limit concurrency per instance
-        let semaphore = Arc::new(Semaphore::new(local_concurrency));
+        let semaphore = Arc::new(Semaphore::new(self.options.local_concurrency));
 
         // Start worker
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            let mut interval = tokio::time::interval(self.options.polling_interval);
 
             loop {
                 interval.tick().await;

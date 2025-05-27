@@ -14,6 +14,7 @@ use twmq::{
     DurableExecution, Queue,
     hooks::TransactionContext,
     job::{Job, JobResult, JobStatus, RequeuePosition},
+    queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
 
@@ -168,11 +169,14 @@ async fn test_job_retry_attempts() {
     tracing::info!("Creating retry queue: {}", queue_name);
     tracing::info!("Job should succeed after {} attempts", desired_attempts);
 
+    let mut queue_options = QueueOptions::default();
+    queue_options.local_concurrency = 1;
+
     let queue = Arc::new(
         Queue::<RetryJobPayload, RetryJobOutput, RetryJobErrorData, ()>::new(
             REDIS_URL,
             &queue_name,
-            None,
+            Some(queue_options),
             (),
         )
         .await
@@ -202,7 +206,7 @@ async fn test_job_retry_attempts() {
     let worker = {
         let queue = queue.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue.work(1).await {
+            if let Err(e) = queue.work().await {
                 tracing::error!("Retry worker failed: {:?}", e);
             }
         })
@@ -297,11 +301,14 @@ async fn test_different_retry_counts() {
         // Reset counters
         RETRY_JOB_FINAL_SUCCESS.store(false, Ordering::SeqCst);
 
+        let mut queue_options = QueueOptions::default();
+        queue_options.local_concurrency = 1;
+
         let queue = Arc::new(
             Queue::<RetryJobPayload, RetryJobOutput, RetryJobErrorData, ()>::new(
                 REDIS_URL,
                 &queue_name,
-                None,
+                Some(queue_options),
                 (),
             )
             .await
@@ -326,7 +333,7 @@ async fn test_different_retry_counts() {
         let worker = {
             let queue = queue.clone();
             tokio::spawn(async move {
-                if let Err(e) = queue.work(1).await {
+                if let Err(e) = queue.work().await {
                     tracing::error!("Worker failed: {:?}", e);
                 }
             })

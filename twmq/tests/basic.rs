@@ -95,7 +95,7 @@ async fn test_queue_push_and_process_job() {
     let worker_queue_ref = Arc::clone(&queue);
     let worker_handle = tokio::spawn(async move {
         // The worker will loop internally, so we expect it to pick up the job
-        if let Err(e) = worker_queue_ref.work(1).await {
+        if let Err(e) = worker_queue_ref.work().await {
             eprintln!("Worker for queue {} failed: {:?}", queue_name_clone, e);
         }
     });
