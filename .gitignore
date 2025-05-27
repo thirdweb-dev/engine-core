@@ -1,3 +1,4 @@
 # Generated files
 /target/
 .DS_Store
+coverage
