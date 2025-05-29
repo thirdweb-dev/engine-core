@@ -13,7 +13,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{Job, JobResult, JobStatus, RequeuePosition},
+    job::{Job, JobError, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
@@ -58,17 +58,16 @@ pub struct RetryJobErrorData {
     pub reason: String,
 }
 
+struct RetryJobHandler;
+
 pub static RETRY_JOB_FINAL_SUCCESS: AtomicBool = AtomicBool::new(false);
 
-impl DurableExecution for RetryJobPayload {
+impl DurableExecution for RetryJobHandler {
     type Output = RetryJobOutput;
     type ErrorData = RetryJobErrorData;
-    type ExecutionContext = ();
+    type JobData = RetryJobPayload;
 
-    async fn process(
-        job: &Job<Self>,
-        _: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let current_attempt = job.attempts;
 
         tracing::info!(
@@ -87,7 +86,7 @@ impl DurableExecution for RetryJobPayload {
                 job.data.desired_attempts
             );
 
-            JobResult::Nack {
+            Err(JobError::Nack {
                 error: RetryJobErrorData {
                     attempt: current_attempt,
                     reason: format!(
@@ -97,7 +96,7 @@ impl DurableExecution for RetryJobPayload {
                 },
                 delay: None,
                 position: RequeuePosition::Last,
-            }
+            })
         } else {
             // Reached desired attempts, succeed!
             tracing::info!(
@@ -108,7 +107,7 @@ impl DurableExecution for RetryJobPayload {
 
             RETRY_JOB_FINAL_SUCCESS.store(true, Ordering::SeqCst);
 
-            JobResult::Success(RetryJobOutput {
+            Ok(RetryJobOutput {
                 final_attempt: current_attempt,
                 message: format!("Succeeded after {} attempts", current_attempt),
             })
@@ -117,10 +116,9 @@ impl DurableExecution for RetryJobPayload {
 
     async fn on_success(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!(
             "RETRY_JOB: on_success hook - final attempt was {}",
@@ -130,10 +128,9 @@ impl DurableExecution for RetryJobPayload {
 
     async fn on_nack(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!(
             "RETRY_JOB: on_nack hook - attempt {} failed: {}",
@@ -147,10 +144,9 @@ impl DurableExecution for RetryJobPayload {
 
     async fn on_fail(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::error!(
             "RETRY_JOB: on_fail hook - permanently failed at attempt {}",
@@ -162,6 +158,8 @@ impl DurableExecution for RetryJobPayload {
         tracing::info!("RETRY_JOB: on_timeout hook");
     }
 }
+
+type RetryJobQueue = Queue<RetryJobHandler>;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_job_retry_attempts() {
@@ -186,15 +184,12 @@ async fn test_job_retry_attempts() {
     let mut queue_options = QueueOptions::default();
     queue_options.local_concurrency = 1;
 
+    let handler = RetryJobHandler;
+
     let queue = Arc::new(
-        Queue::<RetryJobPayload, RetryJobOutput, RetryJobErrorData, ()>::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            (),
-        )
-        .await
-        .expect("Failed to create retry queue"),
+        RetryJobQueue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
+            .await
+            .expect("Failed to create retry queue"),
     );
 
     // Clean up before test
@@ -318,15 +313,12 @@ async fn test_different_retry_counts() {
         let mut queue_options = QueueOptions::default();
         queue_options.local_concurrency = 1;
 
+        let handler = RetryJobHandler;
+
         let queue = Arc::new(
-            Queue::<RetryJobPayload, RetryJobOutput, RetryJobErrorData, ()>::new(
-                REDIS_URL,
-                &queue_name,
-                Some(queue_options),
-                (),
-            )
-            .await
-            .expect("Failed to create retry queue"),
+            RetryJobQueue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
+                .await
+                .expect("Failed to create retry queue"),
         );
 
         cleanup_redis_keys(&queue.redis, &queue_name).await;

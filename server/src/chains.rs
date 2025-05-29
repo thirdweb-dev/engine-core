@@ -1,11 +1,7 @@
 use engine_core::{
-    chain::{Chain, ThirdwebChain, ThirdwebChainConfig},
+    chain::{ChainService, ThirdwebChain, ThirdwebChainConfig},
     error::EngineError,
 };
-
-pub trait ChainService {
-    fn get_chain(&self, chain_id: u64) -> Result<impl Chain, EngineError>;
-}
 
 pub struct ThirdwebChainService {
     pub client_id: String,

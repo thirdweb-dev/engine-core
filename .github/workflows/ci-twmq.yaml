@@ -47,10 +47,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build -p twmq --verbose
 
       - name: Run tests
-        run: cargo nextest run -p vault-integration-tests --profile ci
+        run: cargo nextest run -p twmq --profile ci
 
       - name: Test Report
         uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # @v2

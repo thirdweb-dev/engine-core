@@ -72,46 +72,49 @@ pub static WEBHOOK_JOB_PROCESSED: AtomicBool = AtomicBool::new(false);
 
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
-type WebhookQueue = Queue<WebhookJobPayload, WebhookJobOutput, WebhookJobErrorData, ()>;
+type WebhookQueue = Queue<WebhookJobHandler>;
+type MainJobQueue = Queue<MainJobHandler>;
 
-impl DurableExecution for MainJobPayload {
+struct MainJobHandler {
+    pub webhook_queue: Arc<WebhookQueue>,
+}
+
+struct WebhookJobHandler;
+
+impl DurableExecution for MainJobHandler {
     type Output = TestJobOutput;
     type ErrorData = TestJobErrorData;
-    type ExecutionContext = Arc<WebhookQueue>;
+    type JobData = MainJobPayload;
 
-    async fn process(
-        job: &Job<Self>,
-        _: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         println!("MAIN_JOB: Processing job with id: {}", job.id);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         MAIN_JOB_PROCESSED.store(true, Ordering::SeqCst);
 
-        JobResult::Success(TestJobOutput {
+        Ok(TestJobOutput {
             reply: format!("Main job processed: {}", job.data.message),
         })
     }
 
     async fn on_success(
         &self,
-        _job: &Job<Self>,
+        job: &Job<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
-        ec: &Self::ExecutionContext,
     ) {
         println!("MAIN_JOB: on_success hook - queuing webhook job");
 
         let webhook_job = WebhookJobPayload {
             url: "https://api.example.com/webhook".to_string(),
             payload: serde_json::to_string(d.result).unwrap(),
-            parent_job_id: self.id_to_check.clone(),
+            parent_job_id: job.data.id_to_check.clone(),
         };
 
         // Use the type-safe API!
-        let mut webhook_builder = ec.clone().job(webhook_job);
+        let mut webhook_builder = self.webhook_queue.clone().job(webhook_job);
 
-        webhook_builder.options.id = format!("{}_webhook", self.id_to_check);
+        webhook_builder.options.id = format!("{}_webhook", job.data.id_to_check);
 
         if let Err(e) = tx.queue_job(webhook_builder) {
             tracing::error!("Failed to queue webhook job: {:?}", e);
@@ -121,15 +124,12 @@ impl DurableExecution for MainJobPayload {
     }
 }
 
-impl DurableExecution for WebhookJobPayload {
+impl DurableExecution for WebhookJobHandler {
     type Output = WebhookJobOutput;
     type ErrorData = WebhookJobErrorData;
-    type ExecutionContext = ();
+    type JobData = WebhookJobPayload;
 
-    async fn process(
-        job: &Job<Self>,
-        _: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         println!("WEBHOOK_JOB: Sending webhook to: {}", job.data.url);
         println!("WEBHOOK_JOB: Payload: {}", job.data.payload);
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -137,7 +137,7 @@ impl DurableExecution for WebhookJobPayload {
         WEBHOOK_JOB_PROCESSED.store(true, Ordering::SeqCst);
 
         // Simulate successful webhook call
-        JobResult::Success(WebhookJobOutput {
+        Ok(WebhookJobOutput {
             status_code: 200,
             response: "Webhook delivered successfully".to_string(),
         })
@@ -145,18 +145,15 @@ impl DurableExecution for WebhookJobPayload {
 
     async fn on_success(
         &self,
-        _job: &Job<Self>,
+        job: &Job<Self::JobData>,
         _d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!(
             "WEBHOOK_JOB: Webhook delivered successfully for parent: {}",
-            self.parent_job_id
+            job.data.parent_job_id
         );
     }
-
-    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -182,25 +179,31 @@ async fn test_cross_queue_job_scheduling() {
     let mut queue_options = QueueOptions::default();
     queue_options.local_concurrency = 1;
 
+    let webhook_handler = WebhookJobHandler;
+
     // Create webhook queue
     let webhook_queue = Arc::new(
-        Queue::<WebhookJobPayload, WebhookJobOutput, WebhookJobErrorData, ()>::new(
+        WebhookQueue::new(
             REDIS_URL,
             &webhook_queue_name,
             Some(queue_options.clone()),
-            (),
+            webhook_handler,
         )
         .await
         .expect("Failed to create webhook queue"),
     );
 
+    let main_handler = MainJobHandler {
+        webhook_queue: webhook_queue.clone(),
+    };
+
     // Create main job queue
     let main_queue = Arc::new(
-        Queue::<MainJobPayload, TestJobOutput, TestJobErrorData, Arc<WebhookQueue>>::new(
+        MainJobQueue::new(
             REDIS_URL,
             &main_queue_name,
             Some(queue_options),
-            webhook_queue.clone(),
+            main_handler,
         )
         .await
         .expect("Failed to create main queue"),

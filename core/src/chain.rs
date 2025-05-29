@@ -12,7 +12,7 @@ use alloy::{
 
 use crate::error::EngineError;
 
-pub trait Chain {
+pub trait Chain: Send + Sync {
     fn chain_id(&self) -> u64;
     fn rpc_url(&self) -> Url;
     fn bundler_url(&self) -> Url;
@@ -142,4 +142,8 @@ impl<'a> ThirdwebChainConfig<'a> {
             paymaster_url,
         })
     }
+}
+
+pub trait ChainService {
+    fn get_chain(&self, chain_id: u64) -> Result<impl Chain, EngineError>;
 }

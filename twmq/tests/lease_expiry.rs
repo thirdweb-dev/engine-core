@@ -38,7 +38,7 @@ async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) 
 
 // Job that sleeps forever to test lease expiry
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SleepForeverJob {
+pub struct SleepForeverJobData {
     pub id_to_check: String,
     pub message: String,
 }
@@ -57,20 +57,17 @@ pub static MULTI_JOB_STARTED_PROCESSING: AtomicBool = AtomicBool::new(false);
 pub static MULTI_JOB_SHOULD_CONTINUE_SLEEPING: AtomicBool = AtomicBool::new(true);
 
 #[derive(Clone)]
-pub struct SleepForeverJobExecutionContext {
+pub struct SleepForeverHandler {
     pub started_processing: Arc<AtomicBool>,
     pub should_continue_sleeping: Arc<AtomicBool>,
 }
 
-impl DurableExecution for SleepForeverJob {
+impl DurableExecution for SleepForeverHandler {
     type Output = SleepJobOutput;
     type ErrorData = SleepJobErrorData;
-    type ExecutionContext = SleepForeverJobExecutionContext;
+    type JobData = SleepForeverJobData;
 
-    async fn process(
-        job: &Job<Self>,
-        ec: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         tracing::info!(
             "SLEEP_JOB: Starting to process job {}, attempt {}",
             job.id,
@@ -78,36 +75,34 @@ impl DurableExecution for SleepForeverJob {
         );
 
         // Signal that we started processing
-        ec.started_processing.store(true, Ordering::SeqCst);
+        self.started_processing.store(true, Ordering::SeqCst);
 
         // Sleep forever (or until test tells us to stop)
-        while ec.should_continue_sleeping.load(Ordering::SeqCst) {
+        while self.should_continue_sleeping.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         tracing::info!("SLEEP_JOB: Job {} woke up, finishing", job.id);
 
-        JobResult::Success(SleepJobOutput {
+        Ok(SleepJobOutput {
             message: format!("Job {} completed after sleeping", job.id),
         })
     }
 
     async fn on_success(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!("SLEEP_JOB: on_success hook - {}", d.result.message);
     }
 
     async fn on_nack(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::info!("SLEEP_JOB: on_nack hook - {}", d.error.reason);
         if let Some(delay_duration) = d.delay {
@@ -117,10 +112,9 @@ impl DurableExecution for SleepForeverJob {
 
     async fn on_fail(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _ec: &Self::ExecutionContext,
     ) {
         tracing::error!("SLEEP_JOB: on_fail hook - {}", d.error.reason);
     }
@@ -129,6 +123,8 @@ impl DurableExecution for SleepForeverJob {
         tracing::info!("SLEEP_JOB: on_timeout hook - job lease expired");
     }
 }
+
+type SleepForeverQueue = Queue<SleepForeverHandler>;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_job_lease_expiry() {
@@ -161,31 +157,22 @@ async fn test_job_lease_expiry() {
         always_poll: true,
     };
 
-    let queue =
-        Arc::new(
-            Queue::<
-                SleepForeverJob,
-                SleepJobOutput,
-                SleepJobErrorData,
-                SleepForeverJobExecutionContext,
-            >::new(
-                REDIS_URL,
-                &queue_name,
-                Some(queue_options),
-                SleepForeverJobExecutionContext {
-                    started_processing: job_started_processing.clone(),
-                    should_continue_sleeping: job_should_continue_sleeping.clone(),
-                },
-            )
+    let handler = SleepForeverHandler {
+        started_processing: job_started_processing.clone(),
+        should_continue_sleeping: job_should_continue_sleeping.clone(),
+    };
+
+    let queue = Arc::new(
+        SleepForeverQueue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
             .await
             .expect("Failed to create lease expiry queue"),
-        );
+    );
 
     // Clean up before test
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 
     // Create job that will sleep forever
-    let sleep_job = SleepForeverJob {
+    let sleep_job = SleepForeverJobData {
         id_to_check: job_id.to_string(),
         message: "I will sleep until my lease expires".to_string(),
     };
@@ -325,32 +312,26 @@ async fn test_multiple_job_lease_expiry() {
         always_poll: true,
     };
 
-    let queue =
-        Arc::new(
-            Queue::<
-                SleepForeverJob,
-                SleepJobOutput,
-                SleepJobErrorData,
-                SleepForeverJobExecutionContext,
-            >::new(
-                REDIS_URL,
-                &queue_name,
-                Some(queue_options),
-                SleepForeverJobExecutionContext {
-                    started_processing: job_started_processing.clone(),
-                    should_continue_sleeping: job_should_continue_sleeping.clone(),
-                },
-            )
-            .await
-            .expect("Failed to create multi-lease queue"),
-        );
+    let queue = Arc::new(
+        SleepForeverQueue::new(
+            REDIS_URL,
+            &queue_name,
+            Some(queue_options),
+            SleepForeverHandler {
+                started_processing: job_started_processing.clone(),
+                should_continue_sleeping: job_should_continue_sleeping.clone(),
+            },
+        )
+        .await
+        .expect("Failed to create multi-lease queue"),
+    );
 
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 
     // Push multiple jobs
     let job_ids = vec!["multi_job_1", "multi_job_2", "multi_job_3"];
     for job_id in job_ids {
-        let sleep_job = SleepForeverJob {
+        let sleep_job = SleepForeverJobData {
             id_to_check: job_id.to_string(),
             message: format!("Multi-job test: {}", job_id),
         };

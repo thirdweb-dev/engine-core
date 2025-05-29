@@ -40,14 +40,53 @@ pub struct DelayOptions {
 }
 
 // Job result type
-pub enum JobResult<T, E> {
-    Success(T),
+pub type JobResult<T, E> = Result<T, JobError<E>>;
+
+pub enum JobError<E> {
     Nack {
         error: E,
         delay: Option<Duration>,
         position: RequeuePosition,
     },
     Fail(E),
+}
+
+pub trait ToJobResult<T, E> {
+    fn nack_err(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E>;
+    fn fail_err(self) -> JobResult<T, E>;
+}
+
+impl<T, E> ToJobResult<T, E> for Result<T, E> {
+    fn nack_err(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E> {
+        self.map_err(|e| JobError::Nack {
+            error: e,
+            delay,
+            position,
+        })
+    }
+
+    fn fail_err(self) -> JobResult<T, E> {
+        self.map_err(|e| JobError::Fail(e))
+    }
+}
+
+pub trait ToJobError<E> {
+    fn nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobError<E>;
+    fn fail(self) -> JobError<E>;
+}
+
+impl<E> ToJobError<E> for E {
+    fn nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobError<E> {
+        JobError::Nack {
+            error: self,
+            delay,
+            position,
+        }
+    }
+
+    fn fail(self) -> JobError<E> {
+        JobError::Fail(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,35 +176,13 @@ where
     }
 }
 
-pub struct JobBuilder<T, R, E, C>
-where
-    T: Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + DurableExecution<ExecutionContext = C, Output = R, ErrorData = E>,
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    E: Serialize + DeserializeOwned + Send + Sync + 'static,
-    C: Send + Sync + 'static,
-{
-    pub options: JobOptions<T>,
-    pub queue: Arc<Queue<T, R, E, C>>,
+pub struct PushableJob<H: DurableExecution> {
+    pub options: JobOptions<H::JobData>,
+    pub queue: Arc<Queue<H>>,
 }
 
-impl<T, R, E, C> JobBuilder<T, R, E, C>
-where
-    T: Serialize
-        + DeserializeOwned
-        + DurableExecution<Output = R, ErrorData = E, ExecutionContext = C>
-        + Send
-        + Sync
-        + 'static,
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    E: Serialize + DeserializeOwned + Send + Sync + 'static,
-    C: Send + Sync + Clone + 'static,
-{
-    pub async fn push(self) -> Result<Job<T>, TwmqError> {
+impl<H: DurableExecution> PushableJob<H> {
+    pub async fn push(self) -> Result<Job<H::JobData>, TwmqError> {
         self.queue.push(self.options).await
     }
 

@@ -12,6 +12,13 @@ pub trait DeploymentCache: Send + Sync {
     ) -> impl Future<Output = Option<bool>> + Send + Sync;
 }
 
+pub enum AcquireLockResult {
+    Acquired,
+    AlreadyLocked(String),
+}
+
+pub type LockId = String;
+
 pub trait DeploymentLock: Send + Sync {
     /// Check if a deployment lock exists
     /// Returns Some(Duration) with time since lock was acquired if locked, None if not locked
@@ -19,7 +26,7 @@ pub trait DeploymentLock: Send + Sync {
         &self,
         chain_id: u64,
         account_address: &Address,
-    ) -> impl Future<Output = Option<Duration>> + Send + Sync;
+    ) -> impl Future<Output = Option<(LockId, Duration)>> + Send + Sync;
 
     /// Try to acquire a deployment lock
     /// Returns true if successful, false if already locked
@@ -27,7 +34,7 @@ pub trait DeploymentLock: Send + Sync {
         &self,
         chain_id: u64,
         account_address: &Address,
-    ) -> impl Future<Output = Result<bool, EngineError>> + Send + Sync;
+    ) -> impl Future<Output = Result<AcquireLockResult, EngineError>> + Send + Sync;
 }
 
 pub enum DeploymentStatus {
@@ -35,13 +42,10 @@ pub enum DeploymentStatus {
     Deployed,
 
     /// Account is currently being deployed by another process
-    BeingDeployed { stale: bool },
+    BeingDeployed { stale: bool, lock_id: LockId },
 
-    /// Account is not deployed and we have acquired the lock
-    LockAcquired,
-
-    /// Account is not deployed but we couldn't acquire the lock
-    LockFailed,
+    ///
+    NotDeployed,
 }
 
 // A generic deployment manager
@@ -81,7 +85,9 @@ where
         }
 
         // 2. Check for deployment lock
-        if let Some(locked_duration) = self.lock.check_lock(chain_id, account_address).await {
+        if let Some((lock_id, locked_duration)) =
+            self.lock.check_lock(chain_id, account_address).await
+        {
             // Check if lock is stale
             let is_stale = locked_duration > self.stale_lock_threshold;
 
@@ -94,20 +100,16 @@ where
             }
 
             // Either fresh lock or stale but not deployed
-            return Ok(DeploymentStatus::BeingDeployed { stale: is_stale });
+            return Ok(DeploymentStatus::BeingDeployed {
+                stale: is_stale,
+                lock_id,
+            });
         }
 
         // 3. No lock exists, check chain state
-        let is_deployed = check_chain.await?;
-        if is_deployed {
-            return Ok(DeploymentStatus::Deployed);
-        }
-
-        // 4. Not deployed, try to acquire lock
-        if self.lock.acquire_lock(chain_id, account_address).await? {
-            Ok(DeploymentStatus::LockAcquired)
-        } else {
-            Ok(DeploymentStatus::LockFailed)
+        match check_chain.await? {
+            true => Ok(DeploymentStatus::Deployed),
+            false => Ok(DeploymentStatus::NotDeployed),
         }
     }
 }

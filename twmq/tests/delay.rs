@@ -38,10 +38,8 @@ async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) 
 
 // Job that tests delay functionality
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DelayTestJob {
-    pub job_id: String,
+pub struct DelayTestJobData {
     pub expected_delay_seconds: u64,
-    pub created_at: u64,
     pub test_id: String, // Unique per test to avoid conflicts
 }
 
@@ -57,59 +55,53 @@ pub struct DelayTestErrorData {
     pub reason: String,
 }
 
-impl DurableExecution for DelayTestJob {
+struct DelayTestJobHandler;
+
+impl DurableExecution for DelayTestJobHandler {
     type Output = DelayTestOutput;
     type ErrorData = DelayTestErrorData;
-    type ExecutionContext = Arc<ConnectionManager>;
+    type JobData = DelayTestJobData;
 
-    async fn process(
-        job: &Job<Self>,
-        _redis_conn: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let actual_delay = now - job.data.created_at;
+
+        let actual_delay = now - job.created_at;
 
         tracing::info!(
             "DELAY_JOB: Processing job {}, expected delay: {}s, actual delay: {}s",
-            job.data.job_id,
+            job.id,
             job.data.expected_delay_seconds,
             actual_delay
         );
 
-        JobResult::Success(DelayTestOutput {
+        Ok(DelayTestOutput {
             actual_delay_seconds: actual_delay,
-            message: format!(
-                "Job {} processed after {}s delay",
-                job.data.job_id, actual_delay
-            ),
+            message: format!("Job {} processed after {}s delay", job.id, actual_delay),
             test_id: job.data.test_id.clone(),
         })
     }
 
     async fn on_success(
         &self,
-        _job: &Job<Self>,
+        job: &Job<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
-        _redis_conn: &Self::ExecutionContext,
     ) {
         tracing::info!("DELAY_JOB: on_success hook - {}", d.result.message);
 
         // Store processing order in Redis using test-specific key
-        let order_key = format!("test:{}:processing_order", self.test_id);
+        let order_key = format!("test:{}:processing_order", job.data.test_id);
 
         // Use pipeline to add to processing order list
-        tx.pipeline().rpush(&order_key, &self.job_id);
+        tx.pipeline().rpush(&order_key, &job.id);
         tx.pipeline().expire(&order_key, 300); // Expire after 5 minutes
     }
-
-    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {
-        tracing::info!("DELAY_JOB: on_timeout hook for job {}", self.job_id);
-    }
 }
+
+type DelayTestQueue = Queue<DelayTestJobHandler>;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_job_delay_basic() {
@@ -141,29 +133,19 @@ async fn test_job_delay_basic() {
     let redis_client = redis::Client::open(REDIS_URL).unwrap();
     let redis_conn = Arc::new(redis_client.get_connection_manager().await.unwrap());
 
+    let handler = DelayTestJobHandler;
+
     let queue = Arc::new(
-        Queue::<DelayTestJob, DelayTestOutput, DelayTestErrorData, Arc<ConnectionManager>>::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            redis_conn.clone(),
-        )
-        .await
-        .expect("Failed to create delay test queue"),
+        DelayTestQueue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
+            .await
+            .expect("Failed to create delay test queue"),
     );
 
     cleanup_redis_keys(&redis_conn, &queue_name).await;
 
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
     // Create job with delay
-    let delay_job = DelayTestJob {
-        job_id: job_id.to_string(),
+    let delay_job = DelayTestJobData {
         expected_delay_seconds: delay_duration.as_secs(),
-        created_at,
         test_id: test_id.clone(),
     };
 
@@ -336,23 +318,16 @@ async fn test_delay_position_ordering() {
     let redis_client = redis::Client::open(REDIS_URL).unwrap();
     let redis_conn = Arc::new(redis_client.get_connection_manager().await.unwrap());
 
+    let handler = DelayTestJobHandler;
+
     let queue = Arc::new(
-        Queue::<DelayTestJob, DelayTestOutput, DelayTestErrorData, Arc<ConnectionManager>>::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            redis_conn.clone(),
-        )
-        .await
-        .expect("Failed to create delay order queue"),
+        DelayTestQueue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
+            .await
+            .expect("Failed to create delay order queue"),
     );
 
     cleanup_redis_keys(&redis_conn, &queue_name).await;
 
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let short_delay = Duration::from_secs(1);
 
     // Push jobs in specific order:
@@ -361,10 +336,8 @@ async fn test_delay_position_ordering() {
     // 3. Delayed job with "Last" position - should process third when delay expires
 
     // Job 1: Normal job (immediate)
-    let immediate_job = DelayTestJob {
-        job_id: "immediate".to_string(),
+    let immediate_job = DelayTestJobData {
         expected_delay_seconds: 0,
-        created_at,
         test_id: test_id.clone(),
     };
 
@@ -377,10 +350,8 @@ async fn test_delay_position_ordering() {
         .unwrap();
 
     // Job 2: Delayed job with First position
-    let delayed_first_job = DelayTestJob {
-        job_id: "delayed_first".to_string(),
+    let delayed_first_job = DelayTestJobData {
         expected_delay_seconds: short_delay.as_secs(),
-        created_at,
         test_id: test_id.clone(),
     };
 
@@ -399,10 +370,8 @@ async fn test_delay_position_ordering() {
         .unwrap();
 
     // Job 3: Delayed job with Last position
-    let delayed_last_job = DelayTestJob {
-        job_id: "delayed_last".to_string(),
+    let delayed_last_job = DelayTestJobData {
         expected_delay_seconds: short_delay.as_secs(),
-        created_at,
         test_id: test_id.clone(),
     };
 

@@ -5,13 +5,13 @@ use axum::{
     response::{IntoResponse, Json, Result},
 };
 use engine_aa_core::smart_account::{SmartAccount, SmartAccountFromSalt};
-use engine_core::constants::{DEFAULT_FACTORY_ADDRESS_V0_6, DEFAULT_FACTORY_ADDRESS_V0_7};
+use engine_core::{
+    chain::ChainService,
+    constants::{DEFAULT_FACTORY_ADDRESS_V0_6, DEFAULT_FACTORY_ADDRESS_V0_7},
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    chains::ChainService,
-    http::{error::EngineResult, server::EngineServerState},
-};
+use crate::http::{error::EngineResult, server::EngineServerState};
 
 // Request model
 #[derive(Deserialize)]

@@ -8,10 +8,10 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
+use twmq::job::JobError;
 
 use twmq::{
-    DurableExecution, NackHookData, Queue, SuccessHookData,
-    hooks::TransactionContext,
+    DurableExecution, Queue,
     job::{Job, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
 };
@@ -20,10 +20,8 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Benchmark job that either succeeds immediately or nacks based on probability
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BenchmarkJob {
-    pub job_id: String,
+pub struct BenchmarkJobData {
     pub nack_probability: f64, // For metrics
-    pub created_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,12 +55,12 @@ impl BenchmarkMetrics {
         }
     }
 
-    fn reset(&self) {
-        self.jobs_processed.store(0, Ordering::SeqCst);
-        self.jobs_nacked.store(0, Ordering::SeqCst);
-        self.jobs_succeeded.store(0, Ordering::SeqCst);
-        self.total_processing_time_ms.store(0, Ordering::SeqCst);
-    }
+    // fn reset(&self) {
+    //     self.jobs_processed.store(0, Ordering::SeqCst);
+    //     self.jobs_nacked.store(0, Ordering::SeqCst);
+    //     self.jobs_succeeded.store(0, Ordering::SeqCst);
+    //     self.total_processing_time_ms.store(0, Ordering::SeqCst);
+    // }
 
     fn processed_count(&self) -> u64 {
         self.jobs_processed.load(Ordering::SeqCst)
@@ -85,35 +83,36 @@ impl BenchmarkMetrics {
     }
 }
 
-impl DurableExecution for BenchmarkJob {
+struct BenchmarkJobHandler {
+    pub metrics: BenchmarkMetrics,
+}
+
+impl DurableExecution for BenchmarkJobHandler {
     type Output = BenchmarkOutput;
     type ErrorData = BenchmarkErrorData;
-    type ExecutionContext = BenchmarkMetrics;
+    type JobData = BenchmarkJobData;
 
-    async fn process(
-        job: &Job<Self>,
-        metrics: &Self::ExecutionContext,
-    ) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
 
         // Simulate minimal work (just increment counter)
-        metrics.jobs_processed.fetch_add(1, Ordering::SeqCst);
+        self.metrics.jobs_processed.fetch_add(1, Ordering::SeqCst);
 
         let end_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
         let processing_time = end_time - start_time;
-        metrics
+        self.metrics
             .total_processing_time_ms
             .fetch_add(processing_time, Ordering::SeqCst);
 
         // Fresh random decision each processing attempt
         if rand::thread_rng().gen_bool(job.data.nack_probability) {
-            metrics.jobs_nacked.fetch_add(1, Ordering::SeqCst);
+            self.metrics.jobs_nacked.fetch_add(1, Ordering::SeqCst);
 
             // Random position for nacks as requested
             let position = if rand::thread_rng().gen_bool(0.5) {
@@ -122,48 +121,26 @@ impl DurableExecution for BenchmarkJob {
                 RequeuePosition::Last
             };
 
-            JobResult::Nack {
+            Err(JobError::Nack {
                 error: BenchmarkErrorData {
-                    job_id: job.data.job_id.clone(),
+                    job_id: job.id.clone(),
                     attempt: job.attempts,
                 },
                 delay: None, // No delay as requested
                 position,
-            }
+            })
         } else {
-            metrics.jobs_succeeded.fetch_add(1, Ordering::SeqCst);
+            self.metrics.jobs_succeeded.fetch_add(1, Ordering::SeqCst);
 
-            JobResult::Success(BenchmarkOutput {
-                job_id: job.data.job_id.clone(),
+            Ok(BenchmarkOutput {
+                job_id: job.id.clone(),
                 processed_at: end_time,
             })
         }
     }
-
-    async fn on_success(
-        &self,
-        _job: &Job<Self>,
-        _d: SuccessHookData<'_, Self::Output>,
-        _tx: &mut TransactionContext<'_>,
-        _metrics: &Self::ExecutionContext,
-    ) {
-        // Keep hooks minimal for max performance
-    }
-
-    async fn on_nack(
-        &self,
-        _job: &Job<Self>,
-        _d: NackHookData<'_, Self::ErrorData>,
-        _tx: &mut TransactionContext<'_>,
-        _metrics: &Self::ExecutionContext,
-    ) {
-        // Keep hooks minimal for max performance
-    }
-
-    async fn on_timeout(&self, _tx: &mut TransactionContext<'_>) {
-        // Minimal timeout handling
-    }
 }
+
+type BenchmarkQueue = Queue<BenchmarkJobHandler>;
 
 // Load test that finds maximum sustainable throughput
 async fn load_test_throughput(
@@ -186,12 +163,16 @@ async fn load_test_throughput(
         max_failed: 1000,                            // Reasonable failed queue
     };
 
+    let benchmark_handler = BenchmarkJobHandler {
+        metrics: metrics.clone(),
+    };
+
     let queue = Arc::new(
-        Queue::<BenchmarkJob, BenchmarkOutput, BenchmarkErrorData, BenchmarkMetrics>::new(
+        BenchmarkQueue::new(
             REDIS_URL,
             &queue_name,
             Some(queue_options),
-            metrics.clone(),
+            benchmark_handler,
         )
         .await
         .expect("Failed to create benchmark queue"),
@@ -238,13 +219,8 @@ async fn load_test_throughput(
 
                 interval.tick().await;
 
-                let job = BenchmarkJob {
-                    job_id: format!("job_{}", job_counter),
+                let job = BenchmarkJobData {
                     nack_probability: nack_percentage,
-                    created_at: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
                 };
 
                 if queue

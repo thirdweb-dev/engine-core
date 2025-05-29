@@ -1,8 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Serialize, de::DeserializeOwned};
-
-use crate::{DurableExecution, error::TwmqError, job::JobBuilder};
+use crate::{DurableExecution, error::TwmqError, job::PushableJob};
 
 // A minimal transaction context that hooks can use
 pub struct TransactionContext<'a> {
@@ -31,70 +29,39 @@ impl<'a> TransactionContext<'a> {
     }
 
     // Helper for job scheduling (maintains type safety)
-    pub fn queue_job<T, R, E, C>(
+    pub fn queue_job<H: DurableExecution>(
         &mut self,
-        job_builder: JobBuilder<T, R, E, C>,
-    ) -> Result<&mut Self, TwmqError>
-    where
-        T: Serialize
-            + DeserializeOwned
-            + Send
-            + Sync
-            + DurableExecution<Output = R, ErrorData = E, ExecutionContext = C>
-            + 'static,
-        R: Serialize + DeserializeOwned + Send + Sync + 'static,
-        E: Serialize + DeserializeOwned + Send + Sync + 'static,
-        C: Send + Clone + Sync + 'static,
-    {
+        job: PushableJob<H>,
+    ) -> Result<&mut Self, TwmqError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let job_data = serde_json::to_string(&job_builder.options.data)?;
+        let job_data = serde_json::to_string(&job.options.data)?;
 
         // Add job to the target queue (could be different from current queue!)
         self.pipeline
+            .hset(job.queue.job_data_hash_name(), &job.options.id, job_data)
             .hset(
-                job_builder.queue.job_data_hash_name(),
-                &job_builder.options.id,
-                job_data,
-            )
-            .hset(
-                job_builder
-                    .queue
-                    .job_meta_hash_name(&job_builder.options.id),
+                job.queue.job_meta_hash_name(&job.options.id),
                 "created_at",
                 now,
             )
-            .hset(
-                job_builder
-                    .queue
-                    .job_meta_hash_name(&job_builder.options.id),
-                "attempts",
-                0,
-            )
-            .sadd(job_builder.queue.dedupe_set_name(), &job_builder.options.id);
+            .hset(job.queue.job_meta_hash_name(&job.options.id), "attempts", 0)
+            .sadd(job.queue.dedupe_set_name(), &job.options.id);
 
-        if let Some(delay_options) = job_builder.options.delay {
+        if let Some(delay_options) = job.options.delay {
             let process_at = now + delay_options.delay.as_secs();
             self.pipeline
                 .hset(
-                    job_builder
-                        .queue
-                        .job_meta_hash_name(&job_builder.options.id),
+                    job.queue.job_meta_hash_name(&job.options.id),
                     "reentry_position",
                     delay_options.position.to_string(),
                 )
-                .zadd(
-                    job_builder.queue.delayed_zset_name(),
-                    &job_builder.options.id,
-                    process_at,
-                );
+                .zadd(job.queue.delayed_zset_name(), &job.options.id, process_at);
         } else {
-            self.pipeline.rpush(
-                job_builder.queue.pending_list_name(),
-                &job_builder.options.id,
-            );
+            self.pipeline
+                .rpush(job.queue.pending_list_name(), &job.options.id);
         }
 
         Ok(self)

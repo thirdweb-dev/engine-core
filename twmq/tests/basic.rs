@@ -52,12 +52,15 @@ async fn test_queue_push_and_process_job() {
     TEST_JOB_PROCESSED_SUCCESSFULLY.store(false, Ordering::SeqCst);
 
     println!("Creating queue: {}", queue_name);
+
+    let basic_handler = TestJobHandler;
+
     let queue = Arc::new(
-        Queue::<TestJobPayload, TestJobOutput, TestJobErrorData, ()>::new(
+        Queue::<TestJobHandler>::new(
             REDIS_URL,
             &queue_name,
             None, // Default QueueOptions
-            (),
+            basic_handler,
         )
         .await
         .expect("Failed to create queue"),

@@ -11,6 +11,7 @@ use crate::userop::UserOpVersion;
 pub const MANAGED_ACCOUNT_GAS_BUFFER: U256 = U256::from_limbs([21_000, 0, 0, 0]);
 
 /// A JSON-RPC client for interacting with an ERC-4337 bundler and paymaster
+#[derive(Debug, Clone)]
 pub struct BundlerClient {
     inner: RpcClient,
 }
@@ -67,5 +68,18 @@ impl BundlerClient {
             call_gas_limit: result.call_gas_limit + MANAGED_ACCOUNT_GAS_BUFFER,
             ..result
         })
+    }
+
+    pub async fn send_user_op(
+        &self,
+        user_op: &UserOpVersion,
+        entrypoint: Address,
+    ) -> TransportResult<Bytes> {
+        let result: Bytes = self
+            .inner
+            .request("eth_sendUserOperation", (user_op, entrypoint))
+            .await?;
+
+        Ok(result)
     }
 }

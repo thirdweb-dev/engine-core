@@ -13,17 +13,15 @@ use engine_aa_core::{
     userop::builder::{UserOpBuilder, UserOpBuilderConfig},
 };
 use engine_core::{
-    credentials::SigningCredential, execution_options::aa::Erc4337ExecutionOptions,
-    transaction::InnerTransaction, userop::UserOpVersion,
+    chain::ChainService, credentials::SigningCredential,
+    execution_options::aa::Erc4337ExecutionOptions, transaction::InnerTransaction,
+    userop::UserOpVersion,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use vault_types::enclave::auth::Auth;
 
-use crate::{
-    chains::ChainService,
-    http::{error::EngineResult, server::EngineServerState},
-};
+use crate::http::{error::EngineResult, server::EngineServerState};
 
 // Request model for the test route
 #[derive(Deserialize)]

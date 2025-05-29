@@ -3,15 +3,14 @@ pub mod hooks;
 pub mod job;
 pub mod queue;
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use error::TwmqError;
 use hooks::TransactionContext;
 use job::{
-    DelayOptions, Job, JobBuilder, JobErrorRecord, JobErrorType, JobOptions, JobResult, JobStatus,
-    RequeuePosition,
+    DelayOptions, Job, JobError, JobErrorRecord, JobErrorType, JobOptions, JobResult, JobStatus,
+    PushableJob, RequeuePosition,
 };
 use queue::QueueOptions;
 use redis::Pipeline;
@@ -38,43 +37,40 @@ pub struct FailHookData<'a, E> {
 }
 
 // Main DurableExecution trait
-pub trait DurableExecution: Sized {
+pub trait DurableExecution: Sized + Send + Sync + 'static {
     type Output: Serialize + DeserializeOwned + Send + Sync;
     type ErrorData: Serialize + DeserializeOwned + Send + Sync;
-    type ExecutionContext: Send + Sync + 'static;
+    type JobData: Serialize + DeserializeOwned + Send + Sync + 'static;
 
     // Required method to process a job
     fn process(
-        job: &Job<Self>,
-        c: &Self::ExecutionContext,
-    ) -> impl Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send + Sync;
+        &self,
+        job: &Job<Self::JobData>,
+    ) -> impl Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send;
 
     fn on_success(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         _d: SuccessHookData<Self::Output>,
         _tx: &mut TransactionContext<'_>,
-        _c: &Self::ExecutionContext,
     ) -> impl Future<Output = ()> + Send + Sync {
         std::future::ready(())
     }
 
     fn on_nack(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         _d: NackHookData<Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _c: &Self::ExecutionContext,
     ) -> impl Future<Output = ()> + Send + Sync {
         std::future::ready(())
     }
 
     fn on_fail(
         &self,
-        _job: &Job<Self>,
+        _job: &Job<Self::JobData>,
         _d: FailHookData<Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-        _c: &Self::ExecutionContext,
     ) -> impl Future<Output = ()> + Send + Sync {
         std::future::ready(())
     }
@@ -88,44 +84,24 @@ pub trait DurableExecution: Sized {
 }
 
 // Main Queue struct
-pub struct Queue<T, R, E, C>
+pub struct Queue<H>
 where
-    T: Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + DurableExecution<ExecutionContext = C, Output = R, ErrorData = E>,
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    E: Serialize + DeserializeOwned + Send + Sync + 'static,
-    C: Send + Sync + 'static,
+    H: DurableExecution,
 {
     pub redis: ConnectionManager,
+    handler: Arc<H>,
     options: QueueOptions,
     // concurrency: usize,
     name: String,
-    execution_context: C,
-    _phantom: PhantomData<(T, R, E)>,
 }
 
-impl<T, R, E, C> Queue<T, R, E, C>
-where
-    C: Send + Sync + Clone + 'static,
-    T: Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + DurableExecution<Output = R, ErrorData = E, ExecutionContext = C>
-        + 'static,
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    E: Serialize + DeserializeOwned + Send + Sync + 'static,
-{
+impl<H: DurableExecution> Queue<H> {
     pub async fn new(
         redis_url: &str,
         name: &str,
         // concurrency: usize,
         options: Option<QueueOptions>,
-        context: C,
+        handler: H,
     ) -> Result<Self, TwmqError> {
         let client = redis::Client::open(redis_url)?;
         let redis = client.get_connection_manager().await?;
@@ -135,15 +111,14 @@ where
             name: name.to_string(),
             // concurrency,
             options: options.unwrap_or_default(),
-            execution_context: context,
-            _phantom: PhantomData,
+            handler: Arc::new(handler),
         };
 
         Ok(queue)
     }
 
-    pub fn job(self: Arc<Self>, data: T) -> JobBuilder<T, R, E, C> {
-        JobBuilder {
+    pub fn job(self: Arc<Self>, data: H::JobData) -> PushableJob<H> {
+        PushableJob {
             options: JobOptions::new(data),
             queue: self,
         }
@@ -194,7 +169,10 @@ where
         format!("twmq:{}:dedup", self.name)
     }
 
-    pub async fn push(&self, job_options: JobOptions<T>) -> Result<Job<T>, TwmqError> {
+    pub async fn push(
+        &self,
+        job_options: JobOptions<H::JobData>,
+    ) -> Result<Job<H::JobData>, TwmqError> {
         // Check for duplicates and handle job creation with deduplication
         let script = redis::Script::new(
             r#"
@@ -287,12 +265,12 @@ where
         Ok(job)
     }
 
-    pub async fn get_job(&self, job_id: &str) -> Result<Option<Job<T>>, TwmqError> {
+    pub async fn get_job(&self, job_id: &str) -> Result<Option<Job<H::JobData>>, TwmqError> {
         let mut conn = self.redis.clone();
         let job_data_t_json: Option<String> = conn.hget(self.job_data_hash_name(), job_id).await?;
 
         if let Some(data_json) = job_data_t_json {
-            let data_t: T = serde_json::from_str(&data_json)?;
+            let data_t: H::JobData = serde_json::from_str(&data_json)?;
 
             // Fetch metadata
             let meta_map: std::collections::HashMap<String, String> =
@@ -356,11 +334,11 @@ where
     pub async fn work(self: Arc<Self>) -> Result<(), TwmqError> {
         // Local semaphore to limit concurrency per instance
         let semaphore = Arc::new(Semaphore::new(self.options.local_concurrency));
-
+        let handler = self.handler.clone();
         // Start worker
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(self.options.polling_interval);
-
+            let handler_clone = handler.clone();
             loop {
                 interval.tick().await;
 
@@ -380,16 +358,16 @@ where
                             let permit = semaphore.clone().acquire_owned().await.unwrap();
                             let queue_clone = self.clone();
                             let job_id = job.id.clone();
-                            let execution_context = self.execution_context.clone();
+                            let handler_clone = handler_clone.clone();
 
                             tokio::spawn(async move {
                                 // Process job - note we don't pass a context here
-                                let result = DurableExecution::process(&job, &execution_context).await;
+                                let result = handler_clone.process(&job).await;
 
                                 // Mark job as complete (automatically happens in completion handlers)
 
                                 match result {
-                                    JobResult::Success(output) => {
+                                    Ok(output) => {
                                         // Create transaction pipeline for atomicity
                                         let mut pipeline = redis::pipe();
                                         pipeline.atomic(); // Use MULTI/EXEC
@@ -405,7 +383,7 @@ where
                                         };
 
                                         // Call success hook to populate transaction context
-                                        job.data.on_success(&job, success_hook_data, &mut tx_context, &execution_context).await;
+                                        handler_clone.on_success(&job, success_hook_data, &mut tx_context).await;
 
                                         // Complete job with success and execute transaction
                                         if let Err(e) = queue_clone
@@ -423,11 +401,11 @@ where
                                             );
                                         }
                                     }
-                                    JobResult::Nack {
+                                    Err(JobError::Nack {
                                         error,
                                         delay,
                                         position,
-                                    } => {
+                                    }) => {
                                         // Create transaction pipeline for atomicity
                                         let mut pipeline = redis::pipe();
                                         pipeline.atomic(); // Use MULTI/EXEC
@@ -445,8 +423,8 @@ where
                                         };
 
                                         // Call nack hook to populate transaction context
-                                        job.data
-                                            .on_nack(&job, nack_hook_data, &mut tx_context,&execution_context)
+                                        handler_clone
+                                            .on_nack(&job, nack_hook_data, &mut tx_context)
                                             .await;
 
                                         // Complete job with nack and execute transaction
@@ -467,7 +445,7 @@ where
                                             );
                                         }
                                     }
-                                    JobResult::Fail(error) => {
+                                    Err(JobError::Fail(error)) => {
                                         // Create transaction pipeline for atomicity
                                         let mut pipeline = redis::pipe();
                                         pipeline.atomic(); // Use MULTI/EXEC
@@ -483,7 +461,7 @@ where
                                         };
 
                                         // Call fail hook to populate transaction context
-                                        job.data.on_fail(&job, fail_hook_data, &mut tx_context, &execution_context).await;
+                                        handler_clone.on_fail(&job, fail_hook_data, &mut tx_context).await;
 
                                         // Complete job with fail and execute transaction
                                         if let Err(e) = queue_clone
@@ -517,7 +495,7 @@ where
     }
 
     // Improved batch job popping - gets multiple jobs at once
-    async fn pop_batch_jobs(&self, batch_size: usize) -> RedisResult<Vec<Job<T>>> {
+    async fn pop_batch_jobs(&self, batch_size: usize) -> RedisResult<Vec<Job<H::JobData>>> {
         // Lua script that does:
         // 1. Process expired delayed jobs
         // 2. Check for timed out active jobs
@@ -647,7 +625,7 @@ where
         for (job_id_str, job_data_t_json, attempts_str, created_at_str, processed_at_str) in
             results_from_lua
         {
-            match serde_json::from_str::<T>(&job_data_t_json) {
+            match serde_json::from_str::<H::JobData>(&job_data_t_json) {
                 Ok(data_t) => {
                     let attempts: u32 = attempts_str.parse().unwrap_or(1); // Default or handle error
                     let created_at: u64 = created_at_str.parse().unwrap_or(now); // Default or handle error
@@ -679,8 +657,8 @@ where
 
     async fn complete_job_success(
         &self,
-        job: &Job<T>,
-        result: &R,
+        job: &Job<H::JobData>,
+        result: &H::Output,
         pipeline: &mut Pipeline,
     ) -> Result<(), TwmqError> {
         let now = SystemTime::now()
@@ -742,8 +720,8 @@ where
 
     async fn complete_job_nack(
         &self,
-        job: &Job<T>,
-        error: &E,
+        job: &Job<H::JobData>,
+        error: &H::ErrorData,
         delay: Option<Duration>,
         position: RequeuePosition,
         pipeline: &mut Pipeline,
@@ -800,8 +778,8 @@ where
 
     async fn complete_job_fail(
         &self,
-        job: &Job<T>,
-        error: &E,
+        job: &Job<H::JobData>,
+        error: &H::ErrorData,
         pipeline: &mut Pipeline,
     ) -> Result<(), TwmqError> {
         let now = SystemTime::now()
