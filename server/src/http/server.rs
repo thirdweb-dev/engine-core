@@ -2,7 +2,12 @@ use std::sync::Arc;
 
 use axum::{Router, routing::post};
 use engine_core::userop::UserOpSigner;
+use engine_executors::{
+    external_bundler::{confirm::UserOpConfirmationHandler, send::ExternalBundlerSendHandler},
+    webhook::WebhookJobHandler,
+};
 use tokio::{sync::watch, task::JoinHandle};
+use twmq::Queue;
 
 use crate::chains::ThirdwebChainService;
 use tower_http::{
@@ -16,6 +21,10 @@ use super::routes::{create_userop::create_user_op, smart_account::smart_account_
 pub struct EngineServerState {
     pub chains: Arc<ThirdwebChainService>,
     pub signer: Arc<UserOpSigner>,
+
+    pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
+    pub erc4337_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
+    pub erc4337_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
 }
 
 pub struct EngineServer {
@@ -33,6 +42,10 @@ impl EngineServer {
             .allow_credentials(false);
 
         let router = Router::new()
+            .route(
+                "/write/transaction",
+                post(crate::http::routes::transaction::write_transaction),
+            )
             .route("/smart-account/status", post(smart_account_status))
             .route("/userop/create", post(create_user_op))
             .layer(cors)

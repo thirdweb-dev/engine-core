@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 aide = { version = "0.14.2", features = ["axum"] }
-alloy = { version = "1.0.8", features = ["serde"] }
+alloy = { version = "1.0.8", features = ["serde", "json-rpc"] }
 schemars = "0.8.22"
 serde = "1.0.219"
 serde_json = "1.0.140"

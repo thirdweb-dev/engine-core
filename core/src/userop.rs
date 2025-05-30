@@ -19,6 +19,7 @@ pub enum UserOpVersion {
     V0_7(PackedUserOperation),
 }
 
+#[derive(Clone)]
 pub struct UserOpSigner {
     pub vault_client: VaultClient,
 }

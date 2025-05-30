@@ -99,6 +99,7 @@ dependencies = [
  "alloy-core",
  "alloy-eips 1.0.8",
  "alloy-genesis 1.0.8",
+ "alloy-json-rpc 1.0.8",
  "alloy-network 1.0.8",
  "alloy-provider 1.0.8",
  "alloy-rpc-client 1.0.8",
@@ -5361,6 +5362,7 @@ dependencies = [
  "config",
  "engine-aa-core",
  "engine-core",
+ "engine-executors",
  "rand 0.9.1",
  "serde",
  "serde_json",
@@ -5368,6 +5370,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "twmq",
  "vault-sdk",
  "vault-types",
 ]

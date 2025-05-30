@@ -13,7 +13,7 @@ pub const MANAGED_ACCOUNT_GAS_BUFFER: U256 = U256::from_limbs([21_000, 0, 0, 0])
 /// A JSON-RPC client for interacting with an ERC-4337 bundler and paymaster
 #[derive(Debug, Clone)]
 pub struct BundlerClient {
-    inner: RpcClient,
+    pub inner: RpcClient,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

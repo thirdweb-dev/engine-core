@@ -1,16 +1,52 @@
-use crate::rpc_clients::{BundlerClient, PaymasterClient};
+use crate::rpc_clients::{BundlerClient, PaymasterClient, transport::SharedClientTransportBuilder};
 use alloy::{
     providers::{ProviderBuilder, RootProvider},
-    transports::http::{
-        Http,
-        reqwest::{
-            ClientBuilder as HttpClientBuilder, Url,
-            header::{HeaderMap, HeaderValue},
-        },
+    rpc::client::RpcClient,
+    transports::http::reqwest::{
+        ClientBuilder as HttpClientBuilder, Url,
+        header::{HeaderMap, HeaderValue},
     },
 };
+use serde::{Deserialize, Serialize};
 
 use crate::error::EngineError;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThirdwebClientIdAndServiceKey {
+    pub client_id: String,
+    pub service_key: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ThirdwebRpcCredentials {
+    ClientIdServiceKey(ThirdwebClientIdAndServiceKey),
+}
+
+impl ThirdwebRpcCredentials {
+    pub fn to_header_map(&self) -> Result<HeaderMap, EngineError> {
+        match self {
+            ThirdwebRpcCredentials::ClientIdServiceKey(creds) => {
+                let mut headers = HeaderMap::new();
+                headers.insert("x-client-id", HeaderValue::from_str(&creds.client_id)?);
+                headers.insert("x-service-key", HeaderValue::from_str(&creds.service_key)?);
+                Ok(headers)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RpcCredentials {
+    Thirdweb(ThirdwebRpcCredentials),
+}
+
+impl RpcCredentials {
+    pub fn to_header_map(&self) -> Result<HeaderMap, EngineError> {
+        match self {
+            RpcCredentials::Thirdweb(creds) => creds.to_header_map(),
+        }
+    }
+}
 
 pub trait Chain: Send + Sync {
     fn chain_id(&self) -> u64;
@@ -21,6 +57,11 @@ pub trait Chain: Send + Sync {
     fn provider(&self) -> &RootProvider;
     fn bundler_client(&self) -> &BundlerClient;
     fn paymaster_client(&self) -> &PaymasterClient;
+
+    fn bundler_client_with_headers(&self, headers: HeaderMap) -> BundlerClient;
+    fn paymaster_client_with_headers(&self, headers: HeaderMap) -> PaymasterClient;
+
+    fn with_new_default_headers(&self, headers: HeaderMap) -> Self;
 }
 
 pub struct ThirdwebChainConfig<'a> {
@@ -32,15 +73,22 @@ pub struct ThirdwebChainConfig<'a> {
     pub client_id: &'a str,
 }
 
+#[derive(Clone)]
 pub struct ThirdwebChain {
+    transport_builder: SharedClientTransportBuilder,
+
     chain_id: u64,
     rpc_url: Url,
     bundler_url: Url,
     paymaster_url: Url,
 
+    /// Default clients (these also use the shared connection pool)
     pub bundler_client: BundlerClient,
     pub paymaster_client: PaymasterClient,
     pub provider: RootProvider,
+
+    pub sensitive_bundler_client: BundlerClient,
+    pub sensitive_paymaster_client: PaymasterClient,
 }
 
 impl Chain for ThirdwebChain {
@@ -70,6 +118,30 @@ impl Chain for ThirdwebChain {
 
     fn paymaster_client(&self) -> &PaymasterClient {
         &self.paymaster_client
+    }
+
+    fn bundler_client_with_headers(&self, headers: HeaderMap) -> BundlerClient {
+        let transport = self
+            .transport_builder
+            .with_headers(self.bundler_url.clone(), headers);
+        let rpc_client = RpcClient::builder().transport(transport, false);
+        BundlerClient { inner: rpc_client }
+    }
+
+    fn paymaster_client_with_headers(&self, headers: HeaderMap) -> PaymasterClient {
+        let transport = self
+            .transport_builder
+            .with_headers(self.paymaster_url.clone(), headers);
+        let rpc_client = RpcClient::builder().transport(transport, false);
+        PaymasterClient { inner: rpc_client }
+    }
+
+    fn with_new_default_headers(&self, headers: HeaderMap) -> Self {
+        let mut new_self = self.to_owned();
+        new_self.bundler_client = self.bundler_client_with_headers(headers.clone());
+        new_self.paymaster_client = self.paymaster_client_with_headers(headers.clone());
+
+        new_self
     }
 }
 
@@ -103,36 +175,67 @@ impl<'a> ThirdwebChainConfig<'a> {
             message: format!("Failed to parse Paymaster URL: {}", e.to_string()),
         })?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
+        let mut sensitive_headers = HeaderMap::new();
+        sensitive_headers.insert(
             "x-client-id",
             HeaderValue::from_str(&self.client_id).map_err(|e| EngineError::RpcConfigError {
                 message: format!("Unserialisable client-id used: {e}"),
             })?,
         );
 
-        headers.insert(
+        sensitive_headers.insert(
             "x-secret-key",
             HeaderValue::from_str(&self.secret_key).map_err(|e| EngineError::RpcConfigError {
                 message: format!("Unserialisable secret-key used: {e}"),
             })?,
         );
 
-        let reqwest_client = HttpClientBuilder::new()
-            .default_headers(headers)
-            .build()
-            .map_err(|e| EngineError::RpcConfigError {
-                message: format!("Failed to build HTTP client: {e}"),
-            })?;
+        let reqwest_client =
+            HttpClientBuilder::new()
+                .build()
+                .map_err(|e| EngineError::RpcConfigError {
+                    message: format!("Failed to build HTTP client: {e}"),
+                })?;
 
-        let paymaster_transport = Http::with_client(reqwest_client.clone(), paymaster_url.clone());
-        let bundler_transport = Http::with_client(reqwest_client, bundler_url.clone());
+        let transport_builder = SharedClientTransportBuilder::new(reqwest_client.clone());
+
+        let paymaster_transport = transport_builder.default_transport(paymaster_url.clone());
+        let bundler_transport = transport_builder.default_transport(bundler_url.clone());
+
+        let sensitive_bundler_transport =
+            transport_builder.with_headers(bundler_url.clone(), sensitive_headers.clone());
+        let sensitive_paymaster_transport =
+            transport_builder.with_headers(paymaster_url.clone(), sensitive_headers);
+
+        let paymaster_rpc_client = RpcClient::builder().transport(paymaster_transport, false);
+        let bundler_rpc_client = RpcClient::builder().transport(bundler_transport, false);
+
+        let sensitive_bundler_rpc_client =
+            RpcClient::builder().transport(sensitive_bundler_transport, false);
+        let sensitive_paymaster_rpc_client =
+            RpcClient::builder().transport(sensitive_paymaster_transport, false);
 
         Ok(ThirdwebChain {
+            transport_builder,
+
             chain_id: self.chain_id,
             rpc_url: rpc_url.clone(),
-            bundler_client: BundlerClient::new(bundler_transport),
-            paymaster_client: PaymasterClient::new(paymaster_transport),
+
+            bundler_client: BundlerClient {
+                inner: bundler_rpc_client,
+            },
+            paymaster_client: PaymasterClient {
+                inner: paymaster_rpc_client,
+            },
+
+            sensitive_bundler_client: BundlerClient {
+                inner: sensitive_bundler_rpc_client,
+            },
+
+            sensitive_paymaster_client: PaymasterClient {
+                inner: sensitive_paymaster_rpc_client,
+            },
+
             provider: ProviderBuilder::new()
                 .disable_recommended_fillers()
                 .connect_http(rpc_url)

@@ -1,9 +1,12 @@
 use alloy::{
     primitives::Address,
-    transports::{RpcError as AlloyRpcError, TransportErrorKind},
+    transports::{
+        RpcError as AlloyRpcError, TransportErrorKind, http::reqwest::header::InvalidHeaderValue,
+    },
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use twmq::error::TwmqError;
 
 use crate::chain::Chain;
 
@@ -179,6 +182,20 @@ pub enum EngineError {
         /// Specific error kind
         kind: ContractInteractionErrorKind,
     },
+
+    #[error("Validation error: {message}")]
+    ValidationError { message: String },
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
+}
+
+impl From<InvalidHeaderValue> for EngineError {
+    fn from(err: InvalidHeaderValue) -> Self {
+        EngineError::ValidationError {
+            message: err.to_string(),
+        }
+    }
 }
 
 pub trait AlloyRpcErrorToEngineError {
@@ -297,5 +314,17 @@ impl ContractErrorToEngineError for alloy::contract::Error {
             message,
             kind,
         }
+    }
+}
+
+impl From<twmq::redis::RedisError> for EngineError {
+    fn from(error: twmq::redis::RedisError) -> Self {
+        EngineError::InternalError(error.to_string())
+    }
+}
+
+impl From<TwmqError> for EngineError {
+    fn from(error: TwmqError) -> Self {
+        EngineError::InternalError(error.to_string())
     }
 }

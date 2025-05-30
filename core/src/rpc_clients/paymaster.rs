@@ -31,7 +31,7 @@ pub struct PaymasterResultV07 {
 /// A JSON-RPC client for interacting with an ERC-4337 bundler and paymaster
 #[derive(Debug, Clone)]
 pub struct PaymasterClient {
-    inner: RpcClient,
+    pub inner: RpcClient,
 }
 
 impl PaymasterClient {

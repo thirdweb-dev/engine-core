@@ -9,7 +9,7 @@ pub trait DeploymentCache: Send + Sync {
         &self,
         chain_id: u64,
         account_address: &Address,
-    ) -> impl Future<Output = Option<bool>> + Send + Sync;
+    ) -> impl Future<Output = Option<bool>> + Send;
 }
 
 pub enum AcquireLockResult {
@@ -26,7 +26,7 @@ pub trait DeploymentLock: Send + Sync {
         &self,
         chain_id: u64,
         account_address: &Address,
-    ) -> impl Future<Output = Option<(LockId, Duration)>> + Send + Sync;
+    ) -> impl Future<Output = Option<(LockId, Duration)>> + Send;
 
     /// Try to acquire a deployment lock
     /// Returns true if successful, false if already locked
@@ -34,7 +34,14 @@ pub trait DeploymentLock: Send + Sync {
         &self,
         chain_id: u64,
         account_address: &Address,
-    ) -> impl Future<Output = Result<AcquireLockResult, EngineError>> + Send + Sync;
+    ) -> impl Future<Output = Result<AcquireLockResult, EngineError>> + Send;
+
+    /// Release a deployment lock
+    fn release_lock(
+        &self,
+        chain_id: u64,
+        account_address: &Address,
+    ) -> impl Future<Output = Result<bool, EngineError>> + Send;
 }
 
 pub enum DeploymentStatus {

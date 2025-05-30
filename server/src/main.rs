@@ -5,6 +5,7 @@ use thirdweb_engine::{
     chains::ThirdwebChainService,
     config,
     http::server::{EngineServer, EngineServerState},
+    queue::manager::QueueManager,
 };
 use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -34,11 +35,23 @@ async fn main() -> anyhow::Result<()> {
         rpc_base_url: config.thirdweb.urls.rpc,
     });
 
-    let signer = UserOpSigner { vault_client };
+    let signer = Arc::new(UserOpSigner { vault_client });
+
+    let queue_manager =
+        QueueManager::new(&config.redis, &config.queue, chains.clone(), signer.clone()).await?;
+
+    tracing::info!("Queue manager initialized");
+
+    // Start queue workers
+    tracing::info!("Starting queue workers...");
+    queue_manager.start_workers(&config.queue).await?;
 
     let mut server = EngineServer::new(EngineServerState {
-        signer: Arc::new(signer),
+        signer: signer.clone(),
         chains,
+        webhook_queue: queue_manager.webhook_queue.clone(),
+        erc4337_send_queue: queue_manager.erc4337_send_queue.clone(),
+        erc4337_confirm_queue: queue_manager.erc4337_confirm_queue.clone(),
     })
     .await;
 

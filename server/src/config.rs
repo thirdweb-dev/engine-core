@@ -7,6 +7,23 @@ use serde::Deserialize;
 pub struct EngineConfig {
     pub server: ServerConfig,
     pub thirdweb: ThirdwebConfig,
+    pub queue: QueueConfig,
+    pub redis: RedisConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QueueConfig {
+    pub webhook_workers: usize,
+    pub erc4337_send_workers: usize,
+    pub erc4337_confirm_workers: usize,
+    pub local_concurrency: usize,
+    pub polling_interval_ms: u64,
+    pub lease_duration_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RedisConfig {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
