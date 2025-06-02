@@ -30,6 +30,11 @@ jobs:
           --health-retries 5
 
     steps:
+      - name: Give GitHub Actions access to @thirdweb-dev/vault
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd #@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.VAULT_REPO_DEPLOY_KEY }}
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #checkout@v4
 
       - name: Install CI dependencies

@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, Bytes, U256};
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
-    error::AlloyRpcErrorToEngineError,
+    error::{AlloyRpcErrorToEngineError, EngineError},
     execution_options::WebhookOptions,
     rpc_clients::UserOperationReceipt,
 };
@@ -62,8 +62,7 @@ pub enum UserOpConfirmationError {
     ReceiptQueryFailed {
         user_op_hash: Bytes,
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<serde_json::Value>,
+        inner_error: Option<EngineError>,
     },
 
     #[error("Internal error: {message}")]
@@ -155,7 +154,7 @@ where
             .map_err(|e| UserOpConfirmationError::ReceiptQueryFailed {
                 user_op_hash: job_data.user_op_hash.clone(),
                 message: e.to_string(),
-                inner_error: serde_json::to_value(&e.to_engine_bundler_error(&chain)).ok(),
+                inner_error: Some(e.to_engine_bundler_error(&chain)),
             })
             .map_err_nack(Some(self.confirmation_retry_delay), RequeuePosition::Last)?;
 

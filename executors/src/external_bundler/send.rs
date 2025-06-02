@@ -85,8 +85,7 @@ pub enum ExternalBundlerSendError {
         factory_address: Address,
         account_salt: String,
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<serde_json::Value>,
+        inner_error: Option<EngineError>,
     },
 
     #[error("Deployment lock for account {account_address} could not be acquired: {message}")]
@@ -102,8 +101,7 @@ pub enum ExternalBundlerSendError {
         had_deployment_lock: bool,
         stage: String,
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<serde_json::Value>,
+        inner_error: Option<EngineError>,
     },
 
     #[error("Failed to send UserOperation to bundler: {message}")]
@@ -113,8 +111,7 @@ pub enum ExternalBundlerSendError {
         had_deployment_lock: bool,
         user_op: UserOpVersion,
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<serde_json::Value>,
+        inner_error: Option<EngineError>,
     },
 
     #[error("Invalid RPC Credentials: {message}")]
@@ -288,7 +285,7 @@ where
                     .factory_address,
                 account_salt: job_data.execution_options.account_salt.clone(),
                 message: e.to_string(),
-                inner_error: serde_json::to_value(&e).ok(),
+                inner_error: Some(e),
             })
             .map_err_fail()?,
         };
@@ -561,7 +558,7 @@ fn map_build_error(
         nonce_used: nonce,
         stage,
         message: engine_error.to_string(),
-        inner_error: serde_json::to_value(&engine_error).ok(),
+        inner_error: Some(engine_error.clone()),
         had_deployment_lock: had_lock,
     }
 }
@@ -581,7 +578,7 @@ fn map_bundler_error(
         nonce_used: nonce,
         user_op: signed_user_op.clone(),
         message: engine_error.to_string(),
-        inner_error: serde_json::to_value(&engine_error).ok(),
+        inner_error: Some(engine_error),
         had_deployment_lock: had_lock,
     }
 }
@@ -597,6 +594,7 @@ fn is_build_error_retryable(e: &EngineError) -> bool {
         }
         EngineError::PaymasterError { kind, .. } | EngineError::BundlerError { kind, .. } => {
             !is_http_error_code(kind, 400)
+                && !is_http_error_code(kind, 401)
                 && !matches!(
                     kind,
                     engine_core::error::RpcErrorKind::ErrorResp(r)

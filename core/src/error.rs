@@ -11,7 +11,7 @@ use twmq::error::TwmqError;
 
 use crate::chain::Chain;
 
-#[derive(Debug, Error, Serialize, Deserialize)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum RpcErrorKind {
     /// Server returned an error response.
     #[error("server returned an error response: {0}")]
@@ -56,7 +56,7 @@ pub enum RpcErrorKind {
     OtherTransportError(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RpcErrorResponse {
     /// The error code.
     pub code: i64,
@@ -97,7 +97,7 @@ pub struct RpcErrorInfo {
 }
 
 /// A serializable contract interaction error type
-#[derive(Debug, Error, Serialize, Deserialize)]
+#[derive(Debug, Error, Serialize, Deserialize, Clone)]
 pub enum ContractInteractionErrorKind {
     /// Unknown function referenced.
     #[error("unknown function: function {0} does not exist")]
@@ -137,7 +137,7 @@ pub enum ContractInteractionErrorKind {
     PendingTransactionError(String),
 }
 
-#[derive(Error, Debug, Serialize, Deserialize)]
+#[derive(Error, Debug, Serialize, Clone, Deserialize)]
 pub enum EngineError {
     #[error("RPC error on chain {chain_id} at {rpc_url}: {message}")]
     RpcError {
