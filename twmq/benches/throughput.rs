@@ -8,6 +8,7 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
+use twmq::error::TwmqError;
 use twmq::job::JobError;
 
 use twmq::{
@@ -32,8 +33,15 @@ pub struct BenchmarkOutput {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BenchmarkErrorData {
-    pub job_id: String,
-    pub attempt: u32,
+    pub reason: String,
+}
+
+impl From<TwmqError> for BenchmarkErrorData {
+    fn from(error: TwmqError) -> Self {
+        BenchmarkErrorData {
+            reason: error.to_string(),
+        }
+    }
 }
 
 // Shared metrics across all benchmark jobs
@@ -123,8 +131,7 @@ impl DurableExecution for BenchmarkJobHandler {
 
             Err(JobError::Nack {
                 error: BenchmarkErrorData {
-                    job_id: job.id.clone(),
-                    attempt: job.attempts,
+                    reason: "Random nack reason".to_string(),
                 },
                 delay: None, // No delay as requested
                 position,

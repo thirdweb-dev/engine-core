@@ -5,6 +5,7 @@ use alloy::{
     },
 };
 use serde::{Deserialize, Serialize};
+use thirdweb_core::error::ThirdwebError;
 use thiserror::Error;
 use twmq::error::TwmqError;
 
@@ -185,6 +186,9 @@ pub enum EngineError {
 
     #[error("Validation error: {message}")]
     ValidationError { message: String },
+
+    #[error("Thirdweb error: {0}")]
+    ThirdwebError(#[from] ThirdwebError),
 
     #[error("Internal error: {0}")]
     InternalError(String),

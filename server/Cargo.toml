@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "0.15.10", features = ["serde"] }
+alloy = { version = "1.0.8", features = ["serde"] }
 async-nats = "0.40.0"
 axum = { version = "0.8.4", features = ["macros"] }
 config = "0.15.11"
@@ -16,9 +16,11 @@ engine-core = { path = "../core" }
 engine-aa-core = { path = "../aa-core" }
 engine-executors = { path = "../executors" }
 twmq = { path = "../twmq" }
+thirdweb-core = { path = "../thirdweb-core" }
 tokio = { version = "1.44.2", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors", "trace"] }
 tracing = "0.1.41"
 anyhow = "1.0.98"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 rand = "0.9.1"
+futures = "0.3.31"

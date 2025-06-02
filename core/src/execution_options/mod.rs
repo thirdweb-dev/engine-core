@@ -29,15 +29,18 @@ pub struct ExecutionOptions {
     pub specific: SpecificExecutionOptions,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WebhookOptions {
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRequest {
-    #[serde(flatten)]
     pub execution_options: ExecutionOptions,
     pub params: Vec<InnerTransaction>,
-    pub webhook_url: Option<String>,
+    pub webhook_options: Option<WebhookOptions>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionResponse {

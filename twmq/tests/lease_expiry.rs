@@ -15,6 +15,9 @@ use twmq::{
     redis::aio::ConnectionManager,
 };
 
+mod fixtures;
+use fixtures::TestJobErrorData;
+
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Helper to clean up Redis keys
@@ -48,11 +51,6 @@ pub struct SleepJobOutput {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SleepJobErrorData {
-    pub reason: String,
-}
-
 pub static MULTI_JOB_STARTED_PROCESSING: AtomicBool = AtomicBool::new(false);
 pub static MULTI_JOB_SHOULD_CONTINUE_SLEEPING: AtomicBool = AtomicBool::new(true);
 
@@ -64,7 +62,7 @@ pub struct SleepForeverHandler {
 
 impl DurableExecution for SleepForeverHandler {
     type Output = SleepJobOutput;
-    type ErrorData = SleepJobErrorData;
+    type ErrorData = TestJobErrorData;
     type JobData = SleepForeverJobData;
 
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {

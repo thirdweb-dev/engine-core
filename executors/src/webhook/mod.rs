@@ -6,6 +6,7 @@ use hex;
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
+use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
 use twmq::job::{Job, JobError, JobResult, RequeuePosition, ToJobResult};
 use twmq::{DurableExecution, FailHookData, NackHookData, SuccessHookData};
@@ -56,6 +57,11 @@ pub struct WebhookJobOutput {
 
 // --- Webhook Error Enum ---
 #[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
+#[serde(
+    rename_all = "SCREAMING_SNAKE_CASE",
+    tag = "errorCode",
+    content = "message"
+)]
 pub enum WebhookError {
     #[error("Network error during webhook dispatch: {0}")]
     Network(String),
@@ -80,6 +86,15 @@ pub enum WebhookError {
 
     #[error("Unsupported HTTP method: {0}")]
     UnsupportedHttpMethod(String),
+
+    #[error("Internal queue error: {0}")]
+    InternalQueueError(String),
+}
+
+impl From<TwmqError> for WebhookError {
+    fn from(error: TwmqError) -> Self {
+        WebhookError::InternalQueueError(error.to_string())
+    }
 }
 
 // --- DurableExecution Implementation ---
@@ -88,6 +103,7 @@ impl DurableExecution for WebhookJobHandler {
     type ErrorData = WebhookError;
     type JobData = WebhookJobPayload;
 
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let payload = &job.data;
         let mut request_headers = HeaderMap::new();
@@ -150,7 +166,7 @@ impl DurableExecution for WebhookJobHandler {
                 .map_err(|e| {
                     WebhookError::HmacGeneration(format!("Failed to initialize HMAC: {}", e))
                 })
-                .fail_err()?;
+                .map_err_fail()?;
 
             mac.update(message_to_sign.as_bytes());
             let signature_bytes = mac.finalize().into_bytes();
@@ -167,7 +183,7 @@ impl DurableExecution for WebhookJobHandler {
                         signature_header_name, e
                     ))
                 })
-                .fail_err()?;
+                .map_err_fail()?;
 
             let timestamp_header_value = HeaderValue::from_str(&timestamp_str)
                 .map_err(|e| {
@@ -176,7 +192,7 @@ impl DurableExecution for WebhookJobHandler {
                         timestamp_header_name, e
                     ))
                 })
-                .fail_err()?;
+                .map_err_fail()?;
 
             request_headers.insert(
                 HeaderName::from_static(signature_header_name),
@@ -196,7 +212,7 @@ impl DurableExecution for WebhookJobHandler {
 
         let method = reqwest::Method::from_bytes(http_method_str.as_bytes())
             .map_err(|_| WebhookError::UnsupportedHttpMethod(http_method_str.clone()))
-            .fail_err()?;
+            .map_err_fail()?;
 
         let request_builder = self
             .http_client
@@ -225,7 +241,7 @@ impl DurableExecution for WebhookJobHandler {
                                 "Failed to read response body: {}",
                                 e
                             ));
-                            return Err(err).fail_err();
+                            return Err(err).map_err_fail();
                         }
                         tracing::warn!(job_id = %job.id, "Failed to read response body for error status {}: {}", status, e);
                         None
@@ -350,6 +366,7 @@ impl DurableExecution for WebhookJobHandler {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
     async fn on_success(
         &self,
         job: &Job<Self::JobData>,
@@ -364,6 +381,7 @@ impl DurableExecution for WebhookJobHandler {
         );
     }
 
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
     async fn on_nack(
         &self,
         job: &Job<Self::JobData>,
@@ -380,6 +398,7 @@ impl DurableExecution for WebhookJobHandler {
         );
     }
 
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
     async fn on_fail(
         &self,
         job: &Job<Self::JobData>,

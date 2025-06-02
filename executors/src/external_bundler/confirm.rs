@@ -1,15 +1,15 @@
-use alloy::{
-    primitives::{Address, Bytes, U256},
-    rpc::types::UserOperationReceipt,
-};
+use alloy::primitives::{Address, Bytes, U256};
 use engine_core::{
-    chain::{Chain, ChainService},
+    chain::{Chain, ChainService, RpcCredentials},
     error::AlloyRpcErrorToEngineError,
+    execution_options::WebhookOptions,
+    rpc_clients::UserOperationReceipt,
 };
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
+    error::TwmqError,
     hooks::TransactionContext,
     job::{Job, JobResult, RequeuePosition, ToJobResult},
 };
@@ -19,7 +19,7 @@ use crate::webhook::{
     envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
 };
 
-use super::{deployment::RedisDeploymentLock, send::WebhookOptions};
+use super::deployment::RedisDeploymentLock;
 
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -32,8 +32,8 @@ pub struct UserOpConfirmationJobData {
     pub nonce: U256,
     pub deployment_lock_acquired: bool,
     pub webhook_options: Option<WebhookOptions>,
-    pub thirdweb_client_id: Option<String>,
-    pub thirdweb_service_key: Option<String>,
+
+    pub rpc_credentials: RpcCredentials,
 }
 
 // --- Success Result ---
@@ -47,7 +47,7 @@ pub struct UserOpConfirmationResult {
 
 // --- Error Types ---
 #[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
-#[serde(rename_all = "camelCase", tag = "errorCode")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
 pub enum UserOpConfirmationError {
     #[error("Chain service error for chainId {chain_id}: {message}")]
     ChainServiceError { chain_id: u64, message: String },
@@ -63,11 +63,19 @@ pub enum UserOpConfirmationError {
         user_op_hash: Bytes,
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        technical_details: Option<String>,
+        inner_error: Option<serde_json::Value>,
     },
 
     #[error("Internal error: {message}")]
     InternalError { message: String },
+}
+
+impl From<TwmqError> for UserOpConfirmationError {
+    fn from(error: TwmqError) -> Self {
+        UserOpConfirmationError::InternalError {
+            message: format!("Deserialization error for job data: {}", error.to_string()),
+        }
+    }
 }
 
 // --- Handler ---
@@ -115,6 +123,7 @@ where
     type ErrorData = UserOpConfirmationError;
     type JobData = UserOpConfirmationJobData;
 
+    #[tracing::instrument(skip(self, job), fields(transaction_id = job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.data;
 
@@ -126,28 +135,29 @@ where
                 chain_id: job_data.chain_id,
                 message: format!("Failed to get chain instance: {}", e),
             })
-            .fail_err()?;
+            .map_err_fail()?;
+
+        let chain = chain.with_new_default_headers(
+            job.data
+                .rpc_credentials
+                .to_header_map()
+                .map_err(|e| UserOpConfirmationError::InternalError {
+                    message: format!("Bad RPC Credential values, unserialisable into headers: {e}"),
+                })
+                .map_err_fail()?,
+        );
 
         // 2. Query for User Operation Receipt
-        let receipt_result = chain
+        let receipt_option = chain
             .bundler_client()
             .get_user_op_receipt(job_data.user_op_hash.clone())
             .await
             .map_err(|e| UserOpConfirmationError::ReceiptQueryFailed {
                 user_op_hash: job_data.user_op_hash.clone(),
                 message: e.to_string(),
-                technical_details: Some(
-                    serde_json::to_string(&e.to_engine_bundler_error(&chain)).unwrap_or_default(),
-                ),
-            });
-
-        let receipt_option = match receipt_result {
-            Ok(opt) => opt,
-            Err(e) => {
-                // Network/RPC errors might be temporary, retry
-                return Err(e).nack_err(Some(self.confirmation_retry_delay), RequeuePosition::Last);
-            }
-        };
+                inner_error: serde_json::to_value(&e.to_engine_bundler_error(&chain)).ok(),
+            })
+            .map_err_nack(Some(self.confirmation_retry_delay), RequeuePosition::Last)?;
 
         let receipt = match receipt_option {
             Some(receipt) => receipt,
@@ -158,14 +168,14 @@ where
                         user_op_hash: job_data.user_op_hash.clone(),
                         attempt_number: job.attempts,
                     })
-                    .fail_err(); // FAIL - triggers on_fail hook which will release lock
+                    .map_err_fail(); // FAIL - triggers on_fail hook which will release lock
                 }
 
                 return Err(UserOpConfirmationError::ReceiptNotAvailable {
                     user_op_hash: job_data.user_op_hash.clone(),
                     attempt_number: job.attempts,
                 })
-                .nack_err(Some(self.confirmation_retry_delay), RequeuePosition::Last);
+                .map_err_nack(Some(self.confirmation_retry_delay), RequeuePosition::Last);
                 // NACK - triggers on_nack hook which keeps lock for retry
             }
         };
@@ -299,13 +309,7 @@ where
 
 impl HasWebhookOptions for UserOpConfirmationJobData {
     fn webhook_url(&self) -> Option<String> {
-        self.webhook_options
-            .as_ref()
-            .map(|opts| opts.webhook_url.clone())
-    }
-
-    fn transaction_id(&self) -> String {
-        self.transaction_id.clone()
+        self.webhook_options.as_ref().map(|opts| opts.url.clone())
     }
 }
 

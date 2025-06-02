@@ -36,11 +36,15 @@ pub struct FailHookData<'a, E> {
     pub error: &'a E,
 }
 
+pub struct QueueInternalErrorHookData<'a> {
+    pub error: &'a TwmqError,
+}
+
 // Main DurableExecution trait
 pub trait DurableExecution: Sized + Send + Sync + 'static {
     type Output: Serialize + DeserializeOwned + Send + Sync;
-    type ErrorData: Serialize + DeserializeOwned + Send + Sync;
-    type JobData: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type ErrorData: Serialize + DeserializeOwned + From<TwmqError> + Send + Sync;
+    type JobData: Serialize + DeserializeOwned + Clone + Send + Sync + 'static;
 
     // Required method to process a job
     fn process(
@@ -77,6 +81,17 @@ pub trait DurableExecution: Sized + Send + Sync + 'static {
 
     fn on_timeout(
         &self,
+        _tx: &mut TransactionContext<'_>,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        std::future::ready(())
+    }
+
+    /// Data available to the `on_queue_error` hook. The failure might have been related to deserialization of the job data.
+    /// So the job data might be `None`. This hook is called before the job is moved to the failed state.
+    fn on_queue_error(
+        &self,
+        _job: &Job<Option<Self::JobData>>,
+        _d: QueueInternalErrorHookData<'_>,
         _tx: &mut TransactionContext<'_>,
     ) -> impl Future<Output = ()> + Send + Sync {
         std::future::ready(())
@@ -339,21 +354,23 @@ impl<H: DurableExecution> Queue<H> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(self.options.polling_interval);
             let handler_clone = handler.clone();
+            let always_poll = self.options.always_poll;
             loop {
                 interval.tick().await;
+                let queue_clone = self.clone();
 
                 // Check available permits for batch size
                 let available_permits = semaphore.available_permits();
-                if available_permits == 0 && !self.options.always_poll {
-                    tracing::debug!("No permits available, waiting...");
+                if available_permits == 0 && !always_poll {
+                    tracing::trace!("No permits available, waiting...");
                     continue;
                 }
 
-                tracing::debug!("Available permits: {}", available_permits);
+                tracing::trace!("Available permits: {}", available_permits);
                 // Try to get multiple jobs - as many as we have permits
-                match self.pop_batch_jobs(available_permits).await {
+                match queue_clone.pop_batch_jobs(available_permits).await {
                     Ok(jobs) => {
-                        tracing::debug!("Got {} jobs", jobs.len());
+                        tracing::trace!("Got {} jobs", jobs.len());
                         for job in jobs {
                             let permit = semaphore.clone().acquire_owned().await.unwrap();
                             let queue_clone = self.clone();
@@ -465,7 +482,7 @@ impl<H: DurableExecution> Queue<H> {
 
                                         // Complete job with fail and execute transaction
                                         if let Err(e) = queue_clone
-                                            .complete_job_fail(&job, &error, tx_context.pipeline())
+                                            .complete_job_fail(&job.to_option_data(), &error, tx_context.pipeline())
                                             .await
                                         {
                                             tracing::error!(
@@ -483,7 +500,7 @@ impl<H: DurableExecution> Queue<H> {
                         }
                     }
                     Err(e) => {
-                        // No jobs found, wait a bit
+                        // No jobs found, we hit an error
                         tracing::error!("Failed to pop batch jobs: {:?}", e);
                         sleep(Duration::from_millis(1000)).await;
                     }
@@ -495,7 +512,10 @@ impl<H: DurableExecution> Queue<H> {
     }
 
     // Improved batch job popping - gets multiple jobs at once
-    async fn pop_batch_jobs(&self, batch_size: usize) -> RedisResult<Vec<Job<H::JobData>>> {
+    async fn pop_batch_jobs(
+        self: Arc<Self>,
+        batch_size: usize,
+    ) -> RedisResult<Vec<Job<H::JobData>>> {
         // Lua script that does:
         // 1. Process expired delayed jobs
         // 2. Check for timed out active jobs
@@ -643,11 +663,51 @@ impl<H: DurableExecution> Queue<H> {
                 Err(e) => {
                     // Log error: failed to deserialize job data T for job_id_str
                     tracing::error!(
-                        "Failed to deserialize job data for job {}: {}",
-                        job_id_str,
-                        e
+                        job_id = job_id_str,
+                        error = ?e,
+                        "Failed to deserialize job data. Spawning task to move job to failed state.",
                     );
-                    // TODO: Potentially move this job_id to a failed state or log for investigation
+
+                    let queue_clone = self.clone();
+
+                    tokio::spawn(async move {
+                        // let's call the on_queue_error hook and move the job to the failed state
+                        let mut pipeline = redis::pipe();
+                        pipeline.atomic(); // Use MULTI/EXEC
+
+                        let mut tx_context =
+                            TransactionContext::new(&mut pipeline, queue_clone.name().to_string());
+
+                        let job: Job<Option<H::JobData>> = Job {
+                            id: job_id_str.to_string(),
+                            data: None,
+                            attempts: attempts_str.parse().unwrap_or(1),
+                            created_at: created_at_str.parse().unwrap_or(now),
+                            processed_at: processed_at_str.parse().ok(),
+                            finished_at: Some(now),
+                        };
+
+                        let twmq_error: TwmqError = e.into();
+                        let fail_hook_data = QueueInternalErrorHookData { error: &twmq_error };
+
+                        // Call fail hook to populate transaction context
+                        queue_clone
+                            .handler
+                            .on_queue_error(&job, fail_hook_data, &mut tx_context)
+                            .await;
+
+                        // Complete job with fail and execute transaction
+                        if let Err(e) = queue_clone
+                            .complete_job_fail(&job, &twmq_error.into(), tx_context.pipeline())
+                            .await
+                        {
+                            tracing::error!(
+                                job_id = job.id,
+                                error = ?e,
+                                "Failed to complete job fail handling successfully",
+                            );
+                        }
+                    });
                 }
             }
         }
@@ -655,6 +715,7 @@ impl<H: DurableExecution> Queue<H> {
         Ok(jobs)
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id, queue = self.name()))]
     async fn complete_job_success(
         &self,
         job: &Job<H::JobData>,
@@ -686,6 +747,8 @@ impl<H: DurableExecution> Queue<H> {
                 local list_name = KEYS[2]
                 local job_data_hash = KEYS[3]
                 local results_hash = KEYS[4] -- e.g., "myqueue:results"
+                local dedupe_set_name = KEYS[5]
+
                 local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
@@ -695,6 +758,7 @@ impl<H: DurableExecution> Queue<H> {
                         local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
                         local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
+                        redis.call('SREM', dedupe_set_name, j_id)
                         redis.call('HDEL', job_data_hash, j_id)
                         redis.call('DEL', job_meta_hash)
                         redis.call('HDEL', results_hash, j_id)
@@ -706,18 +770,24 @@ impl<H: DurableExecution> Queue<H> {
             "#,
         );
 
-        let _trimmed_count: usize = trim_script
+        let trimmed_count: usize = trim_script
             .key(self.name())
             .key(self.success_list_name())
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name()) // results_hash
+            .key(self.dedupe_set_name())
             .arg(self.options.max_success) // max_len (LTRIM is 0 to max_success-1)
             .invoke_async(&mut self.redis.clone())
             .await?;
 
+        if trimmed_count > 0 {
+            tracing::info!("Pruned {} successful jobs", trimmed_count);
+        }
+
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id, queue = self.name()))]
     async fn complete_job_nack(
         &self,
         job: &Job<H::JobData>,
@@ -773,12 +843,15 @@ impl<H: DurableExecution> Queue<H> {
         // Execute pipeline
         pipeline.query_async::<()>(&mut self.redis.clone()).await?;
 
+        tracing::debug!("Completed job nack handling");
+
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id, queue = self.name()))]
     async fn complete_job_fail(
         &self,
-        job: &Job<H::JobData>,
+        job: &Job<Option<H::JobData>>,
         error: &H::ErrorData,
         pipeline: &mut Pipeline,
     ) -> Result<(), TwmqError> {
@@ -812,8 +885,9 @@ impl<H: DurableExecution> Queue<H> {
                 local queue_id = KEYS[1]
                 local list_name = KEYS[2]
                 local job_data_hash = KEYS[3]
-                local max_len = tonumber(ARGV[1])
+                local dedupe_set_name = KEYS[4]
 
+                local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
 
@@ -822,6 +896,7 @@ impl<H: DurableExecution> Queue<H> {
                         local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
                         local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
 
+                        redis.call('SREM', dedupe_set_name, j_id)
                         redis.call('HDEL', job_data_hash, j_id)
                         redis.call('DEL', job_meta_hash)
                         redis.call('DEL', errors_list_name)
@@ -832,13 +907,19 @@ impl<H: DurableExecution> Queue<H> {
             "#,
         );
 
-        let _trimmed_count: usize = trim_script
+        let trimmed_count: usize = trim_script
             .key(self.name())
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
+            .key(self.dedupe_set_name())
             .arg(self.options.max_failed) // max_len (LTRIM is 0 to max_failed-1)
             .invoke_async(&mut self.redis.clone())
             .await?;
+
+        tracing::debug!("completed job fail handling");
+        if trimmed_count > 0 {
+            tracing::info!("Pruned {} failed jobs", trimmed_count);
+        }
 
         Ok(())
     }

@@ -6,6 +6,7 @@ use engine_executors::{
     external_bundler::{confirm::UserOpConfirmationHandler, send::ExternalBundlerSendHandler},
     webhook::WebhookJobHandler,
 };
+use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
 use twmq::Queue;
 
@@ -15,12 +16,16 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use super::routes::{create_userop::create_user_op, smart_account::smart_account_status};
+use super::routes::{
+    create_userop::create_user_op, encode_method::read_contract,
+    smart_account::smart_account_status,
+};
 
 #[derive(Clone)]
 pub struct EngineServerState {
     pub chains: Arc<ThirdwebChainService>,
     pub signer: Arc<UserOpSigner>,
+    pub abi_service: Arc<ThirdwebAbiService>,
 
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub erc4337_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
@@ -48,6 +53,7 @@ impl EngineServer {
             )
             .route("/smart-account/status", post(smart_account_status))
             .route("/userop/create", post(create_user_op))
+            .route("/test", post(read_contract))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             // Add more routes here

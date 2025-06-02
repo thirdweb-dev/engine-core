@@ -7,6 +7,9 @@ use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod fixtures;
+use fixtures::TestJobErrorData;
+
 use twmq::{
     DurableExecution, Queue, SuccessHookData,
     hooks::TransactionContext,
@@ -50,16 +53,11 @@ pub struct DelayTestOutput {
     pub test_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DelayTestErrorData {
-    pub reason: String,
-}
-
 struct DelayTestJobHandler;
 
 impl DurableExecution for DelayTestJobHandler {
     type Output = DelayTestOutput;
-    type ErrorData = DelayTestErrorData;
+    type ErrorData = TestJobErrorData;
     type JobData = DelayTestJobData;
 
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {

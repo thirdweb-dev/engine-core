@@ -52,12 +52,12 @@ pub enum JobError<E> {
 }
 
 pub trait ToJobResult<T, E> {
-    fn nack_err(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E>;
-    fn fail_err(self) -> JobResult<T, E>;
+    fn map_err_nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E>;
+    fn map_err_fail(self) -> JobResult<T, E>;
 }
 
 impl<T, E> ToJobResult<T, E> for Result<T, E> {
-    fn nack_err(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E> {
+    fn map_err_nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E> {
         self.map_err(|e| JobError::Nack {
             error: e,
             delay,
@@ -65,7 +65,7 @@ impl<T, E> ToJobResult<T, E> for Result<T, E> {
         })
     }
 
-    fn fail_err(self) -> JobResult<T, E> {
+    fn map_err_fail(self) -> JobResult<T, E> {
         self.map_err(|e| JobError::Fail(e))
     }
 }
@@ -123,13 +123,26 @@ pub struct JobErrorRecord<E> {
 
 // Job structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Job<T> {
+pub struct Job<T: Clone> {
     pub id: String,
     pub data: T,
     pub attempts: u32,
     pub created_at: u64,
     pub processed_at: Option<u64>,
     pub finished_at: Option<u64>,
+}
+
+impl<T: Clone> Job<T> {
+    pub fn to_option_data(&self) -> Job<Option<T>> {
+        Job {
+            id: self.id.clone(),
+            data: Some(self.data.clone()),
+            attempts: self.attempts,
+            created_at: self.created_at,
+            processed_at: self.processed_at,
+            finished_at: self.finished_at,
+        }
+    }
 }
 
 // Job status enum

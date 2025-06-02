@@ -54,11 +54,6 @@ pub struct WebhookJobOutput {
     pub response: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct WebhookJobErrorData {
-    pub error: String,
-}
-
 // Main job that queues webhook jobs
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MainJobPayload {
@@ -126,7 +121,7 @@ impl DurableExecution for MainJobHandler {
 
 impl DurableExecution for WebhookJobHandler {
     type Output = WebhookJobOutput;
-    type ErrorData = WebhookJobErrorData;
+    type ErrorData = TestJobErrorData;
     type JobData = WebhookJobPayload;
 
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
 use twmq::job::{Job, JobResult};
 use twmq::{DurableExecution, SuccessHookData};
@@ -25,6 +26,14 @@ pub struct TestJobOutput {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TestJobErrorData {
     pub reason: String,
+}
+
+impl From<TwmqError> for TestJobErrorData {
+    fn from(error: TwmqError) -> Self {
+        TestJobErrorData {
+            reason: error.to_string(),
+        }
+    }
 }
 
 // Use a static AtomicBool to signal from the job process to the test

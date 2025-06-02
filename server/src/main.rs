@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use engine_core::userop::UserOpSigner;
+use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
     config,
@@ -14,7 +15,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             // Default to info level if RUST_LOG environment variable is not set
-            "thirdweb_engine=debug,tower_http=debug,axum=debug".into()
+            "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=debug,engine_executors=debug,thirdweb_core=debug"
+                .into()
         }))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -46,8 +48,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting queue workers...");
     queue_manager.start_workers(&config.queue).await?;
 
+    let abi_service = ThirdwebAbiServiceBuilder::new(
+        &config.thirdweb.urls.abi_service,
+        ThirdwebAuth::SecretKey(config.thirdweb.secret.clone()),
+    )?
+    .build()?;
+
     let mut server = EngineServer::new(EngineServerState {
         signer: signer.clone(),
+        abi_service: Arc::new(abi_service),
         chains,
         webhook_queue: queue_manager.webhook_queue.clone(),
         erc4337_send_queue: queue_manager.erc4337_send_queue.clone(),

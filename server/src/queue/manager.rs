@@ -39,7 +39,7 @@ impl QueueManager {
         let deployment_lock = RedisDeploymentLock::new(redis_client.clone()).await?;
 
         // Create queue options
-        let queue_opts = QueueOptions {
+        let base_queue_opts = QueueOptions {
             local_concurrency: queue_config.local_concurrency,
             polling_interval: Duration::from_millis(queue_config.polling_interval_ms),
             lease_duration: Duration::from_secs(queue_config.lease_duration_seconds),
@@ -47,6 +47,15 @@ impl QueueManager {
             max_success: 1000,
             max_failed: 1000,
         };
+
+        let mut external_bundler_send_queue_opts = base_queue_opts.clone();
+        let mut external_bundler_confirm_queue_opts = base_queue_opts.clone();
+        let mut webhook_queue_opts = base_queue_opts.clone();
+
+        external_bundler_send_queue_opts.local_concurrency = queue_config.erc4337_send_workers;
+        external_bundler_confirm_queue_opts.local_concurrency =
+            queue_config.erc4337_confirm_workers;
+        webhook_queue_opts.local_concurrency = queue_config.webhook_workers;
 
         // Create webhook queue
         let webhook_handler = WebhookJobHandler {
@@ -58,7 +67,7 @@ impl QueueManager {
             Queue::new(
                 &redis_config.url,
                 "webhook",
-                Some(queue_opts.clone()),
+                Some(webhook_queue_opts),
                 webhook_handler,
             )
             .await?,
@@ -75,7 +84,7 @@ impl QueueManager {
             Queue::new(
                 &redis_config.url,
                 "erc4337_confirm",
-                Some(queue_opts.clone()),
+                Some(external_bundler_confirm_queue_opts),
                 confirm_handler,
             )
             .await?,
@@ -95,7 +104,7 @@ impl QueueManager {
             Queue::new(
                 &redis_config.url,
                 "erc4337_send",
-                Some(queue_opts),
+                Some(external_bundler_send_queue_opts),
                 send_handler,
             )
             .await?,
@@ -113,36 +122,21 @@ impl QueueManager {
         tracing::info!("Starting queue workers...");
 
         // Start webhook workers
-        for i in 0..queue_config.webhook_workers {
-            let queue = self.webhook_queue.clone();
-            tokio::spawn(async move {
-                tracing::info!("Starting webhook worker {}", i);
-                if let Err(e) = queue.work().await {
-                    tracing::error!("Webhook worker {} failed: {}", i, e);
-                }
-            });
+        tracing::info!("Starting webhook worker");
+        if let Err(e) = self.webhook_queue.clone().work().await {
+            tracing::error!("Webhook worker failed: {}", e);
         }
 
         // Start ERC-4337 send workers
-        for i in 0..queue_config.erc4337_send_workers {
-            let queue = self.erc4337_send_queue.clone();
-            tokio::spawn(async move {
-                tracing::info!("Starting ERC-4337 send worker {}", i);
-                if let Err(e) = queue.work().await {
-                    tracing::error!("ERC-4337 send worker {} failed: {}", i, e);
-                }
-            });
+        tracing::info!("Starting external bundler send worker");
+        if let Err(e) = self.erc4337_send_queue.clone().work().await {
+            tracing::error!("Webhook worker failed: {}", e);
         }
 
         // Start ERC-4337 confirmation workers
-        for i in 0..queue_config.erc4337_confirm_workers {
-            let queue = self.erc4337_confirm_queue.clone();
-            tokio::spawn(async move {
-                tracing::info!("Starting ERC-4337 confirm worker {}", i);
-                if let Err(e) = queue.work().await {
-                    tracing::error!("ERC-4337 confirm worker {} failed: {}", i, e);
-                }
-            });
+        tracing::info!("Starting external bundler confirmation worker");
+        if let Err(e) = self.erc4337_confirm_queue.clone().work().await {
+            tracing::error!("Webhook worker failed: {}", e);
         }
 
         tracing::info!(

@@ -18,6 +18,9 @@ use twmq::{
     redis::aio::ConnectionManager,
 };
 
+mod fixtures;
+use fixtures::TestJobErrorData;
+
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Helper to clean up Redis keys
@@ -51,20 +54,13 @@ pub struct RetryJobOutput {
     pub final_attempt: u32,
     pub message: String,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RetryJobErrorData {
-    pub attempt: u32,
-    pub reason: String,
-}
-
 struct RetryJobHandler;
 
 pub static RETRY_JOB_FINAL_SUCCESS: AtomicBool = AtomicBool::new(false);
 
 impl DurableExecution for RetryJobHandler {
     type Output = RetryJobOutput;
-    type ErrorData = RetryJobErrorData;
+    type ErrorData = TestJobErrorData;
     type JobData = RetryJobPayload;
 
     async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
@@ -87,8 +83,7 @@ impl DurableExecution for RetryJobHandler {
             );
 
             Err(JobError::Nack {
-                error: RetryJobErrorData {
-                    attempt: current_attempt,
+                error: TestJobErrorData {
                     reason: format!(
                         "Need {} attempts, only at {}",
                         job.data.desired_attempts, current_attempt
@@ -128,13 +123,13 @@ impl DurableExecution for RetryJobHandler {
 
     async fn on_nack(
         &self,
-        _job: &Job<Self::JobData>,
+        job: &Job<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
             "RETRY_JOB: on_nack hook - attempt {} failed: {}",
-            d.error.attempt,
+            job.attempts,
             d.error.reason
         );
         if let Some(delay_duration) = d.delay {
@@ -144,13 +139,13 @@ impl DurableExecution for RetryJobHandler {
 
     async fn on_fail(
         &self,
-        _job: &Job<Self::JobData>,
-        d: FailHookData<'_, Self::ErrorData>,
+        job: &Job<Self::JobData>,
+        _d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::error!(
             "RETRY_JOB: on_fail hook - permanently failed at attempt {}",
-            d.error.attempt
+            job.attempts
         );
     }
 

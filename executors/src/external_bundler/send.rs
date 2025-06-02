@@ -14,7 +14,7 @@ use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, EngineError},
-    execution_options::aa::Erc4337ExecutionOptions,
+    execution_options::{WebhookOptions, aa::Erc4337ExecutionOptions},
     transaction::InnerTransaction,
     userop::{UserOpSigner, UserOpVersion},
 };
@@ -22,24 +22,20 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData,
+    error::TwmqError,
     hooks::TransactionContext,
-    job::{Job, JobResult, RequeuePosition, ToJobError, ToJobResult},
+    job::{DelayOptions, Job, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
 use crate::webhook::{
     WebhookJobHandler,
-    envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
+    envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
 };
 
 use super::{
     confirm::{UserOpConfirmationHandler, UserOpConfirmationJobData},
     deployment::{RedisDeploymentCache, RedisDeploymentLock},
 };
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct WebhookOptions {
-    pub webhook_url: String,
-}
 
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -58,13 +54,7 @@ pub struct ExternalBundlerSendJobData {
 
 impl HasWebhookOptions for ExternalBundlerSendJobData {
     fn webhook_url(&self) -> Option<String> {
-        self.webhook_options
-            .as_ref()
-            .map(|opts| opts.webhook_url.clone())
-    }
-
-    fn transaction_id(&self) -> String {
-        self.transaction_id.clone()
+        self.webhook_options.as_ref().map(|opts| opts.url.clone())
     }
 }
 
@@ -81,7 +71,7 @@ pub struct ExternalBundlerSendResult {
 
 // --- Error Types ---
 #[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
-#[serde(rename_all = "camelCase", tag = "errorCode")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
 pub enum ExternalBundlerSendError {
     #[error("Chain service error for chainId {chain_id}: {message}")]
     ChainServiceError { chain_id: u64, message: String },
@@ -96,7 +86,7 @@ pub enum ExternalBundlerSendError {
         account_salt: String,
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<String>,
+        inner_error: Option<serde_json::Value>,
     },
 
     #[error("Deployment lock for account {account_address} could not be acquired: {message}")]
@@ -113,7 +103,7 @@ pub enum ExternalBundlerSendError {
         stage: String,
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<String>,
+        inner_error: Option<serde_json::Value>,
     },
 
     #[error("Failed to send UserOperation to bundler: {message}")]
@@ -124,7 +114,7 @@ pub enum ExternalBundlerSendError {
         user_op: UserOpVersion,
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        inner_error: Option<String>,
+        inner_error: Option<serde_json::Value>,
     },
 
     #[error("Invalid RPC Credentials: {message}")]
@@ -132,6 +122,14 @@ pub enum ExternalBundlerSendError {
 
     #[error("Internal error: {message}")]
     InternalError { message: String },
+}
+
+impl From<TwmqError> for ExternalBundlerSendError {
+    fn from(error: TwmqError) -> Self {
+        ExternalBundlerSendError::InternalError {
+            message: format!("Deserialization error for job data: {}", error.to_string()),
+        }
+    }
 }
 
 impl ExternalBundlerSendError {
@@ -224,6 +222,7 @@ where
     type ErrorData = ExternalBundlerSendError;
     type JobData = ExternalBundlerSendJobData;
 
+    #[tracing::instrument(skip(self, job), fields(transaction_id = job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
     async fn process(
         &self,
         job: &twmq::job::Job<Self::JobData>,
@@ -238,7 +237,7 @@ where
                 chain_id: job_data.chain_id,
                 message: format!("Failed to get chain instance: {}", e),
             })
-            .fail_err()?;
+            .map_err_fail()?;
 
         let chain_auth_headers = job
             .data
@@ -247,7 +246,7 @@ where
             .map_err(|e| ExternalBundlerSendError::InvalidRpcCredentials {
                 message: e.to_string(),
             })
-            .fail_err()?;
+            .map_err_fail()?;
 
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
@@ -257,14 +256,14 @@ where
                 .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
                     message: format!("Failed to parse hex salt: {}", e),
                 })
-                .fail_err()?
+                .map_err_fail()?
         } else {
             let hex_string = hex::encode(job_data.execution_options.account_salt.clone());
             Bytes::from_hex(hex_string)
                 .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
                     message: format!("Failed to encode salt as hex: {}", e),
                 })
-                .fail_err()?
+                .map_err_fail()?
         };
 
         // 3. Determine Smart Account
@@ -289,10 +288,12 @@ where
                     .factory_address,
                 account_salt: job_data.execution_options.account_salt.clone(),
                 message: e.to_string(),
-                inner_error: Some(serde_json::to_string(&e).unwrap_or_default()),
+                inner_error: serde_json::to_value(&e).ok(),
             })
-            .fail_err()?,
+            .map_err_fail()?,
         };
+
+        tracing::debug!(account_address = ?smart_account.address, "Smart account determined");
 
         // 4. Handle Deployment Management
         let is_deployed_check = smart_account.is_deployed(&chain);
@@ -304,7 +305,7 @@ where
             .map_err(|e| ExternalBundlerSendError::InternalError {
                 message: format!("Deployment manager error: {}", e),
             })
-            .nack_err(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
 
         let needs_init_code = match deployment_status {
             DeploymentStatus::Deployed => false,
@@ -316,7 +317,7 @@ where
                         stale, lock_id
                     ),
                 })
-                .nack_err(
+                .map_err_nack(
                     Some(Duration::from_secs(if stale { 5 } else { 30 })),
                     RequeuePosition::Last,
                 );
@@ -330,7 +331,7 @@ where
                         account_address: smart_account.address,
                         message: format!("Failed to acquire deployment lock: {}", e),
                     })
-                    .nack_err(Some(Duration::from_secs(15)), RequeuePosition::Last)?
+                    .map_err_nack(Some(Duration::from_secs(15)), RequeuePosition::Last)?
                 {
                     AcquireLockResult::Acquired => {
                         // We got the lock! Continue with deployment
@@ -342,11 +343,13 @@ where
                             account_address: smart_account.address,
                             message: format!("Lock held by another process: {}", lock_id),
                         })
-                        .nack_err(Some(Duration::from_secs(15)), RequeuePosition::Last);
+                        .map_err_nack(Some(Duration::from_secs(15)), RequeuePosition::Last);
                     }
                 }
             }
         };
+
+        tracing::debug!(lock_acquired = ?needs_init_code);
 
         // 5. Get Nonce
         let nonce = {
@@ -403,6 +406,8 @@ where
                 }
             })?;
 
+        tracing::debug!("User operation built");
+
         // 9. Send to Bundler
         let user_op_hash = chain
             .bundler_client()
@@ -436,6 +441,8 @@ where
                 // }
             })?;
 
+        tracing::debug!(userop_hash = ?user_op_hash, "User operation sent to bundler");
+
         Ok(ExternalBundlerSendResult {
             account_address: smart_account.address,
             nonce,
@@ -451,20 +458,24 @@ where
         success_data: SuccessHookData<'_, ExternalBundlerSendResult>,
         tx: &mut TransactionContext<'_>,
     ) {
-        let confirmation_job = self.confirm_queue.clone().job(UserOpConfirmationJobData {
-            account_address: success_data.result.account_address,
-            chain_id: job.data.chain_id,
-            nonce: success_data.result.nonce,
-            user_op_hash: success_data.result.user_op_hash.clone(),
-            transaction_id: job.data.transaction_id.clone(),
-            webhook_options: job
-                .data
-                .webhook_url()
-                .map(|url| WebhookOptions { webhook_url: url }),
-            thirdweb_client_id: None,
-            thirdweb_service_key: None,
-            deployment_lock_acquired: success_data.result.deployment_lock_acquired,
-        });
+        let confirmation_job = self
+            .confirm_queue
+            .clone()
+            .job(UserOpConfirmationJobData {
+                account_address: success_data.result.account_address,
+                chain_id: job.data.chain_id,
+                nonce: success_data.result.nonce,
+                user_op_hash: success_data.result.user_op_hash.clone(),
+                transaction_id: job.data.transaction_id.clone(),
+                webhook_options: job.data.webhook_url().map(|url| WebhookOptions { url }),
+                rpc_credentials: job.data.rpc_credentials.clone(),
+                deployment_lock_acquired: success_data.result.deployment_lock_acquired,
+            })
+            .with_id(job.transaction_id())
+            .with_delay(DelayOptions {
+                delay: Duration::from_secs(3),
+                position: RequeuePosition::Last,
+            });
 
         if let Err(e) = tx.queue_job(confirmation_job) {
             tracing::error!(
@@ -550,7 +561,7 @@ fn map_build_error(
         nonce_used: nonce,
         stage,
         message: engine_error.to_string(),
-        inner_error: Some(serde_json::to_string(engine_error).unwrap_or_default()),
+        inner_error: serde_json::to_value(&engine_error).ok(),
         had_deployment_lock: had_lock,
     }
 }
@@ -570,20 +581,28 @@ fn map_bundler_error(
         nonce_used: nonce,
         user_op: signed_user_op.clone(),
         message: engine_error.to_string(),
-        inner_error: Some(serde_json::to_string(&engine_error).unwrap_or_default()),
+        inner_error: serde_json::to_value(&engine_error).ok(),
         had_deployment_lock: had_lock,
     }
 }
 
+fn is_http_error_code(kind: &engine_core::error::RpcErrorKind, error_code: u16) -> bool {
+    matches!(kind, engine_core::error::RpcErrorKind::TransportHttpError { status, .. } if *status == error_code)
+}
+
 fn is_build_error_retryable(e: &EngineError) -> bool {
     match e {
-        EngineError::RpcError { kind, .. }
-        | EngineError::PaymasterError { kind, .. }
-        | EngineError::BundlerError { kind, .. } => !matches!(
-            kind,
-            engine_core::error::RpcErrorKind::ErrorResp(r)
-            if r.code == -32000 || r.code == -32603
-        ),
+        EngineError::RpcError { kind, .. } => {
+            !(is_http_error_code(kind, 400) || is_http_error_code(kind, 401))
+        }
+        EngineError::PaymasterError { kind, .. } | EngineError::BundlerError { kind, .. } => {
+            !is_http_error_code(kind, 400)
+                && !matches!(
+                    kind,
+                    engine_core::error::RpcErrorKind::ErrorResp(r)
+                    if r.code == -32000 || r.code == -32603
+                )
+        }
         EngineError::VaultError { .. } => false,
         _ => false,
     }

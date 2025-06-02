@@ -14,16 +14,28 @@ use engine_core::{
     },
 };
 use engine_executors::{
-    external_bundler::send::{ExternalBundlerSendJobData, WebhookOptions},
-    webhook::WebhookJobPayload,
+    external_bundler::send::ExternalBundlerSendJobData, webhook::WebhookJobPayload,
 };
+use thirdweb_core::auth::ThirdwebAuth;
 
 use crate::http::{error::ApiEngineError, server::EngineServerState};
 
 /// Extract RPC credentials from headers
-fn extract_rpc_credentials(headers: &HeaderMap) -> Result<RpcCredentials, ApiEngineError> {
+pub fn extract_rpc_credentials(headers: &HeaderMap) -> Result<RpcCredentials, ApiEngineError> {
+    // try secret key first
+    let secret_key = headers
+        .get("x-thirdweb-secret-key")
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(secret_key) = secret_key {
+        return Ok(RpcCredentials::Thirdweb(ThirdwebAuth::SecretKey(
+            secret_key.to_string(),
+        )));
+    }
+
+    // if not, try client id and service key
     let client_id = headers
-        .get("x-client-id")
+        .get("x-thirdweb-client-id")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
             ApiEngineError(engine_core::error::EngineError::ValidationError {
@@ -32,7 +44,7 @@ fn extract_rpc_credentials(headers: &HeaderMap) -> Result<RpcCredentials, ApiEng
         })?;
 
     let service_key = headers
-        .get("x-service-key")
+        .get("x-thirdweb-service-key")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
             ApiEngineError(engine_core::error::EngineError::ValidationError {
@@ -40,14 +52,12 @@ fn extract_rpc_credentials(headers: &HeaderMap) -> Result<RpcCredentials, ApiEng
             })
         })?;
 
-    Ok(RpcCredentials::Thirdweb(
-        engine_core::chain::ThirdwebRpcCredentials::ClientIdServiceKey(
-            engine_core::chain::ThirdwebClientIdAndServiceKey {
-                client_id: client_id.to_string(),
-                service_key: service_key.to_string(),
-            },
-        ),
-    ))
+    Ok(RpcCredentials::Thirdweb(ThirdwebAuth::ClientIdServiceKey(
+        thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
+            client_id: client_id.to_string(),
+            service_key: service_key.to_string(),
+        },
+    )))
 }
 
 /// Extract signing credential from headers
@@ -117,19 +127,19 @@ pub async fn write_transaction(
     }
 
     // Send immediate queued notification webhook
-    if let Some(webhook_url) = &request.webhook_url {
+    if let Some(webhook_options) = &request.webhook_options {
         if let Err(e) = send_queued_notification(
             &state,
             &transaction_id,
             executor_type.clone(),
             request.execution_options.clone(),
-            webhook_url,
+            &webhook_options.url,
         )
         .await
         {
             tracing::warn!(
                 transaction_id = %transaction_id,
-                webhook_url = %webhook_url,
+                webhook_url = %&webhook_options.url,
                 error = %e,
                 "Failed to queue notification webhook, continuing..."
             );
@@ -164,19 +174,18 @@ async fn queue_erc4337_job(
         transactions: request.params.clone(),
         execution_options: erc4337_options.clone(),
         signing_credential: signing_credential,
-        webhook_options: request.webhook_url.as_ref().map(|url| WebhookOptions {
-            webhook_url: url.clone(),
-        }),
+        webhook_options: request.webhook_options.clone(),
         rpc_credentials,
     };
 
     // Create job with transaction ID as the job ID for idempotency
-    let job = state.erc4337_send_queue.clone().job(job_data);
-    let mut job_with_id = job;
-    job_with_id.options.id = transaction_id.to_string();
-
-    // Push to queue
-    state.erc4337_send_queue.push(job_with_id.options).await?;
+    state
+        .erc4337_send_queue
+        .clone()
+        .job(job_data)
+        .with_id(transaction_id)
+        .push()
+        .await?;
 
     tracing::debug!(
         transaction_id = %transaction_id,

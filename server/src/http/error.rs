@@ -61,6 +61,7 @@ impl ApiEngineError {
             EngineError::PaymasterError { .. } => StatusCode::BAD_REQUEST,
             EngineError::ValidationError { .. } => StatusCode::BAD_REQUEST,
             EngineError::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            EngineError::ThirdwebError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

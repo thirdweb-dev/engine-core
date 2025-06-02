@@ -8,43 +8,22 @@ use alloy::{
     },
 };
 use serde::{Deserialize, Serialize};
+use thirdweb_core::auth::ThirdwebAuth;
 
 use crate::error::EngineError;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ThirdwebClientIdAndServiceKey {
-    pub client_id: String,
-    pub service_key: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ThirdwebRpcCredentials {
-    ClientIdServiceKey(ThirdwebClientIdAndServiceKey),
-}
-
-impl ThirdwebRpcCredentials {
-    pub fn to_header_map(&self) -> Result<HeaderMap, EngineError> {
-        match self {
-            ThirdwebRpcCredentials::ClientIdServiceKey(creds) => {
-                let mut headers = HeaderMap::new();
-                headers.insert("x-client-id", HeaderValue::from_str(&creds.client_id)?);
-                headers.insert("x-service-key", HeaderValue::from_str(&creds.service_key)?);
-                Ok(headers)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RpcCredentials {
-    Thirdweb(ThirdwebRpcCredentials),
+    Thirdweb(ThirdwebAuth),
 }
 
 impl RpcCredentials {
     pub fn to_header_map(&self) -> Result<HeaderMap, EngineError> {
-        match self {
-            RpcCredentials::Thirdweb(creds) => creds.to_header_map(),
-        }
+        let header_map = match self {
+            RpcCredentials::Thirdweb(creds) => creds.to_header_map()?,
+        };
+
+        Ok(header_map)
     }
 }
 

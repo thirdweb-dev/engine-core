@@ -73,7 +73,16 @@ pub trait ExecutorStage {
 // --- Webhook Options Trait ---
 pub trait HasWebhookOptions {
     fn webhook_url(&self) -> Option<String>;
+}
+
+pub trait HasTransactionMetadata {
     fn transaction_id(&self) -> String;
+}
+
+impl<T: Clone> HasTransactionMetadata for Job<T> {
+    fn transaction_id(&self) -> String {
+        self.id.clone()
+    }
 }
 
 // --- Main Webhook Capability Trait ---
@@ -97,7 +106,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
         let envelope = WebhookNotificationEnvelope {
             notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.data.transaction_id(),
+            transaction_id: job.transaction_id(),
             timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
             executor_name: Self::executor_name().to_string(),
             stage_name: Self::stage_name().to_string(),
@@ -131,7 +140,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
         let envelope = WebhookNotificationEnvelope {
             notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.data.transaction_id(),
+            transaction_id: job.transaction_id(),
             timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
             executor_name: Self::executor_name().to_string(),
             stage_name: Self::stage_name().to_string(),
@@ -167,7 +176,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
         let envelope = WebhookNotificationEnvelope {
             notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.data.transaction_id(),
+            transaction_id: job.transaction_id(),
             timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
             executor_name: Self::executor_name().to_string(),
             stage_name: Self::stage_name().to_string(),
@@ -214,14 +223,14 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         let mut webhook_job = self.webhook_queue().clone().job(webhook_payload);
         webhook_job.options.id = format!(
             "{}_{}_webhook",
-            job.data.transaction_id(),
+            job.transaction_id(),
             envelope.notification_id
         );
 
         tx.queue_job(webhook_job)?;
 
         tracing::info!(
-            transaction_id = %job.data.transaction_id(),
+            transaction_id = %job.transaction_id(),
             executor = %Self::executor_name(),
             stage = %Self::stage_name(),
             event = ?envelope.event_type,
