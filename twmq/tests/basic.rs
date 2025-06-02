@@ -95,14 +95,8 @@ async fn test_queue_push_and_process_job() {
 
     println!("Starting worker for queue: {}", queue_name);
 
-    let queue_name_clone = queue_name.clone();
     let worker_queue_ref = Arc::clone(&queue);
-    let worker_handle = tokio::spawn(async move {
-        // The worker will loop internally, so we expect it to pick up the job
-        if let Err(e) = worker_queue_ref.work().await {
-            eprintln!("Worker for queue {} failed: {:?}", queue_name_clone, e);
-        }
-    });
+    let worker_handle = worker_queue_ref.work();
 
     // Wait for the job to be processed
     // Poll the flag, with a timeout
@@ -165,7 +159,7 @@ async fn test_queue_push_and_process_job() {
     // The worker task runs in a loop. For a clean test exit,
     // you might want to abort it or implement a shutdown signal for the worker.
     // For this simple test, we'll let it be.
-    worker_handle.abort(); // Or a more graceful shutdown if implemented
+    worker_handle.shutdown().await.unwrap(); // Or a more graceful shutdown if implemented
 
     // Cleanup Redis keys after test
     cleanup_redis_keys(&queue.redis, &queue_name).await;

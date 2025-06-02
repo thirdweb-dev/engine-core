@@ -207,14 +207,7 @@ async fn test_job_retry_attempts() {
 
     // Start worker
     tracing::info!("Starting worker");
-    let worker = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                tracing::error!("Retry worker failed: {:?}", e);
-            }
-        })
-    };
+    let worker = queue.work();
 
     // Wait for job to complete (with retries)
     let mut final_success = false;
@@ -287,7 +280,7 @@ async fn test_job_retry_attempts() {
     tracing::info!("Result message: {}", job_output.message);
 
     // Cleanup
-    worker.abort();
+    worker.shutdown().await.unwrap();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }
 
@@ -330,15 +323,7 @@ async fn test_different_retry_counts() {
             .push()
             .await
             .expect("Failed to push retry job");
-
-        let worker = {
-            let queue = queue.clone();
-            tokio::spawn(async move {
-                if let Err(e) = queue.work().await {
-                    tracing::error!("Worker failed: {:?}", e);
-                }
-            })
-        };
+        let worker = queue.work();
 
         // Wait for completion
         for _ in 0..50 {
@@ -353,7 +338,7 @@ async fn test_different_retry_counts() {
         let completed_job = queue.get_job(&job_id).await.unwrap().unwrap();
         assert_eq!(completed_job.attempts, desired_attempts);
 
-        worker.abort();
+        worker.shutdown().await.unwrap();
         cleanup_redis_keys(&queue.redis, &queue_name).await;
 
         tracing::info!("✅ {} attempts test passed", desired_attempts);

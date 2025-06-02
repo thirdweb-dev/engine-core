@@ -53,7 +53,7 @@ jobs:
 
         # Run coverage with tarpaulin
       - name: Run coverage
-        run: cargo tarpaulin -p twmq --skip-clean --out Xml --out Html --output-dir coverage --exclude-files "aa-core/*" --exclude-files "core/*" --exclude-files "server/*"
+        run: cargo tarpaulin -p twmq --skip-clean --out Xml --out Html --output-dir coverage --exclude-files "aa-core/*" --exclude-files "core/*" --exclude-files "server/*" --exclude-files "thirdweb-core/*" --exclude-files "executors/*"
 
       # Upload coverage to Codecov
       # TODO: Uncomment once we have open-sourced the repo

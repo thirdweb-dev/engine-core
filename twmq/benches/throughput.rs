@@ -201,12 +201,7 @@ async fn load_test_throughput(
     }
 
     // Start workers
-    let worker_handle = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            let _ = queue.work().await;
-        })
-    };
+    let worker_handle = queue.work();
 
     // Job producer task
     let producer_handle = {
@@ -293,7 +288,7 @@ async fn load_test_throughput(
     println!("  Sustainable: {}", is_sustainable);
 
     // Cleanup
-    worker_handle.abort();
+    worker_handle.shutdown().await.unwrap();
     let _: () = redis::cmd("DEL")
         .arg(format!("{}:*", queue_name))
         .query_async(&mut redis_conn)

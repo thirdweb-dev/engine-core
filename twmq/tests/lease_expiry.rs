@@ -197,14 +197,7 @@ async fn test_job_lease_expiry() {
 
     // Start worker with concurrency 1 (so job won't get picked up again immediately after expiry)
     tracing::info!("Starting worker with concurrency 1");
-    let worker = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                tracing::error!("Lease worker failed: {:?}", e);
-            }
-        })
-    };
+    let worker = queue.work();
 
     // Wait for job to start processing
     let mut job_started = false;
@@ -281,7 +274,7 @@ async fn test_job_lease_expiry() {
 
     // Stop the sleeping job and cleanup
     job_should_continue_sleeping.store(false, Ordering::SeqCst);
-    worker.abort();
+    worker.shutdown().await.unwrap();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }
 
@@ -344,14 +337,7 @@ async fn test_multiple_job_lease_expiry() {
     }
 
     // Start worker with higher concurrency to process multiple jobs
-    let worker = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                tracing::error!("Multi-lease worker failed: {:?}", e);
-            }
-        })
-    };
+    let worker = queue.work();
 
     // Wait a bit for jobs to start
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -391,6 +377,6 @@ async fn test_multiple_job_lease_expiry() {
 
     // Cleanup
     job_should_continue_sleeping.store(false, Ordering::SeqCst);
-    worker.abort();
+    worker.shutdown().await.unwrap();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }

@@ -2,6 +2,7 @@ pub mod error;
 pub mod hooks;
 pub mod job;
 pub mod queue;
+pub mod shutdown;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,6 +17,7 @@ use queue::QueueOptions;
 use redis::Pipeline;
 use redis::{AsyncCommands, RedisResult, aio::ConnectionManager};
 use serde::{Serialize, de::DeserializeOwned};
+use shutdown::WorkerHandle;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
@@ -130,6 +132,10 @@ impl<H: DurableExecution> Queue<H> {
         };
 
         Ok(queue)
+    }
+
+    pub fn arc(self) -> Arc<Self> {
+        Arc::new(self)
     }
 
     pub fn job(self: Arc<Self>, data: H::JobData) -> PushableJob<H> {
@@ -346,174 +352,219 @@ impl<H: DurableExecution> Queue<H> {
         Ok(count)
     }
 
-    pub async fn work(self: Arc<Self>) -> Result<(), TwmqError> {
+    pub fn work(self: &Arc<Self>) -> WorkerHandle<H> {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         // Local semaphore to limit concurrency per instance
         let semaphore = Arc::new(Semaphore::new(self.options.local_concurrency));
         let handler = self.handler.clone();
+        let outer_queue_clone = self.clone();
         // Start worker
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.options.polling_interval);
+        let join_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(outer_queue_clone.options.polling_interval);
             let handler_clone = handler.clone();
-            let always_poll = self.options.always_poll;
+            let always_poll = outer_queue_clone.options.always_poll;
+
+            tracing::info!("Worker started for queue: {}", outer_queue_clone.name());
             loop {
-                interval.tick().await;
-                let queue_clone = self.clone();
+                tokio::select! {
+                    // Check for shutdown signal
+                    _ = &mut shutdown_rx => {
+                        tracing::info!("Shutdown signal received for queue: {}", outer_queue_clone.name());
+                        break;
+                    }
 
-                // Check available permits for batch size
-                let available_permits = semaphore.available_permits();
-                if available_permits == 0 && !always_poll {
-                    tracing::trace!("No permits available, waiting...");
-                    continue;
-                }
+                    // Normal polling tick
+                    _ = interval.tick() => {
+                        let queue_clone = outer_queue_clone.clone();
 
-                tracing::trace!("Available permits: {}", available_permits);
-                // Try to get multiple jobs - as many as we have permits
-                match queue_clone.pop_batch_jobs(available_permits).await {
-                    Ok(jobs) => {
-                        tracing::trace!("Got {} jobs", jobs.len());
-                        for job in jobs {
-                            let permit = semaphore.clone().acquire_owned().await.unwrap();
-                            let queue_clone = self.clone();
-                            let job_id = job.id.clone();
-                            let handler_clone = handler_clone.clone();
+                        // Check available permits for batch size
+                        let available_permits = semaphore.available_permits();
+                        if available_permits == 0 && !always_poll {
+                            tracing::trace!("No permits available, waiting...");
+                            continue;
+                        }
 
-                            tokio::spawn(async move {
-                                // Process job - note we don't pass a context here
-                                let result = handler_clone.process(&job).await;
+                        tracing::trace!("Available permits: {}", available_permits);
+                        // Try to get multiple jobs - as many as we have permits
+                        match queue_clone.pop_batch_jobs(available_permits).await {
+                            Ok(jobs) => {
+                                tracing::trace!("Got {} jobs", jobs.len());
+                                for job in jobs {
+                                    let permit = semaphore.clone().acquire_owned().await.unwrap();
+                                    let queue_clone = queue_clone.clone();
+                                    let job_id = job.id.clone();
+                                    let handler_clone = handler_clone.clone();
 
-                                // Mark job as complete (automatically happens in completion handlers)
+                                    tokio::spawn(async move {
+                                        // Process job - note we don't pass a context here
+                                        let result = handler_clone.process(&job).await;
 
-                                match result {
-                                    Ok(output) => {
-                                        // Create transaction pipeline for atomicity
-                                        let mut pipeline = redis::pipe();
-                                        pipeline.atomic(); // Use MULTI/EXEC
+                                        // Mark job as complete (automatically happens in completion handlers)
 
-                                        // Create transaction context with mutable access to pipeline
-                                        let mut tx_context = TransactionContext::new(
-                                            &mut pipeline,
-                                            queue_clone.name().to_string(),
-                                        );
+                                        match result {
+                                            Ok(output) => {
+                                                // Create transaction pipeline for atomicity
+                                                let mut pipeline = redis::pipe();
+                                                pipeline.atomic(); // Use MULTI/EXEC
 
-                                        let success_hook_data = SuccessHookData {
-                                            result: &output,
-                                        };
+                                                // Create transaction context with mutable access to pipeline
+                                                let mut tx_context = TransactionContext::new(
+                                                    &mut pipeline,
+                                                    queue_clone.name().to_string(),
+                                                );
 
-                                        // Call success hook to populate transaction context
-                                        handler_clone.on_success(&job, success_hook_data, &mut tx_context).await;
+                                                let success_hook_data = SuccessHookData {
+                                                    result: &output,
+                                                };
 
-                                        // Complete job with success and execute transaction
-                                        if let Err(e) = queue_clone
-                                            .complete_job_success(
-                                                &job,
-                                                &output,
-                                                tx_context.pipeline(),
-                                            )
-                                            .await
-                                        {
-                                            tracing::error!(
-                                                "Failed to complete job {} complete handling successfully: {:?}",
-                                                job.id,
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(JobError::Nack {
-                                        error,
-                                        delay,
-                                        position,
-                                    }) => {
-                                        // Create transaction pipeline for atomicity
-                                        let mut pipeline = redis::pipe();
-                                        pipeline.atomic(); // Use MULTI/EXEC
+                                                // Call success hook to populate transaction context
+                                                handler_clone.on_success(&job, success_hook_data, &mut tx_context).await;
 
-                                        // Create transaction context with mutable access to pipeline
-                                        let mut tx_context = TransactionContext::new(
-                                            &mut pipeline,
-                                            queue_clone.name().to_string(),
-                                        );
-
-                                        let nack_hook_data = NackHookData {
-                                            error: &error,
-                                            delay,
-                                            position,
-                                        };
-
-                                        // Call nack hook to populate transaction context
-                                        handler_clone
-                                            .on_nack(&job, nack_hook_data, &mut tx_context)
-                                            .await;
-
-                                        // Complete job with nack and execute transaction
-                                        if let Err(e) = queue_clone
-                                            .complete_job_nack(
-                                                &job,
-                                                &error,
+                                                // Complete job with success and execute transaction
+                                                if let Err(e) = queue_clone
+                                                    .complete_job_success(
+                                                        &job,
+                                                        &output,
+                                                        tx_context.pipeline(),
+                                                    )
+                                                    .await
+                                                {
+                                                    tracing::error!(
+                                                        "Failed to complete job {} complete handling successfully: {:?}",
+                                                        job.id,
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                            Err(JobError::Nack {
+                                                error,
                                                 delay,
                                                 position,
-                                                tx_context.pipeline(),
-                                            )
-                                            .await
-                                        {
-                                            tracing::error!(
-                                                "Failed to complete job {} complete nack handling successfully: {:?}",
-                                                job.id,
-                                                e
-                                            );
+                                            }) => {
+                                                // Create transaction pipeline for atomicity
+                                                let mut pipeline = redis::pipe();
+                                                pipeline.atomic(); // Use MULTI/EXEC
+
+                                                // Create transaction context with mutable access to pipeline
+                                                let mut tx_context = TransactionContext::new(
+                                                    &mut pipeline,
+                                                    queue_clone.name().to_string(),
+                                                );
+
+                                                let nack_hook_data = NackHookData {
+                                                    error: &error,
+                                                    delay,
+                                                    position,
+                                                };
+
+                                                // Call nack hook to populate transaction context
+                                                handler_clone
+                                                    .on_nack(&job, nack_hook_data, &mut tx_context)
+                                                    .await;
+
+                                                // Complete job with nack and execute transaction
+                                                if let Err(e) = queue_clone
+                                                    .complete_job_nack(
+                                                        &job,
+                                                        &error,
+                                                        delay,
+                                                        position,
+                                                        tx_context.pipeline(),
+                                                    )
+                                                    .await
+                                                {
+                                                    tracing::error!(
+                                                        "Failed to complete job {} complete nack handling successfully: {:?}",
+                                                        job.id,
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                            Err(JobError::Fail(error)) => {
+                                                // Create transaction pipeline for atomicity
+                                                let mut pipeline = redis::pipe();
+                                                pipeline.atomic(); // Use MULTI/EXEC
+
+                                                // Create transaction context with mutable access to pipeline
+                                                let mut tx_context = TransactionContext::new(
+                                                    &mut pipeline,
+                                                    queue_clone.name.clone(),
+                                                );
+
+                                                let fail_hook_data = FailHookData {
+                                                    error: &error
+                                                };
+
+                                                // Call fail hook to populate transaction context
+                                                handler_clone.on_fail(&job, fail_hook_data, &mut tx_context).await;
+
+                                                // Complete job with fail and execute transaction
+                                                if let Err(e) = queue_clone
+                                                    .complete_job_fail(&job.to_option_data(), &error, tx_context.pipeline())
+                                                    .await
+                                                {
+                                                    tracing::error!(
+                                                        "Failed to complete job {} complete fail handling successfully: {:?}",
+                                                        job.id,
+                                                        e
+                                                    );
+                                                }
+                                            }
                                         }
-                                    }
-                                    Err(JobError::Fail(error)) => {
-                                        // Create transaction pipeline for atomicity
-                                        let mut pipeline = redis::pipe();
-                                        pipeline.atomic(); // Use MULTI/EXEC
 
-                                        // Create transaction context with mutable access to pipeline
-                                        let mut tx_context = TransactionContext::new(
-                                            &mut pipeline,
-                                            queue_clone.name.clone(),
-                                        );
-
-                                        let fail_hook_data = FailHookData {
-                                            error: &error
-                                        };
-
-                                        // Call fail hook to populate transaction context
-                                        handler_clone.on_fail(&job, fail_hook_data, &mut tx_context).await;
-
-                                        // Complete job with fail and execute transaction
-                                        if let Err(e) = queue_clone
-                                            .complete_job_fail(&job.to_option_data(), &error, tx_context.pipeline())
-                                            .await
-                                        {
-                                            tracing::error!(
-                                                "Failed to complete job {} complete fail handling successfully: {:?}",
-                                                job.id,
-                                                e
-                                            );
-                                        }
-                                    }
+                                        // Release permit when done
+                                        drop(permit);
+                                    }.instrument(tracing::info_span!("twmq_worker", job_id)));
                                 }
+                            }
+                            Err(e) => {
+                                // No jobs found, we hit an error
+                                tracing::error!("Failed to pop batch jobs: {:?}", e);
+                                sleep(Duration::from_millis(1000)).await;
+                            }
+                        };
 
-                                // Release permit when done
-                                drop(permit);
-                            }.instrument(tracing::info_span!("twmq_worker", job_id)));
-                        }
                     }
-                    Err(e) => {
-                        // No jobs found, we hit an error
-                        tracing::error!("Failed to pop batch jobs: {:?}", e);
-                        sleep(Duration::from_millis(1000)).await;
-                    }
-                };
+                }
             }
+
+            // Graceful shutdown: wait for all active jobs to complete
+            tracing::info!(
+                "Waiting for {} active jobs to complete for queue: {}",
+                semaphore
+                    .available_permits()
+                    .saturating_sub(outer_queue_clone.options.local_concurrency),
+                outer_queue_clone.name()
+            );
+
+            // Acquire all permits to ensure no jobs are running
+            let _permits: Vec<_> = (0..outer_queue_clone.options.local_concurrency)
+                .map(|_| semaphore.clone().acquire_owned())
+                .collect::<futures::future::JoinAll<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    TwmqError::Runtime(format!("Failed to acquire permits during shutdown: {}", e))
+                })?;
+
+            tracing::info!(
+                "All jobs completed, worker shutdown complete for queue: {}",
+                outer_queue_clone.name()
+            );
+            Ok(())
         });
 
-        Ok(())
+        WorkerHandle {
+            join_handle,
+            shutdown_tx,
+            queue: self.clone(),
+        }
     }
 
     // Improved batch job popping - gets multiple jobs at once
     async fn pop_batch_jobs(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         batch_size: usize,
     ) -> RedisResult<Vec<Job<H::JobData>>> {
         // Lua script that does:

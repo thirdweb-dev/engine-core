@@ -184,14 +184,7 @@ async fn test_job_delay_basic() {
 
     // Start worker
     tracing::info!("Starting worker");
-    let worker = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                tracing::error!("Delay worker failed: {:?}", e);
-            }
-        })
-    };
+    let worker = queue.work();
 
     // Job should not be processed immediately (still delayed)
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -283,7 +276,7 @@ async fn test_job_delay_basic() {
 
     tracing::info!("✅ Basic delay mechanism works correctly!");
 
-    worker.abort();
+    worker.shutdown().await.unwrap();
     cleanup_redis_keys(&redis_conn, &queue_name).await;
 
     // Clean up test-specific keys
@@ -400,14 +393,7 @@ async fn test_delay_position_ordering() {
     assert_eq!(delayed_count, 2, "Should have 2 delayed jobs");
 
     // Start worker
-    let worker = {
-        let queue = queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                tracing::error!("Delay order worker failed: {:?}", e);
-            }
-        })
-    };
+    let worker = queue.work();
 
     // Wait for all jobs to complete
     let max_wait = short_delay + Duration::from_secs(3);
@@ -451,7 +437,7 @@ async fn test_delay_position_ordering() {
 
     tracing::info!("✅ Delay position ordering works correctly!");
 
-    worker.abort();
+    worker.shutdown().await.unwrap();
     cleanup_redis_keys(&redis_conn, &queue_name).await;
 
     // Clean up test-specific keys

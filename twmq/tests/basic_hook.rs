@@ -226,23 +226,8 @@ async fn test_cross_queue_job_scheduling() {
 
     // Start workers for both queues
     println!("Starting workers");
-    let main_worker = {
-        let queue = main_queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                eprintln!("Main worker failed: {:?}", e);
-            }
-        })
-    };
-
-    let webhook_worker = {
-        let queue = webhook_queue.clone();
-        tokio::spawn(async move {
-            if let Err(e) = queue.work().await {
-                eprintln!("Webhook worker failed: {:?}", e);
-            }
-        })
-    };
+    let main_worker = main_queue.work();
+    let webhook_worker = webhook_queue.work();
 
     // Wait for main job to complete
     let mut main_processed = false;
@@ -302,8 +287,8 @@ async fn test_cross_queue_job_scheduling() {
     println!("Main job triggered webhook job atomically via transaction hooks");
 
     // Cleanup
-    main_worker.abort();
-    webhook_worker.abort();
+    main_worker.shutdown().await.unwrap();
+    webhook_worker.shutdown().await.unwrap();
     cleanup_redis_keys(&main_queue.redis, &main_queue_name).await;
     cleanup_redis_keys(&webhook_queue.redis, &webhook_queue_name).await;
 }

@@ -14,8 +14,12 @@ pub struct EngineConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueueConfig {
     pub webhook_workers: usize,
-    pub erc4337_send_workers: usize,
-    pub erc4337_confirm_workers: usize,
+
+    pub external_bundler_send_workers: usize,
+    pub userop_confirm_workers: usize,
+
+    pub execution_namespace: Option<String>,
+
     pub local_concurrency: usize,
     pub polling_interval_ms: u64,
     pub lease_duration_seconds: u64,

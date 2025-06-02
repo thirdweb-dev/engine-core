@@ -11,7 +11,7 @@ use engine_executors::{
     },
     webhook::{WebhookJobHandler, WebhookRetryConfig},
 };
-use twmq::{Queue, queue::QueueOptions};
+use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 
 use crate::{
     chains::ThirdwebChainService,
@@ -20,9 +20,20 @@ use crate::{
 
 pub struct QueueManager {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
-    pub erc4337_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
-    pub erc4337_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
+    pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
 }
+
+fn get_queue_name_for_namespace(namespace: &Option<String>, name: &str) -> String {
+    match namespace {
+        Some(namespace) => format!("{}_{}", namespace, name),
+        None => name.to_owned(),
+    }
+}
+
+const EXTERNAL_BUNDLER_SEND_QUEUE_NAME: &str = "external_bundler_send";
+const USEROP_CONFIRM_QUEUE_NAME: &str = "userop_confirm";
+const WEBHOOK_QUEUE_NAME: &str = "webhook";
 
 impl QueueManager {
     pub async fn new(
@@ -49,12 +60,13 @@ impl QueueManager {
         };
 
         let mut external_bundler_send_queue_opts = base_queue_opts.clone();
-        let mut external_bundler_confirm_queue_opts = base_queue_opts.clone();
-        let mut webhook_queue_opts = base_queue_opts.clone();
+        external_bundler_send_queue_opts.local_concurrency =
+            queue_config.external_bundler_send_workers;
 
-        external_bundler_send_queue_opts.local_concurrency = queue_config.erc4337_send_workers;
-        external_bundler_confirm_queue_opts.local_concurrency =
-            queue_config.erc4337_confirm_workers;
+        let mut userop_confirm_queue_opts = base_queue_opts.clone();
+        userop_confirm_queue_opts.local_concurrency = queue_config.userop_confirm_workers;
+
+        let mut webhook_queue_opts = base_queue_opts.clone();
         webhook_queue_opts.local_concurrency = queue_config.webhook_workers;
 
         // Create webhook queue
@@ -63,15 +75,27 @@ impl QueueManager {
             retry_config: Arc::new(WebhookRetryConfig::default()),
         };
 
-        let webhook_queue = Arc::new(
-            Queue::new(
-                &redis_config.url,
-                "webhook",
-                Some(webhook_queue_opts),
-                webhook_handler,
-            )
-            .await?,
+        let webhook_queue_name =
+            get_queue_name_for_namespace(&queue_config.execution_namespace, WEBHOOK_QUEUE_NAME);
+
+        let external_bundler_send_queue_name = get_queue_name_for_namespace(
+            &queue_config.execution_namespace,
+            EXTERNAL_BUNDLER_SEND_QUEUE_NAME,
         );
+
+        let userop_confirm_queue_name = get_queue_name_for_namespace(
+            &queue_config.execution_namespace,
+            USEROP_CONFIRM_QUEUE_NAME,
+        );
+
+        let webhook_queue = Queue::builder()
+            .name(webhook_queue_name)
+            .options(webhook_queue_opts)
+            .handler(webhook_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
 
         // Create confirmation queue first (needed by send queue)
         let confirm_handler = UserOpConfirmationHandler::new(
@@ -80,15 +104,14 @@ impl QueueManager {
             webhook_queue.clone(),
         );
 
-        let erc4337_confirm_queue = Arc::new(
-            Queue::new(
-                &redis_config.url,
-                "erc4337_confirm",
-                Some(external_bundler_confirm_queue_opts),
-                confirm_handler,
-            )
-            .await?,
-        );
+        let userop_confirm_queue = Queue::builder()
+            .name(userop_confirm_queue_name)
+            .options(userop_confirm_queue_opts)
+            .handler(confirm_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
 
         // Create send queue
         let send_handler = ExternalBundlerSendHandler {
@@ -97,56 +120,51 @@ impl QueueManager {
             deployment_cache,
             deployment_lock,
             webhook_queue: webhook_queue.clone(),
-            confirm_queue: erc4337_confirm_queue.clone(),
+            confirm_queue: userop_confirm_queue.clone(),
         };
 
-        let erc4337_send_queue = Arc::new(
-            Queue::new(
-                &redis_config.url,
-                "erc4337_send",
-                Some(external_bundler_send_queue_opts),
-                send_handler,
-            )
-            .await?,
-        );
+        let external_bundler_send_queue = Queue::builder()
+            .name(external_bundler_send_queue_name)
+            .options(external_bundler_send_queue_opts)
+            .handler(send_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
 
         Ok(Self {
             webhook_queue,
-            erc4337_send_queue,
-            erc4337_confirm_queue,
+            external_bundler_send_queue,
+            userop_confirm_queue,
         })
     }
 
     /// Start all workers
-    pub async fn start_workers(&self, queue_config: &QueueConfig) -> Result<(), EngineError> {
+    pub fn start_workers(&self, queue_config: &QueueConfig) -> ShutdownHandle {
         tracing::info!("Starting queue workers...");
 
         // Start webhook workers
         tracing::info!("Starting webhook worker");
-        if let Err(e) = self.webhook_queue.clone().work().await {
-            tracing::error!("Webhook worker failed: {}", e);
-        }
+        let webhook_worker = self.webhook_queue.work();
 
         // Start ERC-4337 send workers
         tracing::info!("Starting external bundler send worker");
-        if let Err(e) = self.erc4337_send_queue.clone().work().await {
-            tracing::error!("Webhook worker failed: {}", e);
-        }
+        let external_bundler_send_worker = self.external_bundler_send_queue.work();
 
         // Start ERC-4337 confirmation workers
         tracing::info!("Starting external bundler confirmation worker");
-        if let Err(e) = self.erc4337_confirm_queue.clone().work().await {
-            tracing::error!("Webhook worker failed: {}", e);
-        }
+        let userop_confirm_worker = self.userop_confirm_queue.work();
 
         tracing::info!(
             "Started {} webhook workers, {} send workers, {} confirm workers",
             queue_config.webhook_workers,
-            queue_config.erc4337_send_workers,
-            queue_config.erc4337_confirm_workers
+            queue_config.external_bundler_send_workers,
+            queue_config.userop_confirm_workers
         );
 
-        Ok(())
+        ShutdownHandle::with_worker(webhook_worker)
+            .and_worker(external_bundler_send_worker)
+            .and_worker(userop_confirm_worker)
     }
 
     /// Get queue statistics for monitoring
@@ -162,25 +180,40 @@ impl QueueManager {
         };
 
         let send_stats = QueueStatistics {
-            pending: self.erc4337_send_queue.count(JobStatus::Pending).await?,
-            active: self.erc4337_send_queue.count(JobStatus::Active).await?,
-            delayed: self.erc4337_send_queue.count(JobStatus::Delayed).await?,
-            success: self.erc4337_send_queue.count(JobStatus::Success).await?,
-            failed: self.erc4337_send_queue.count(JobStatus::Failed).await?,
+            pending: self
+                .external_bundler_send_queue
+                .count(JobStatus::Pending)
+                .await?,
+            active: self
+                .external_bundler_send_queue
+                .count(JobStatus::Active)
+                .await?,
+            delayed: self
+                .external_bundler_send_queue
+                .count(JobStatus::Delayed)
+                .await?,
+            success: self
+                .external_bundler_send_queue
+                .count(JobStatus::Success)
+                .await?,
+            failed: self
+                .external_bundler_send_queue
+                .count(JobStatus::Failed)
+                .await?,
         };
 
         let confirm_stats = QueueStatistics {
-            pending: self.erc4337_confirm_queue.count(JobStatus::Pending).await?,
-            active: self.erc4337_confirm_queue.count(JobStatus::Active).await?,
-            delayed: self.erc4337_confirm_queue.count(JobStatus::Delayed).await?,
-            success: self.erc4337_confirm_queue.count(JobStatus::Success).await?,
-            failed: self.erc4337_confirm_queue.count(JobStatus::Failed).await?,
+            pending: self.userop_confirm_queue.count(JobStatus::Pending).await?,
+            active: self.userop_confirm_queue.count(JobStatus::Active).await?,
+            delayed: self.userop_confirm_queue.count(JobStatus::Delayed).await?,
+            success: self.userop_confirm_queue.count(JobStatus::Success).await?,
+            failed: self.userop_confirm_queue.count(JobStatus::Failed).await?,
         };
 
         Ok(QueueStats {
             webhook: webhook_stats,
-            erc4337_send: send_stats,
-            erc4337_confirm: confirm_stats,
+            external_bundler_send: send_stats,
+            userop_confirm: confirm_stats,
         })
     }
 }
@@ -188,8 +221,8 @@ impl QueueManager {
 #[derive(Debug, serde::Serialize)]
 pub struct QueueStats {
     pub webhook: QueueStatistics,
-    pub erc4337_send: QueueStatistics,
-    pub erc4337_confirm: QueueStatistics,
+    pub external_bundler_send: QueueStatistics,
+    pub userop_confirm: QueueStatistics,
 }
 
 #[derive(Debug, serde::Serialize)]

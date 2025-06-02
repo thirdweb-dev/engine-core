@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start queue workers
     tracing::info!("Starting queue workers...");
-    queue_manager.start_workers(&config.queue).await?;
+    let all_workers = queue_manager.start_workers(&config.queue);
 
     let abi_service = ThirdwebAbiServiceBuilder::new(
         &config.thirdweb.urls.abi_service,
@@ -59,8 +59,8 @@ async fn main() -> anyhow::Result<()> {
         abi_service: Arc::new(abi_service),
         chains,
         webhook_queue: queue_manager.webhook_queue.clone(),
-        erc4337_send_queue: queue_manager.erc4337_send_queue.clone(),
-        erc4337_confirm_queue: queue_manager.erc4337_confirm_queue.clone(),
+        erc4337_send_queue: queue_manager.external_bundler_send_queue.clone(),
+        erc4337_confirm_queue: queue_manager.userop_confirm_queue.clone(),
     })
     .await;
 
@@ -82,6 +82,12 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!("Error during coordinated shutdown: {}", e);
     } else {
         tracing::info!("All servers shut down successfully");
+    }
+
+    if let Err(e) = all_workers.shutdown().await {
+        tracing::error!("Error during coordinated shutdown: {}", e);
+    } else {
+        tracing::info!("All workers shut down successfully");
     }
 
     Ok(())
