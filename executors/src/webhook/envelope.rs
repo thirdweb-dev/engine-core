@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
+use engine_core::execution_options::WebhookOptions;
 use serde::{Deserialize, Serialize};
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
-    hooks::TransactionContext, job::Job,
+    error::TwmqError,
+    hooks::TransactionContext,
+    job::{Job, RequeuePosition},
 };
 use uuid::Uuid;
 
@@ -51,7 +54,7 @@ pub struct SerializableSuccessData<T> {
 pub struct SerializableNackData<E> {
     pub error: E,
     pub delay_ms: Option<u64>,
-    pub position: String, // "First" or "Last"
+    pub position: RequeuePosition, // "First" or "Last"
     pub attempt_number: u32,
     pub max_attempts: Option<u32>,
     pub next_retry_at: Option<u64>, // Unix timestamp
@@ -72,7 +75,7 @@ pub trait ExecutorStage {
 
 // --- Webhook Options Trait ---
 pub trait HasWebhookOptions {
-    fn webhook_url(&self) -> Option<String>;
+    fn webhook_options(&self) -> Option<Vec<WebhookOptions>>;
 }
 
 pub trait HasTransactionMetadata {
@@ -94,30 +97,34 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         job: &Job<Self::JobData>,
         success_data: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<(), TwmqError>
     where
         Self::JobData: HasWebhookOptions,
         Self::Output: Serialize + Clone,
     {
-        let webhook_url = match job.data.webhook_url() {
-            Some(url) => url,
+        let webhook_options = match job.data.webhook_options() {
+            Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
 
-        let envelope = WebhookNotificationEnvelope {
-            notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.transaction_id(),
-            timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
-            executor_name: Self::executor_name().to_string(),
-            stage_name: Self::stage_name().to_string(),
-            event_type: StageEvent::Success,
-            payload: SerializableSuccessData {
-                result: success_data.result.clone(),
-            },
-            delivery_target_url: Some(webhook_url.clone()),
-        };
+        for w in webhook_options {
+            let envelope = WebhookNotificationEnvelope {
+                notification_id: Uuid::new_v4().to_string(),
+                transaction_id: job.transaction_id(),
+                timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
+                executor_name: Self::executor_name().to_string(),
+                stage_name: Self::stage_name().to_string(),
+                event_type: StageEvent::Success,
+                payload: SerializableSuccessData {
+                    result: success_data.result.clone(),
+                },
+                delivery_target_url: Some(w.url.clone()),
+            };
 
-        self.queue_webhook_envelope(envelope, webhook_url, job, tx)
+            self.queue_webhook_envelope(envelope, w, job, tx)?
+        }
+
+        Ok(())
     }
 
     fn queue_nack_webhook(
@@ -125,38 +132,40 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         job: &Job<Self::JobData>,
         nack_data: NackHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<(), TwmqError>
     where
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_url = match job.data.webhook_url() {
-            Some(url) => url,
+        let webhook_options = match job.data.webhook_options() {
+            Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
+        for w in webhook_options {
+            let now: u64 = chrono::Utc::now().timestamp().try_into().unwrap();
+            let next_retry_at = nack_data.delay.map(|delay| now + delay.as_secs());
 
-        let now: u64 = chrono::Utc::now().timestamp().try_into().unwrap();
-        let next_retry_at = nack_data.delay.map(|delay| now + delay.as_secs());
+            let envelope = WebhookNotificationEnvelope {
+                notification_id: Uuid::new_v4().to_string(),
+                transaction_id: job.transaction_id(),
+                timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
+                executor_name: Self::executor_name().to_string(),
+                stage_name: Self::stage_name().to_string(),
+                event_type: StageEvent::Nack,
+                payload: SerializableNackData {
+                    error: nack_data.error.clone(),
+                    delay_ms: nack_data.delay.map(|d| d.as_millis() as u64),
+                    position: nack_data.position,
+                    attempt_number: job.attempts,
+                    max_attempts: None, // TODO: Get from job config if available
+                    next_retry_at,
+                },
+                delivery_target_url: Some(w.url.clone()),
+            };
 
-        let envelope = WebhookNotificationEnvelope {
-            notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.transaction_id(),
-            timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
-            executor_name: Self::executor_name().to_string(),
-            stage_name: Self::stage_name().to_string(),
-            event_type: StageEvent::Nack,
-            payload: SerializableNackData {
-                error: nack_data.error.clone(),
-                delay_ms: nack_data.delay.map(|d| d.as_millis() as u64),
-                position: format!("{:?}", nack_data.position),
-                attempt_number: job.attempts,
-                max_attempts: None, // TODO: Get from job config if available
-                next_retry_at,
-            },
-            delivery_target_url: Some(webhook_url.clone()),
-        };
-
-        self.queue_webhook_envelope(envelope, webhook_url, job, tx)
+            self.queue_webhook_envelope(envelope, w, job, tx)?;
+        }
+        Ok(())
     }
 
     fn queue_fail_webhook(
@@ -164,46 +173,48 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         job: &Job<Self::JobData>,
         fail_data: FailHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<(), TwmqError>
     where
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_url = match job.data.webhook_url() {
-            Some(url) => url,
+        let webhook_options = match job.data.webhook_options() {
+            Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
+        for w in webhook_options {
+            let envelope = WebhookNotificationEnvelope {
+                notification_id: Uuid::new_v4().to_string(),
+                transaction_id: job.transaction_id(),
+                timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
+                executor_name: Self::executor_name().to_string(),
+                stage_name: Self::stage_name().to_string(),
+                event_type: StageEvent::Failure,
+                payload: SerializableFailData {
+                    error: fail_data.error.clone(),
+                    final_attempt_number: job.attempts,
+                },
+                delivery_target_url: Some(w.url.clone()),
+            };
 
-        let envelope = WebhookNotificationEnvelope {
-            notification_id: Uuid::new_v4().to_string(),
-            transaction_id: job.transaction_id(),
-            timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
-            executor_name: Self::executor_name().to_string(),
-            stage_name: Self::stage_name().to_string(),
-            event_type: StageEvent::Failure,
-            payload: SerializableFailData {
-                error: fail_data.error.clone(),
-                final_attempt_number: job.attempts,
-            },
-            delivery_target_url: Some(webhook_url.clone()),
-        };
-
-        self.queue_webhook_envelope(envelope, webhook_url, job, tx)
+            self.queue_webhook_envelope(envelope, w, job, tx)?;
+        }
+        Ok(())
     }
 
     // Private helper method
     fn queue_webhook_envelope<T: Serialize>(
         &self,
         envelope: WebhookNotificationEnvelope<T>,
-        webhook_url: String,
+        webhook_options: WebhookOptions,
         job: &Job<Self::JobData>,
         tx: &mut TransactionContext<'_>,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<(), TwmqError>
     where
         Self::JobData: HasWebhookOptions,
     {
         let webhook_payload = WebhookJobPayload {
-            url: webhook_url,
+            url: webhook_options.url,
             body: serde_json::to_string(&envelope)?,
             headers: Some(
                 [
@@ -216,7 +227,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
                 .into_iter()
                 .collect(),
             ),
-            hmac_secret: None, // TODO: Add HMAC support if needed
+            hmac_secret: webhook_options.secret, // TODO: Add HMAC support if needed
             http_method: Some("POST".to_string()),
         };
 

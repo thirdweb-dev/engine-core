@@ -42,6 +42,7 @@ version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2477554ebf38aea815a9c4729100cfc32f766876c45b9c9c38ef221b9d1a703"
 dependencies = [
+ "aide-macros",
  "axum",
  "bytes",
  "cfg-if",
@@ -55,6 +56,17 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "aide-macros"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be8e0d4af7cc08353807aaf80722125a229bf2d67be7fe0b89163c648db3d223"
+dependencies = [
+ "darling",
+ "quote",
+ "syn 2.0.101",
 ]
 
 [[package]]
@@ -2364,7 +2376,6 @@ dependencies = [
 name = "engine-core"
 version = "0.1.0"
 dependencies = [
- "aide",
  "alloy 1.0.9",
  "async-nats",
  "schemars",
@@ -4894,6 +4905,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-bool"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af14f9242b0beec13757cf161feb2d600c11a764310425c3429dca9925b7a92"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_derive"
 version = "1.0.219"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5317,6 +5337,7 @@ dependencies = [
  "alloy 1.0.9",
  "moka",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -5328,6 +5349,7 @@ dependencies = [
 name = "thirdweb-engine"
 version = "0.1.0"
 dependencies = [
+ "aide",
  "alloy 1.0.9",
  "anyhow",
  "async-nats",
@@ -5338,7 +5360,9 @@ dependencies = [
  "engine-executors",
  "futures",
  "rand 0.9.1",
+ "schemars",
  "serde",
+ "serde-bool",
  "serde_json",
  "thirdweb-core",
  "tokio",

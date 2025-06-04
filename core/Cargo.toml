@@ -4,10 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-aide = { version = "0.14.2", features = ["axum"] }
 alloy = { version = "1.0.8", features = ["serde", "json-rpc"] }
 schemars = "0.8.22"
-serde = "1.0.219"
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
 vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }

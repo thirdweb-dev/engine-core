@@ -47,14 +47,14 @@ pub struct ExternalBundlerSendJobData {
     pub execution_options: Erc4337ExecutionOptions,
     pub signing_credential: SigningCredential,
 
-    pub webhook_options: Option<WebhookOptions>,
+    pub webhook_options: Option<Vec<WebhookOptions>>,
 
     pub rpc_credentials: RpcCredentials,
 }
 
 impl HasWebhookOptions for ExternalBundlerSendJobData {
-    fn webhook_url(&self) -> Option<String> {
-        self.webhook_options.as_ref().map(|opts| opts.url.clone())
+    fn webhook_options(&self) -> Option<Vec<WebhookOptions>> {
+        self.webhook_options.clone()
     }
 }
 
@@ -464,7 +464,7 @@ where
                 nonce: success_data.result.nonce,
                 user_op_hash: success_data.result.user_op_hash.clone(),
                 transaction_id: job.data.transaction_id.clone(),
-                webhook_options: job.data.webhook_url().map(|url| WebhookOptions { url }),
+                webhook_options: job.data.webhook_options().clone(),
                 rpc_credentials: job.data.rpc_credentials.clone(),
                 deployment_lock_acquired: success_data.result.deployment_lock_acquired,
             })

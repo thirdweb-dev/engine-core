@@ -5,6 +5,7 @@ use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
     config,
+    execution_router::ExecutionRouter,
     http::server::{EngineServer, EngineServerState},
     queue::manager::QueueManager,
 };
@@ -54,13 +55,17 @@ async fn main() -> anyhow::Result<()> {
     )?
     .build()?;
 
+    let execution_router = ExecutionRouter {
+        webhook_queue: queue_manager.webhook_queue.clone(),
+        external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
+        userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
+    };
+
     let mut server = EngineServer::new(EngineServerState {
         signer: signer.clone(),
         abi_service: Arc::new(abi_service),
         chains,
-        webhook_queue: queue_manager.webhook_queue.clone(),
-        erc4337_send_queue: queue_manager.external_bundler_send_queue.clone(),
-        erc4337_confirm_queue: queue_manager.userop_confirm_queue.clone(),
+        execution_router: Arc::new(execution_router),
     })
     .await;
 

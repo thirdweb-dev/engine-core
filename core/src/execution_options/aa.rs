@@ -95,16 +95,21 @@ pub fn default_account_salt() -> String {
 struct EntrypointAndFactoryDetailsDeserHelper {
     /// # Entrypoint Contract Address
     /// The address of the ERC-4337 entrypoint contract.
+    ///
     /// If omitted, defaults to the standard address for the specified/inferred version.
+    ///
     /// Known addresses:
+    ///
     /// - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+    ///
     /// - V0.7: 0x0000000071727De22E5E9d8BAf0edAc6f37da032
     #[serde(rename = "entrypointAddress")]
-    #[schemars(with = "AddressDef")]
+    #[schemars(with = "Option<AddressDef>")]
     entrypoint_address: Option<Address>,
 
     /// # Entrypoint Version
     /// The version of the ERC-4337 standard to use.
+    ///
     /// If omitted, the version will be inferred from the entrypoint address,
     /// then from factory address, or defaults to V0.7.
     #[serde(rename = "entrypointVersion")]
@@ -113,11 +118,14 @@ struct EntrypointAndFactoryDetailsDeserHelper {
     /// # Account Factory Address
     /// The address of the smart account factory contract.
     /// If omitted, defaults to the thirweb default account factory for the specified/inferred version.
+    ///
     /// Known addresses:
+    ///
     /// - V0.6: 0x85e23b94e7F5E9cC1fF78BCe78cfb15B81f0DF00
+    ///
     /// - V0.7: 0x4bE0ddfebcA9A5A4a617dee4DeCe99E7c862dceb
     #[serde(rename = "factoryAddress")]
-    #[schemars(with = "AddressDef")]
+    #[schemars(with = "Option<AddressDef>")]
     factory_address: Option<Address>,
 }
 

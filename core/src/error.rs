@@ -1,9 +1,11 @@
+use crate::defs::AddressDef;
 use alloy::{
     primitives::Address,
     transports::{
         RpcError as AlloyRpcError, TransportErrorKind, http::reqwest::header::InvalidHeaderValue,
     },
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thirdweb_core::error::ThirdwebError;
 use thiserror::Error;
@@ -11,7 +13,7 @@ use twmq::error::TwmqError;
 
 use crate::chain::Chain;
 
-#[derive(Debug, Error, Clone, Serialize, Deserialize)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum RpcErrorKind {
     /// Server returned an error response.
     #[error("server returned an error response: {0}")]
@@ -56,7 +58,7 @@ pub enum RpcErrorKind {
     OtherTransportError(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct RpcErrorResponse {
     /// The error code.
     pub code: i64,
@@ -80,7 +82,7 @@ impl RpcErrorResponse {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RpcErrorInfo {
     /// The chain ID where the error occurred
     pub chain_id: u64,
@@ -97,7 +99,7 @@ pub struct RpcErrorInfo {
 }
 
 /// A serializable contract interaction error type
-#[derive(Debug, Error, Serialize, Deserialize, Clone)]
+#[derive(Debug, Error, Serialize, Deserialize, Clone, JsonSchema)]
 pub enum ContractInteractionErrorKind {
     /// Unknown function referenced.
     #[error("unknown function: function {0} does not exist")]
@@ -135,9 +137,29 @@ pub enum ContractInteractionErrorKind {
     /// An error occured while waiting for a pending transaction.
     #[error("pending transaction error: {0}")]
     PendingTransactionError(String),
+
+    /// Error during contract function preparation (ABI resolution, parameter encoding)
+    #[error("contract preparation failed: {0}")]
+    PreparationFailed(String),
+
+    /// Error during multicall execution
+    #[error("multicall execution failed: {0}")]
+    MulticallExecutionFailed(String),
+
+    /// Error during result decoding
+    #[error("result decoding failed: {0}")]
+    ResultDecodingFailed(String),
+
+    /// Parameter validation error
+    #[error("parameter validation failed: {0}")]
+    ParameterValidationFailed(String),
+
+    /// Function resolution error
+    #[error("function resolution failed: {0}")]
+    FunctionResolutionFailed(String),
 }
 
-#[derive(Error, Debug, Serialize, Clone, Deserialize)]
+#[derive(Error, Debug, Serialize, Clone, Deserialize, JsonSchema)]
 pub enum EngineError {
     #[error("RPC error on chain {chain_id} at {rpc_url}: {message}")]
     RpcError {
@@ -175,6 +197,7 @@ pub enum EngineError {
     #[error("Contract interaction error: {message}")]
     ContractInteractionError {
         /// Contract address
+        #[schemars(with = "Option<AddressDef>")]
         contract_address: Option<Address>,
         /// Chain ID
         chain_id: u64,
@@ -198,6 +221,43 @@ impl From<InvalidHeaderValue> for EngineError {
     fn from(err: InvalidHeaderValue) -> Self {
         EngineError::ValidationError {
             message: err.to_string(),
+        }
+    }
+}
+
+impl EngineError {
+    pub fn contract_preparation_error(
+        contract_address: Option<Address>,
+        chain_id: u64,
+        message: String,
+    ) -> Self {
+        EngineError::ContractInteractionError {
+            contract_address,
+            chain_id,
+            message: message.clone(),
+            kind: ContractInteractionErrorKind::PreparationFailed(message),
+        }
+    }
+
+    pub fn contract_multicall_error(chain_id: u64, message: String) -> Self {
+        EngineError::ContractInteractionError {
+            contract_address: None,
+            chain_id,
+            message: message.clone(),
+            kind: ContractInteractionErrorKind::MulticallExecutionFailed(message),
+        }
+    }
+
+    pub fn contract_decoding_error(
+        contract_address: Option<Address>,
+        chain_id: u64,
+        message: String,
+    ) -> Self {
+        EngineError::ContractInteractionError {
+            contract_address,
+            chain_id,
+            message: message.clone(),
+            kind: ContractInteractionErrorKind::ResultDecodingFailed(message),
         }
     }
 }

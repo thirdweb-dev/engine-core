@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Error, Serialize, Deserialize, Debug, Clone)]
+#[derive(Error, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub enum ThirdwebError {
     #[error("SerializationError: {0}")]
     SerializationError(ThirdwebSerializationError),
@@ -16,7 +17,7 @@ pub enum ThirdwebError {
     HttpError(#[from] SerializableReqwestError),
 }
 
-#[derive(Error, Serialize, Deserialize, Debug, Clone)]
+#[derive(Error, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub enum ThirdwebSerializationError {
     #[error("InvalidHeaderValue: {value:?}")]
     HeaderValue { value: String },
@@ -45,7 +46,7 @@ impl From<ThirdwebSerializationError> for ThirdwebError {
     }
 }
 
-#[derive(Error, Serialize, Deserialize, Debug, Clone)]
+#[derive(Error, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub enum SerializableReqwestError {
     #[error("builder error")]
     Builder {

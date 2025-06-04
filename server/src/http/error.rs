@@ -1,10 +1,15 @@
+use crate::http::types::ErrorResponse;
+use aide::OperationIo;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use engine_core::error::{ContractInteractionErrorKind, EngineError, RpcErrorKind};
+use schemars::JsonSchema;
 use serde_json::json;
 
 // Extension trait that lets you pair an error with a status code
 /// Extension trait for EngineError to add HTTP response conversion
-pub struct ApiEngineError(pub EngineError);
+#[derive(OperationIo, JsonSchema)]
+#[schemars(transparent)]
+pub struct ApiEngineError(#[schemars(with = "ErrorResponse")] pub EngineError);
 
 // 2. Allow automatic conversion from EngineError
 impl From<EngineError> for ApiEngineError {
@@ -50,9 +55,19 @@ impl ApiEngineError {
             EngineError::ContractInteractionError { kind, .. } => match kind {
                 ContractInteractionErrorKind::UnknownFunction(_)
                 | ContractInteractionErrorKind::UnknownSelector(_)
-                | ContractInteractionErrorKind::AbiError(_) => StatusCode::BAD_REQUEST,
+                | ContractInteractionErrorKind::AbiError(_)
+                | ContractInteractionErrorKind::ParameterValidationFailed(_)
+                | ContractInteractionErrorKind::FunctionResolutionFailed(_)
+                | ContractInteractionErrorKind::PreparationFailed(_) => StatusCode::BAD_REQUEST,
 
                 ContractInteractionErrorKind::ZeroData { .. } => StatusCode::NOT_FOUND,
+
+                ContractInteractionErrorKind::MulticallExecutionFailed(_)
+                | ContractInteractionErrorKind::TransportError(_) => StatusCode::BAD_GATEWAY,
+
+                ContractInteractionErrorKind::ResultDecodingFailed(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
 
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
