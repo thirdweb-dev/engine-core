@@ -9,12 +9,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
+# Force cargo to use git CLI for SSH
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 # Build dependencies - this is the caching Docker layer
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN --mount=type=ssh cargo chef cook --release --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --release --bin thirdweb-engine
+RUN --mount=type=ssh cargo build --release --bin thirdweb-engine
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime
