@@ -98,7 +98,7 @@ impl EngineServer {
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             // Generate the documentation.
-            .route("/scalar", Scalar::new("/v1/api.json").axum_route())
+            .route("/reference", Scalar::new("/v1/api.json").axum_route())
             .with_state(state);
 
         let router = ApiRouter::new()

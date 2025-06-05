@@ -122,7 +122,7 @@ The server will start on `http://localhost:3069` by default.
 
 Once the server is running, you can access:
 
-- **API Documentation**: `http://localhost:3069/v1/scalar`
+- **API Documentation**: `http://localhost:3069/v1/reference`
 - **OpenAPI Spec**: `http://localhost:3069/v1/api.json`
 
 ### Available Endpoints
@@ -278,7 +278,7 @@ MIT
 
 For issues and questions:
 
-1. Check the API documentation at `/v1/scalar`
+1. Check the API documentation at `/v1/reference`
 2. Review server logs for error details
 3. Ensure Redis is running and accessible
 4. Verify Thirdweb credentials are valid
