@@ -156,8 +156,8 @@ pub async fn encode_contract(
     OptionalRpcCredentialsExtractor(rpc_credentials): OptionalRpcCredentialsExtractor,
     EngineJson(request): EngineJson<EncodeRequest>,
 ) -> Result<impl IntoApiResponse, ApiEngineError> {
-    let auth: Option<ThirdwebAuth> = rpc_credentials.and_then(|creds| match creds {
-        engine_core::chain::RpcCredentials::Thirdweb(auth) => Some(auth),
+    let auth: Option<ThirdwebAuth> = rpc_credentials.map(|creds| match creds {
+        engine_core::chain::RpcCredentials::Thirdweb(auth) => auth,
     });
 
     let chain_id: ChainId = request.encode_options.chain_id.parse().map_err(|_| {

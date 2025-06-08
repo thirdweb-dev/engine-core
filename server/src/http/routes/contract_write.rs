@@ -1,9 +1,11 @@
-// 8:12 PM - COLOCATION: Contract Write Operations
-
-use aide::{axum::IntoApiResponse, transform::TransformOperation};
 use alloy::primitives::{ChainId, U256};
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Json},
+};
 use engine_core::{
+    defs::U256Def,
     error::EngineError,
     execution_options::{
         ExecutionOptions, QueuedTransactionsResponse, SendTransactionRequest, WebhookOptions,
@@ -26,7 +28,7 @@ use crate::http::{
 // ===== REQUEST/RESPONSE TYPES =====
 
 /// A contract function call with optional ETH value to send
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractWrite {
     /// The contract function call details
@@ -37,15 +39,17 @@ pub struct ContractWrite {
     /// If omitted, no ETH will be sent (value = 0).
     /// Uses U256 to handle large numbers precisely.
     #[schemars(with = "Option<String>")]
+    #[schema(value_type = Option<U256Def>)]
     pub value: Option<U256>,
 }
 
 /// Request to execute write transactions to smart contracts
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteContractRequest {
     /// Execution configuration including chain, account, and transaction options
     pub execution_options: ExecutionOptions,
+
     /// List of contract function calls to execute
     ///
     /// All calls will be executed in a single transaction if possible,
@@ -71,14 +75,34 @@ impl ContractWrite {
 }
 
 // ===== ROUTE HANDLER =====
+#[utoipa::path(
+    post,
+    operation_id = "writeContract",
+    path = "/write/contract",
+    tag = "Write",
+    request_body(content = WriteContractRequest, description = "Write contract request", content_type = "application/json"),
+    responses(
+        (status = 202, description = "Transaction(s) queued successfully", body = QueuedTransactionsResponse, content_type = "application/json",
+            example = json!({"transactions": [{"id": "1", "batchIndex": 0, "executionParams": {"chainId": 1, "idempotencyKey": "123", "executorType": "ERC4337"}, "transactionParams": [{"to": "0x123", "data": "0x123", "value": "0x123"}]}]})
+        ),
+    ),
+    params(
+        ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
+        ("x-thirdweb-service-key" = Option<String>, Header, description = "Thirdweb service key, passed when using the client ID"),
+        ("x-thirdweb-secret-key" = Option<String>, Header, description = "Thirdweb secret key, passed standalone"),
 
-/// Execute write transactions to smart contracts
+        ("x-vault-access-token" = Option<String>, Header, description = "Vault access token"),
+    )
+)]
+/// Write Contract
+/// 
+/// Call a contract function with a transaction
 pub async fn write_contract(
     State(state): State<EngineServerState>,
     RpcCredentialsExtractor(rpc_credentials): RpcCredentialsExtractor,
     SigningCredentialsExtractor(signing_credential): SigningCredentialsExtractor,
     Json(request): Json<WriteContractRequest>,
-) -> Result<impl IntoApiResponse, ApiEngineError> {
+) -> Result<impl IntoResponse, ApiEngineError> {
     let auth: Option<ThirdwebAuth> = match &rpc_credentials {
         engine_core::chain::RpcCredentials::Thirdweb(auth) => Some(auth.clone()),
     };
@@ -158,7 +182,7 @@ pub async fn write_contract(
         .execution_router
         .execute(transaction_request, rpc_credentials, signing_credential)
         .await
-        .map_err(|e| ApiEngineError(e))?;
+        .map_err(ApiEngineError)?;
 
     tracing::info!(
         transaction_id = %transaction_id,
@@ -172,41 +196,4 @@ pub async fn write_contract(
             transactions: queued_transactions,
         })),
     ))
-}
-
-// ===== DOCUMENTATION =====
-
-pub fn write_contract_docs(op: TransformOperation) -> TransformOperation {
-    op.id("writeContract")
-        .description(
-            "Execute write transactions to smart contracts.\n\n\
-            This endpoint executes state-changing contract function calls as blockchain \
-            transactions. The transactions are queued for execution using the specified \
-            execution options (e.g., ERC-4337 account abstraction).\n\n\
-            ## Features\n\
-            - Execute multiple contract calls in one request\n\
-            - Support for sending ETH value with calls\n\
-            - Automatic ABI resolution and parameter encoding\n\
-            - Integration with account abstraction and signing systems\n\
-            - Transaction queuing with status tracking\n\n\
-            ## Authentication\n\
-            - Required: RPC credentials for transaction submission\n\
-            - Required: Vault access token for transaction signing\n\n\
-            ## Execution Options\n\
-            - Chain ID and transaction configuration\n\
-            - Account abstraction settings (ERC-4337)\n\
-            - Gas and fee configurations\n\
-            - Idempotency key for duplicate prevention",
-        )
-        .summary("Execute contract write functions")
-        .response_with::<202, Json<SuccessResponse<QueuedTransactionsResponse>>, _>(|res| {
-            res.description("Transaction queued successfully")
-        })
-        .response_with::<400, Json<ErrorResponse>, _>(|res| {
-            res.description("Bad request - invalid parameters or missing credentials")
-        })
-        .response_with::<500, Json<ErrorResponse>, _>(|res| {
-            res.description("Internal server error")
-        })
-        .tag("Contract Operations")
 }

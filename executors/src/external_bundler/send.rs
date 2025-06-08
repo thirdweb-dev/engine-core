@@ -124,7 +124,7 @@ pub enum ExternalBundlerSendError {
 impl From<TwmqError> for ExternalBundlerSendError {
     fn from(error: TwmqError) -> Self {
         ExternalBundlerSendError::InternalError {
-            message: format!("Deserialization error for job data: {}", error.to_string()),
+            message: format!("Deserialization error for job data: {}", error),
         }
     }
 }

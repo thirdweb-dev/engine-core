@@ -13,7 +13,7 @@ use twmq::error::TwmqError;
 
 use crate::chain::Chain;
 
-#[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub enum RpcErrorKind {
     /// Server returned an error response.
     #[error("server returned an error response: {0}")]
@@ -58,7 +58,7 @@ pub enum RpcErrorKind {
     OtherTransportError(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, utoipa::ToSchema)]
 pub struct RpcErrorResponse {
     /// The error code.
     pub code: i64,
@@ -99,7 +99,7 @@ pub struct RpcErrorInfo {
 }
 
 /// A serializable contract interaction error type
-#[derive(Debug, Error, Serialize, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Error, Serialize, Deserialize, Clone, JsonSchema, utoipa::ToSchema)]
 pub enum ContractInteractionErrorKind {
     /// Unknown function referenced.
     #[error("unknown function: function {0} does not exist")]
@@ -159,7 +159,7 @@ pub enum ContractInteractionErrorKind {
     FunctionResolutionFailed(String),
 }
 
-#[derive(Error, Debug, Serialize, Clone, Deserialize, JsonSchema)]
+#[derive(Error, Debug, Serialize, Clone, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub enum EngineError {
     #[error("RPC error on chain {chain_id} at {rpc_url}: {message}")]
     RpcError {
@@ -198,6 +198,7 @@ pub enum EngineError {
     ContractInteractionError {
         /// Contract address
         #[schemars(with = "Option<AddressDef>")]
+        #[schema(value_type = Option<AddressDef>)]
         contract_address: Option<Address>,
         /// Chain ID
         chain_id: u64,

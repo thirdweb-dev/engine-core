@@ -7,7 +7,7 @@ use serde_json::json;
 
 // Extension trait that lets you pair an error with a status code
 /// Extension trait for EngineError to add HTTP response conversion
-#[derive(OperationIo, JsonSchema)]
+#[derive(OperationIo, JsonSchema, utoipa::ToSchema)]
 #[schemars(transparent)]
 pub struct ApiEngineError(#[schemars(with = "ErrorResponse")] pub EngineError);
 

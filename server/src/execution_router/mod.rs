@@ -59,6 +59,10 @@ impl ExecutionRouter {
 
                 Ok(vec![queued_transaction])
             }
+
+            SpecificExecutionOptions::Auto(auto_execution_options) => {
+                todo!()
+            }
         }
     }
 
@@ -67,14 +71,14 @@ impl ExecutionRouter {
         base_execution_options: &BaseExecutionOptions,
         erc4337_execution_options: &Erc4337ExecutionOptions,
         webhook_options: &Option<Vec<WebhookOptions>>,
-        transactions: &Vec<InnerTransaction>,
+        transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
     ) -> Result<(), TwmqError> {
         let job_data = ExternalBundlerSendJobData {
             transaction_id: base_execution_options.idempotency_key.clone(),
             chain_id: base_execution_options.chain_id,
-            transactions: transactions.clone(),
+            transactions: transactions.to_vec(),
             execution_options: erc4337_execution_options.clone(),
             signing_credential,
             webhook_options: webhook_options.clone(),

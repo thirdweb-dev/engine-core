@@ -32,3 +32,6 @@ aide = { version = "0.14.2", features = [
     "scalar",
 ] }
 schemars = "0.8.22"
+utoipa = { version = "5.4.0", features = ["macros", "chrono", "uuid", "axum_extras"] }
+utoipa-axum = "0.2.0"
+utoipa-scalar = { version = "0.3.0", features = ["axum"] }
