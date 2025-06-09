@@ -43,7 +43,14 @@ impl EngineServer {
             .allow_credentials(false);
 
         let v1_router = OpenApiRouter::new()
-            .routes(routes!(crate::http::routes::contract_write::write_contract))
+            .routes(routes!(crate::http::routes::contract_write::write_contract,))
+            .routes(routes!(
+                crate::http::routes::contract_encode::encode_contract
+            ))
+            .routes(routes!(crate::http::routes::contract_read::read_contract,))
+            .routes(routes!(
+                crate::http::routes::transaction_write::write_transaction
+            ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .with_state(state);

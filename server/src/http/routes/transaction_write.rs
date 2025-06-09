@@ -1,7 +1,9 @@
 // 8:12 PM - COLOCATION: Transaction Write Operations
 
-use aide::{axum::IntoApiResponse, transform::TransformOperation};
-use axum::{debug_handler, extract::State, http::StatusCode, response::Json};
+use axum::{
+    debug_handler, extract::State, http::StatusCode,
+    response::{IntoResponse, Json},
+};
 use engine_core::execution_options::{QueuedTransactionsResponse, SendTransactionRequest};
 
 use crate::http::{
@@ -13,6 +15,24 @@ use crate::http::{
 
 // ===== ROUTE HANDLER =====
 
+#[utoipa::path(
+    post,
+    operation_id = "writeTransaction",
+    path = "/write/transaction",
+    tag = "Write",
+    request_body(content = SendTransactionRequest, description = "Transaction request", content_type = "application/json"),
+    responses(
+        (status = 202, description = "Transaction queued successfully", body = QueuedTransactionsResponse, content_type = "application/json"),
+    ),
+    params(
+        ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
+        ("x-thirdweb-service-key" = Option<String>, Header, description = "Thirdweb service key, passed when using the client ID"),
+        ("x-thirdweb-secret-key" = Option<String>, Header, description = "Thirdweb secret key, passed standalone"),
+        ("x-vault-access-token" = Option<String>, Header, description = "Vault access token"),
+    )
+)]
+/// Write Transaction
+/// 
 /// Execute raw transactions
 #[debug_handler]
 pub async fn write_transaction(
@@ -20,7 +40,7 @@ pub async fn write_transaction(
     RpcCredentialsExtractor(rpc_credentials): RpcCredentialsExtractor,
     SigningCredentialsExtractor(signing_credential): SigningCredentialsExtractor,
     EngineJson(request): EngineJson<SendTransactionRequest>,
-) -> Result<impl IntoApiResponse, ApiEngineError> {
+) -> Result<impl IntoResponse, ApiEngineError> {
     let transaction_id = request.execution_options.transaction_id().to_string();
     let executor_type = request.execution_options.executor_type();
 
@@ -51,36 +71,3 @@ pub async fn write_transaction(
     ))
 }
 
-// ===== DOCUMENTATION =====
-
-pub fn write_transaction_docs(op: TransformOperation) -> TransformOperation {
-    op.id("writeTransaction")
-        .description(
-            "Execute raw transactions.\n\n\
-            This endpoint executes pre-prepared transactions without additional processing. \
-            Use this for raw transaction data that has already been encoded.\n\n\
-            ## Features\n\
-            - Execute multiple raw transactions\n\
-            - Support for any transaction type\n\
-            - Integration with account abstraction\n\
-            - Transaction queuing and status tracking\n\n\
-            ## Authentication\n\
-            - Required: RPC credentials and vault access token\n\n\
-            ## Request Format\n\
-            Uses the standard `SendTransactionRequest` from engine_core which includes:\n\
-            - Execution options (chain, account abstraction, etc.)\n\
-            - Array of `InnerTransaction` objects with `to`, `data`, and `value`\n\
-            - Optional webhook configuration",
-        )
-        .summary("Execute prepared transactions")
-        .response_with::<202, Json<SuccessResponse<QueuedTransactionsResponse>>, _>(|res| {
-            res.description("Transaction queued successfully")
-        })
-        .response_with::<400, Json<ErrorResponse>, _>(|res| {
-            res.description("Bad request - invalid parameters or missing credentials")
-        })
-        .response_with::<500, Json<ErrorResponse>, _>(|res| {
-            res.description("Internal server error")
-        })
-        .tag("Transaction Operations")
-}
