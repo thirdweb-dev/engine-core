@@ -13,7 +13,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{Job, JobError, JobResult, JobStatus, RequeuePosition},
+    job::{BorrowedJob, JobError, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
@@ -63,30 +63,33 @@ impl DurableExecution for RetryJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = RetryJobPayload;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
-        let current_attempt = job.attempts;
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
+        let current_attempt = job.job.attempts;
 
         tracing::info!(
             "RETRY_JOB: Processing job {}, attempt {}/{}",
-            job.id,
+            job.job.id,
             current_attempt,
-            job.data.desired_attempts
+            job.job.data.desired_attempts
         );
 
-        if current_attempt < job.data.desired_attempts {
+        if current_attempt < job.job.data.desired_attempts {
             // Not enough attempts yet, nack it
             tracing::info!(
                 "RETRY_JOB: Nacking job {} (attempt {}/{})",
-                job.id,
+                job.job.id,
                 current_attempt,
-                job.data.desired_attempts
+                job.job.data.desired_attempts
             );
 
             Err(JobError::Nack {
                 error: TestJobErrorData {
                     reason: format!(
                         "Need {} attempts, only at {}",
-                        job.data.desired_attempts, current_attempt
+                        job.job.data.desired_attempts, current_attempt
                     ),
                 },
                 delay: None,
@@ -97,7 +100,7 @@ impl DurableExecution for RetryJobHandler {
             tracing::info!(
                 "RETRY_JOB: Success on attempt {}/{}",
                 current_attempt,
-                job.data.desired_attempts
+                job.job.data.desired_attempts
             );
 
             RETRY_JOB_FINAL_SUCCESS.store(true, Ordering::SeqCst);
@@ -111,7 +114,7 @@ impl DurableExecution for RetryJobHandler {
 
     async fn on_success(
         &self,
-        _job: &Job<Self::JobData>,
+        _job: &BorrowedJob<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
     ) {
@@ -123,13 +126,13 @@ impl DurableExecution for RetryJobHandler {
 
     async fn on_nack(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
             "RETRY_JOB: on_nack hook - attempt {} failed: {}",
-            job.attempts,
+            job.job.attempts,
             d.error.reason
         );
         if let Some(delay_duration) = d.delay {
@@ -139,13 +142,13 @@ impl DurableExecution for RetryJobHandler {
 
     async fn on_fail(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         _d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::error!(
             "RETRY_JOB: on_fail hook - permanently failed at attempt {}",
-            job.attempts
+            job.job.attempts
         );
     }
 

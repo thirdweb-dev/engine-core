@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use twmq::{
     DurableExecution, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{Job, JobResult, JobStatus},
+    job::{BorrowedJob, JobResult, JobStatus},
     queue::QueueOptions,
 };
 
@@ -54,6 +54,7 @@ pub struct WebhookJobOutput {
     pub response: String,
 }
 
+
 // Main job that queues webhook jobs
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MainJobPayload {
@@ -81,20 +82,20 @@ impl DurableExecution for MainJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = MainJobPayload;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
-        println!("MAIN_JOB: Processing job with id: {}", job.id);
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+        println!("MAIN_JOB: Processing job with id: {}", job.job.id);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         MAIN_JOB_PROCESSED.store(true, Ordering::SeqCst);
 
         Ok(TestJobOutput {
-            reply: format!("Main job processed: {}", job.data.message),
+            reply: format!("Main job processed: {}", job.job.data.message),
         })
     }
 
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
     ) {
@@ -103,13 +104,13 @@ impl DurableExecution for MainJobHandler {
         let webhook_job = WebhookJobPayload {
             url: "https://api.example.com/webhook".to_string(),
             payload: serde_json::to_string(d.result).unwrap(),
-            parent_job_id: job.data.id_to_check.clone(),
+            parent_job_id: job.job.data.id_to_check.clone(),
         };
 
         // Use the type-safe API!
         let mut webhook_builder = self.webhook_queue.clone().job(webhook_job);
 
-        webhook_builder.options.id = format!("{}_webhook", job.data.id_to_check);
+        webhook_builder.options.id = format!("{}_webhook", job.job.data.id_to_check);
 
         if let Err(e) = tx.queue_job(webhook_builder) {
             tracing::error!("Failed to queue webhook job: {:?}", e);
@@ -124,9 +125,9 @@ impl DurableExecution for WebhookJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = WebhookJobPayload;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
-        println!("WEBHOOK_JOB: Sending webhook to: {}", job.data.url);
-        println!("WEBHOOK_JOB: Payload: {}", job.data.payload);
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+        println!("WEBHOOK_JOB: Sending webhook to: {}", job.job.data.url);
+        println!("WEBHOOK_JOB: Payload: {}", job.job.data.payload);
         tokio::time::sleep(Duration::from_millis(25)).await;
 
         WEBHOOK_JOB_PROCESSED.store(true, Ordering::SeqCst);
@@ -140,13 +141,13 @@ impl DurableExecution for WebhookJobHandler {
 
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         _d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
             "WEBHOOK_JOB: Webhook delivered successfully for parent: {}",
-            job.data.parent_job_id
+            job.job.data.parent_job_id
         );
     }
 }

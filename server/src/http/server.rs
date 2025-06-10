@@ -8,7 +8,7 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_scalar::{Scalar, Servable};
 
-use crate::{chains::ThirdwebChainService, execution_router::ExecutionRouter};
+use crate::{chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -21,6 +21,7 @@ pub struct EngineServerState {
     pub abi_service: Arc<ThirdwebAbiService>,
 
     pub execution_router: Arc<ExecutionRouter>,
+    pub queue_manager: Arc<QueueManager>,
 }
 
 pub struct EngineServer {
@@ -50,6 +51,9 @@ impl EngineServer {
             .routes(routes!(crate::http::routes::contract_read::read_contract,))
             .routes(routes!(
                 crate::http::routes::transaction_write::write_transaction
+            ))
+            .routes(routes!(
+                crate::http::routes::transaction::cancel_transaction
             ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())

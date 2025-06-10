@@ -10,7 +10,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{Job, JobResult, JobStatus},
+    job::{BorrowedJob, JobResult, JobStatus},
     queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
@@ -65,11 +65,11 @@ impl DurableExecution for SleepForeverHandler {
     type ErrorData = TestJobErrorData;
     type JobData = SleepForeverJobData;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         tracing::info!(
             "SLEEP_JOB: Starting to process job {}, attempt {}",
-            job.id,
-            job.attempts
+            job.job.id,
+            job.job.attempts
         );
 
         // Signal that we started processing
@@ -80,16 +80,16 @@ impl DurableExecution for SleepForeverHandler {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        tracing::info!("SLEEP_JOB: Job {} woke up, finishing", job.id);
+        tracing::info!("SLEEP_JOB: Job {} woke up, finishing", job.job.id);
 
         Ok(SleepJobOutput {
-            message: format!("Job {} completed after sleeping", job.id),
+            message: format!("Job {} completed after sleeping", job.job.id),
         })
     }
 
     async fn on_success(
         &self,
-        _job: &Job<Self::JobData>,
+        _job: &BorrowedJob<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
     ) {
@@ -98,7 +98,7 @@ impl DurableExecution for SleepForeverHandler {
 
     async fn on_nack(
         &self,
-        _job: &Job<Self::JobData>,
+        _job: &BorrowedJob<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
@@ -110,7 +110,7 @@ impl DurableExecution for SleepForeverHandler {
 
     async fn on_fail(
         &self,
-        _job: &Job<Self::JobData>,
+        _job: &BorrowedJob<Self::JobData>,
         d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {

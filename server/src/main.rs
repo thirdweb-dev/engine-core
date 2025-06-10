@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
+        transaction_registry: queue_manager.transaction_registry.clone(),
     };
 
     let mut server = EngineServer::new(EngineServerState {
@@ -66,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         abi_service: Arc::new(abi_service),
         chains,
         execution_router: Arc::new(execution_router),
+        queue_manager: Arc::new(queue_manager),
     })
     .await;
 

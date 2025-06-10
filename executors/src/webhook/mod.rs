@@ -8,8 +8,8 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
-use twmq::job::{Job, JobError, JobResult, RequeuePosition, ToJobResult};
-use twmq::{DurableExecution, FailHookData, NackHookData, SuccessHookData};
+use twmq::job::{BorrowedJob, JobError, JobResult, RequeuePosition, ToJobResult};
+use twmq::{DurableExecution, FailHookData, NackHookData, SuccessHookData, UserCancellable};
 
 pub mod envelope;
 
@@ -89,11 +89,20 @@ pub enum WebhookError {
 
     #[error("Internal queue error: {0}")]
     InternalQueueError(String),
+
+    #[error("Transaction cancelled by user")]
+    UserCancelled,
 }
 
 impl From<TwmqError> for WebhookError {
     fn from(error: TwmqError) -> Self {
         WebhookError::InternalQueueError(error.to_string())
+    }
+}
+
+impl UserCancellable for WebhookError {
+    fn user_cancelled() -> Self {
+        WebhookError::UserCancelled
     }
 }
 
@@ -103,9 +112,9 @@ impl DurableExecution for WebhookJobHandler {
     type ErrorData = WebhookError;
     type JobData = WebhookJobPayload;
 
-    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
-        let payload = &job.data;
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.job.id))]
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+        let payload = &job.job.data;
         let mut request_headers = HeaderMap::new();
 
         // Set default Content-Type if body is present, can be overridden by payload.headers
@@ -221,10 +230,10 @@ impl DurableExecution for WebhookJobHandler {
             .body(payload.body.clone());
 
         tracing::debug!(
-            job_id = %job.id,
+            job_id = %job.job.id,
             url = %payload.url,
             method = %http_method_str,
-            attempt = %job.attempts,
+            attempt = %job.job.attempts,
             "Sending webhook request"
         );
 
@@ -243,13 +252,13 @@ impl DurableExecution for WebhookJobHandler {
                             ));
                             return Err(err).map_err_fail();
                         }
-                        tracing::warn!(job_id = %job.id, "Failed to read response body for error status {}: {}", status, e);
+                        tracing::warn!(job_id = %job.job.id, "Failed to read response body for error status {}: {}", status, e);
                         None
                     }
                 };
 
                 if status.is_success() {
-                    tracing::info!(job_id = %job.id, status = %status, "Webhook delivered successfully");
+                    tracing::info!(job_id = %job.job.id, status = %status, "Webhook delivered successfully");
                     Ok(WebhookJobOutput {
                         status_code: status.as_u16(),
                         response_body: response_body_text,
@@ -271,20 +280,20 @@ impl DurableExecution for WebhookJobHandler {
                     };
 
                     if status.is_server_error() || status.as_u16() == 429 {
-                        if job.attempts < self.retry_config.max_attempts {
+                        if job.job.attempts < self.retry_config.max_attempts {
                             let delay_ms = self.retry_config.initial_delay_ms as f64
                                 * self
                                     .retry_config
                                     .backoff_factor
-                                    .powi(job.attempts as i32 - 1); // Use current attempts for backoff
+                                    .powi(job.job.attempts as i32 - 1); // Use current attempts for backoff
                             let delay_ms =
                                 (delay_ms.min(self.retry_config.max_delay_ms as f64)) as u64;
                             let delay = Duration::from_millis(delay_ms);
 
                             tracing::warn!(
-                                job_id = %job.id,
+                                job_id = %job.job.id,
                                 status = %status,
-                                attempt = %job.attempts,
+                                attempt = %job.job.attempts,
                                 max_attempts = %self.retry_config.max_attempts,
                                 delay_ms = %delay.as_millis(),
                                 "Webhook failed with retryable status, NACKing."
@@ -296,16 +305,16 @@ impl DurableExecution for WebhookJobHandler {
                             })
                         } else {
                             tracing::error!(
-                                job_id = %job.id,
+                                job_id = %job.job.id,
                                 status = %status,
-                                attempt = %job.attempts,
+                                attempt = %job.job.attempts,
                                 "Webhook failed after max attempts, FAILING."
                             );
                             Err(JobError::Fail(webhook_error))
                         }
                     } else {
                         tracing::error!(
-                            job_id = %job.id,
+                            job_id = %job.job.id,
                             status = %status,
                             "Webhook failed with non-retryable client error, FAILING."
                         );
@@ -326,23 +335,23 @@ impl DurableExecution for WebhookJobHandler {
                     && !e.is_connect()
                     && !e.is_timeout()
                 {
-                    tracing::error!(job_id = %job.id, error = %webhook_error, "Webhook construction error, FAILING.");
+                    tracing::error!(job_id = %job.job.id, error = %webhook_error, "Webhook construction error, FAILING.");
                     return Err(JobError::Fail(webhook_error));
                 }
 
-                if job.attempts < self.retry_config.max_attempts {
+                if job.job.attempts < self.retry_config.max_attempts {
                     let delay_ms = self.retry_config.initial_delay_ms as f64
                         * self
                             .retry_config
                             .backoff_factor
-                            .powi(job.attempts as i32 - 1); // Use current attempts for backoff
+                            .powi(job.job.attempts as i32 - 1); // Use current attempts for backoff
                     let delay_ms = (delay_ms.min(self.retry_config.max_delay_ms as f64)) as u64;
                     let delay = Duration::from_millis(delay_ms);
 
                     tracing::warn!(
-                        job_id = %job.id,
+                        job_id = %job.job.id,
                         error = %webhook_error,
-                        attempt = %job.attempts,
+                        attempt = %job.job.attempts,
                         max_attempts = %self.retry_config.max_attempts,
                         delay_ms = %delay.as_millis(),
                         "Webhook request failed, NACKing."
@@ -355,9 +364,9 @@ impl DurableExecution for WebhookJobHandler {
                     })
                 } else {
                     tracing::error!(
-                        job_id = %job.id,
+                        job_id = %job.job.id,
                         error = %webhook_error,
-                        attempt = %job.attempts,
+                        attempt = %job.job.attempts,
                         "Webhook request failed after max attempts, FAILING."
                     );
                     Err(JobError::Fail(webhook_error))
@@ -366,49 +375,49 @@ impl DurableExecution for WebhookJobHandler {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.job.id))]
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
-            job_id = %job.id,
-            url = %job.data.url,
+            job_id = %job.job.id,
+            url = %job.job.data.url,
             status = %d.result.status_code,
             "Webhook successfully processed (on_success hook)."
         );
     }
 
-    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.job.id))]
     async fn on_nack(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: NackHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::warn!(
-            job_id = %job.id,
-            url = %job.data.url,
-            attempt = %job.attempts,
+            job_id = %job.job.id,
+            url = %job.job.data.url,
+            attempt = %job.job.attempts,
             error = ?d.error,
             delay_ms = %d.delay.map_or(0, |dur| dur.as_millis()),
             "Webhook NACKed (on_nack hook)."
         );
     }
 
-    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.id))]
+    #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.job.id))]
     async fn on_fail(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::error!(
-            job_id = %job.id,
-            url = %job.data.url,
-            attempt = %job.attempts,
+            job_id = %job.job.id,
+            url = %job.job.data.url,
+            attempt = %job.job.attempts,
             error = ?d.error,
             "Webhook FAILED permanently (on_fail hook)."
         );

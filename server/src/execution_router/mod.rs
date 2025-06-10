@@ -16,6 +16,7 @@ use engine_executors::{
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
     },
     webhook::WebhookJobHandler,
+    transaction_registry::TransactionRegistry,
 };
 use twmq::{Queue, error::TwmqError};
 
@@ -25,6 +26,7 @@ pub struct ExecutionRouter {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub transaction_registry: Arc<TransactionRegistry>,
 }
 
 impl ExecutionRouter {
@@ -84,6 +86,15 @@ impl ExecutionRouter {
             webhook_options: webhook_options.clone(),
             rpc_credentials,
         };
+
+        // Register transaction in registry first
+        self.transaction_registry
+            .set_transaction_queue(
+                &base_execution_options.idempotency_key,
+                "external_bundler_send",
+            )
+            .await
+            .map_err(|e| TwmqError::Runtime(format!("Failed to register transaction: {}", e)))?;
 
         // Create job with transaction ID as the job ID for idempotency
         self.external_bundler_send_queue

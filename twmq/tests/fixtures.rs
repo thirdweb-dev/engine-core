@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
-use twmq::job::{Job, JobResult};
-use twmq::{DurableExecution, SuccessHookData};
+use twmq::job::{BorrowedJob, JobResult};
+use twmq::{DurableExecution, SuccessHookData, UserCancellable};
 
 // --- Test Job Definition ---
 
@@ -36,6 +36,14 @@ impl From<TwmqError> for TestJobErrorData {
     }
 }
 
+impl UserCancellable for TestJobErrorData {
+    fn user_cancelled() -> Self {
+        TestJobErrorData {
+            reason: "Transaction cancelled by user".to_string(),
+        }
+    }
+}
+
 // Use a static AtomicBool to signal from the job process to the test
 // In a real scenario, you'd check queue state or results in Redis.
 pub static TEST_JOB_PROCESSED_SUCCESSFULLY: AtomicBool = AtomicBool::new(false);
@@ -49,28 +57,28 @@ impl DurableExecution for TestJobHandler {
 
     // If not using async_trait, the signature is:
     // fn process(&self) -> impl std::future::Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send + Sync {
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         println!(
             "TEST_JOB: Processing job with id_to_check: {}",
-            job.data.id_to_check
+            job.job.data.id_to_check
         );
         // Simulate some work
         tokio::time::sleep(Duration::from_millis(50)).await;
         TEST_JOB_PROCESSED_SUCCESSFULLY.store(true, Ordering::SeqCst);
         Ok(TestJobOutput {
-            reply: format!("Successfully processed '{}'", job.data.message),
+            reply: format!("Successfully processed '{}'", job.job.data.message),
         })
     }
 
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         _d: SuccessHookData<'_, Self::Output>,
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
             "TEST_JOB: on_success hook for id_to_check: {}",
-            job.data.id_to_check
+            job.job.data.id_to_check
         );
     }
 }

@@ -6,7 +6,7 @@ use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{Job, RequeuePosition},
+    job::{BorrowedJob, Job, RequeuePosition},
 };
 use uuid::Uuid;
 
@@ -94,7 +94,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
     fn queue_success_webhook(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         success_data: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
     ) -> Result<(), TwmqError>
@@ -102,7 +102,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::Output: Serialize + Clone,
     {
-        let webhook_options = match job.data.webhook_options() {
+        let webhook_options = match job.job.data.webhook_options() {
             Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
@@ -110,7 +110,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         for w in webhook_options {
             let envelope = WebhookNotificationEnvelope {
                 notification_id: Uuid::new_v4().to_string(),
-                transaction_id: job.transaction_id(),
+                transaction_id: job.job.transaction_id(),
                 timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
                 executor_name: Self::executor_name().to_string(),
                 stage_name: Self::stage_name().to_string(),
@@ -129,7 +129,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
     fn queue_nack_webhook(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         nack_data: NackHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
     ) -> Result<(), TwmqError>
@@ -137,7 +137,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_options = match job.data.webhook_options() {
+        let webhook_options = match job.job.data.webhook_options() {
             Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
@@ -147,7 +147,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
             let envelope = WebhookNotificationEnvelope {
                 notification_id: Uuid::new_v4().to_string(),
-                transaction_id: job.transaction_id(),
+                transaction_id: job.job.transaction_id(),
                 timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
                 executor_name: Self::executor_name().to_string(),
                 stage_name: Self::stage_name().to_string(),
@@ -156,7 +156,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
                     error: nack_data.error.clone(),
                     delay_ms: nack_data.delay.map(|d| d.as_millis() as u64),
                     position: nack_data.position,
-                    attempt_number: job.attempts,
+                    attempt_number: job.job.attempts,
                     max_attempts: None, // TODO: Get from job config if available
                     next_retry_at,
                 },
@@ -170,7 +170,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
 
     fn queue_fail_webhook(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         fail_data: FailHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
     ) -> Result<(), TwmqError>
@@ -178,21 +178,21 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_options = match job.data.webhook_options() {
+        let webhook_options = match job.job.data.webhook_options() {
             Some(w) => w,
             None => return Ok(()), // No webhook configured, skip silently
         };
         for w in webhook_options {
             let envelope = WebhookNotificationEnvelope {
                 notification_id: Uuid::new_v4().to_string(),
-                transaction_id: job.transaction_id(),
+                transaction_id: job.job.transaction_id(),
                 timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
                 executor_name: Self::executor_name().to_string(),
                 stage_name: Self::stage_name().to_string(),
                 event_type: StageEvent::Failure,
                 payload: SerializableFailData {
                     error: fail_data.error.clone(),
-                    final_attempt_number: job.attempts,
+                    final_attempt_number: job.job.attempts,
                 },
                 delivery_target_url: Some(w.url.clone()),
             };
@@ -207,7 +207,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         &self,
         envelope: WebhookNotificationEnvelope<T>,
         webhook_options: WebhookOptions,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         tx: &mut TransactionContext<'_>,
     ) -> Result<(), TwmqError>
     where
@@ -234,14 +234,14 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         let mut webhook_job = self.webhook_queue().clone().job(webhook_payload);
         webhook_job.options.id = format!(
             "{}_{}_webhook",
-            job.transaction_id(),
+            job.job.transaction_id(),
             envelope.notification_id
         );
 
         tx.queue_job(webhook_job)?;
 
         tracing::info!(
-            transaction_id = %job.transaction_id(),
+            transaction_id = %job.job.transaction_id(),
             executor = %Self::executor_name(),
             stage = %Self::stage_name(),
             event = ?envelope.event_type,

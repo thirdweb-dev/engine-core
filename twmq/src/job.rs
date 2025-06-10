@@ -145,6 +145,32 @@ impl<T: Clone> Job<T> {
     }
 }
 
+// A job that has been borrowed from the queue with a lease token
+#[derive(Debug, Clone)]
+pub struct BorrowedJob<T: Clone> {
+    pub job: Job<T>,
+    pub lease_token: String,
+}
+
+impl<T: Clone> BorrowedJob<T> {
+    pub fn new(job: Job<T>, lease_token: String) -> Self {
+        Self { job, lease_token }
+    }
+    
+    // Convenience methods to access job fields
+    pub fn id(&self) -> &str {
+        &self.job.id
+    }
+    
+    pub fn data(&self) -> &T {
+        &self.job.data
+    }
+    
+    pub fn attempts(&self) -> u32 {
+        self.job.attempts
+    }
+}
+
 // Job status enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {

@@ -13,7 +13,7 @@ use fixtures::TestJobErrorData;
 use twmq::{
     DurableExecution, Queue, SuccessHookData,
     hooks::TransactionContext,
-    job::{DelayOptions, Job, JobResult, JobStatus, RequeuePosition},
+    job::{BorrowedJob, DelayOptions, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
     redis::aio::ConnectionManager,
 };
@@ -60,41 +60,41 @@ impl DurableExecution for DelayTestJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = DelayTestJobData;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let actual_delay = now - job.created_at;
+        let actual_delay = now - job.job.created_at;
 
         tracing::info!(
             "DELAY_JOB: Processing job {}, expected delay: {}s, actual delay: {}s",
-            job.id,
-            job.data.expected_delay_seconds,
+            job.job.id,
+            job.job.data.expected_delay_seconds,
             actual_delay
         );
 
         Ok(DelayTestOutput {
             actual_delay_seconds: actual_delay,
-            message: format!("Job {} processed after {}s delay", job.id, actual_delay),
-            test_id: job.data.test_id.clone(),
+            message: format!("Job {} processed after {}s delay", job.job.id, actual_delay),
+            test_id: job.job.data.test_id.clone(),
         })
     }
 
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         d: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!("DELAY_JOB: on_success hook - {}", d.result.message);
 
         // Store processing order in Redis using test-specific key
-        let order_key = format!("test:{}:processing_order", job.data.test_id);
+        let order_key = format!("test:{}:processing_order", job.job.data.test_id);
 
         // Use pipeline to add to processing order list
-        tx.pipeline().rpush(&order_key, &job.id);
+        tx.pipeline().rpush(&order_key, &job.job.id);
         tx.pipeline().expire(&order_key, 300); // Expire after 5 minutes
     }
 }
