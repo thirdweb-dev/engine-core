@@ -5,5 +5,6 @@ pub mod defs;
 pub mod error;
 pub mod execution_options;
 pub mod rpc_clients;
+pub mod signer;
 pub mod transaction;
 pub mod userop;

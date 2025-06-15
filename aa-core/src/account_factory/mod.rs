@@ -42,6 +42,8 @@ pub trait AccountFactory {
         }
         .abi_encode()
     }
+
+    fn implementation_address(&self) -> impl Future<Output = Result<Address, EngineError>> + Send;
 }
 
 /// A factory that can use either implementation based on the provided addresses
@@ -67,6 +69,13 @@ impl<'a, C: Chain> AccountFactory for SmartAccountFactory<'a, C> {
         match self {
             Self::Default(factory) => factory.predict_address(signer, salt_data).await,
             Self::Chained(factory) => factory.predict_address(signer, salt_data).await,
+        }
+    }
+
+    async fn implementation_address(&self) -> Result<Address, EngineError> {
+        match self {
+            Self::Default(factory) => factory.implementation_address().await,
+            Self::Chained(factory) => factory.implementation_address().await,
         }
     }
 }

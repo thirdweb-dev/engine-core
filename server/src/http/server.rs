@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use axum::{Json, Router, routing::get};
-use engine_core::userop::UserOpSigner;
+use engine_core::{signer::EoaSigner, userop::UserOpSigner};
 use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_scalar::{Scalar, Servable};
 
-use crate::{chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager};
+use crate::{
+    chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager,
+};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -17,7 +19,8 @@ use tower_http::{
 #[derive(Clone)]
 pub struct EngineServerState {
     pub chains: Arc<ThirdwebChainService>,
-    pub signer: Arc<UserOpSigner>,
+    pub userop_signer: Arc<UserOpSigner>,
+    pub eoa_signer: Arc<EoaSigner>,
     pub abi_service: Arc<ThirdwebAbiService>,
 
     pub execution_router: Arc<ExecutionRouter>,

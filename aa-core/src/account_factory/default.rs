@@ -66,6 +66,11 @@ impl AccountFactory for DefaultAccountFactory {
         let address = SyncAccountFactory::predict_address_sync(self, signer, salt_data);
         std::future::ready(Ok(address))
     }
+
+    fn implementation_address(&self) -> impl Future<Output = Result<Address, EngineError>> {
+        // Use the sync implementation but return as a ready future
+        std::future::ready(Ok(self.implementation_address))
+    }
 }
 
 #[cfg(test)]

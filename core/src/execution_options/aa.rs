@@ -95,7 +95,7 @@ pub fn default_account_salt() -> String {
     "0x".to_string()
 }
 #[derive(Deserialize, JsonSchema, utoipa::ToSchema)]
-struct EntrypointAndFactoryDetailsDeserHelper {
+pub struct EntrypointAndFactoryDetailsDeserHelper {
     /// ### Entrypoint Contract Address
     /// The address of the ERC-4337 entrypoint contract.
     ///
