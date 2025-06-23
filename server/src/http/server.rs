@@ -58,6 +58,10 @@ impl EngineServer {
             .routes(routes!(
                 crate::http::routes::transaction::cancel_transaction
             ))
+            .routes(routes!(crate::http::routes::sign_message::sign_message))
+            .routes(routes!(
+                crate::http::routes::sign_typed_data::sign_typed_data
+            ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .with_state(state);

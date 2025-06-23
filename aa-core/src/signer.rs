@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::{
     dyn_abi::TypedData,
     hex::FromHex,
@@ -44,7 +46,7 @@ const ERC6492_MAGIC_SUFFIX: [u8; 32] =
 
 /// Builder for creating SmartAccountSigner with computed address and factory pattern detection
 pub struct SmartAccountSignerBuilder<C: Chain> {
-    eoa_signer: EoaSigner,
+    eoa_signer: Arc<EoaSigner>,
     credentials: SigningCredential,
     options: SmartAccountSigningOptions,
     chain: C,
@@ -52,7 +54,7 @@ pub struct SmartAccountSignerBuilder<C: Chain> {
 
 impl<C: Chain + Clone> SmartAccountSignerBuilder<C> {
     pub fn new(
-        eoa_signer: EoaSigner,
+        eoa_signer: Arc<EoaSigner>,
         credentials: SigningCredential,
         options: SmartAccountSigningOptions,
         chain: C,
@@ -142,7 +144,7 @@ pub struct SmartAccountSigner<C: Chain> {
     options: SmartAccountSigningOptions,
     credentials: SigningCredential,
     chain: C,
-    eoa_signer: EoaSigner,
+    eoa_signer: Arc<EoaSigner>,
     smart_account: DeterminedSmartAccount,
     init_calldata: Vec<u8>,
     supports_712_factory: bool,

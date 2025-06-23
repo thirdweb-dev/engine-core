@@ -1,27 +1,28 @@
 // Sign Typed Data Operations
 
-use alloy::{dyn_abi::TypedData, primitives::Address};
+use alloy::dyn_abi::TypedData;
 use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
 };
+use engine_aa_core::signer::SmartAccountSignerBuilder;
 use engine_core::{
-    error::EngineError, 
-    signer::{EoaSigner, SigningOptions, SmartAccountSigningOptions},
+    chain::ChainService,
     credentials::SigningCredential,
+    defs::{AddressDef, U256Def},
+    error::EngineError,
+    signer::{AccountSigner, SigningOptions},
 };
-use engine_aa_core::signer::{SmartAccountSigner, SmartAccountSignerBuilder};
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use thirdweb_core::auth::ThirdwebAuth;
+use serde_json::Value;
 
 use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, SigningCredentialsExtractor},
     server::EngineServerState,
-    types::ErrorResponse,
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
@@ -36,13 +37,53 @@ pub struct SignOptions {
 }
 
 /// Request to sign typed data
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SignTypedDataRequest {
     /// Configuration options for signing
     pub sign_options: SignOptions,
     /// List of typed data to sign
+    #[schema(value_type = Vec<TypedDataDef>)]
     pub params: Vec<TypedData>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct TypedDataDef {
+    /// Signing domain metadata. The signing domain is the intended context for
+    /// the signature (e.g. the dapp, protocol, etc. that it's intended for).
+    /// This data is used to construct the domain separator of the message.
+    pub domain: TypedDataDomainDef,
+
+    /// The custom types used by this message.
+    #[schema(rename = "types")]
+    pub resolver: Value,
+
+    /// The type of the message.
+    #[schema(rename = "primaryType")]
+    pub primary_type: String,
+
+    /// The message to be signed.
+    pub message: serde_json::Value,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct TypedDataDomainDef {
+    pub name: Option<String>,
+
+    /// The current major version of the signing domain. Signatures from
+    /// different versions are not compatible.
+    pub version: Option<String>,
+
+    /// The EIP-155 chain ID. The user-agent should refuse signing if it does
+    /// not match the currently active chain.
+    pub chain_id: Option<U256Def>,
+
+    /// The address of the contract that will verify the signature.
+    pub verifying_contract: Option<AddressDef>,
+
+    /// A disambiguating salt for the protocol. This can be used as a domain
+    /// separator of last resort.
+    pub salt: Option<String>,
 }
 
 /// Result of a single typed data signing operation
@@ -165,7 +206,12 @@ pub async fn sign_typed_data(
 ) -> Result<impl IntoResponse, ApiEngineError> {
     // Process all typed data in parallel
     let sign_futures = request.params.iter().map(|typed_data| {
-        sign_single_typed_data(&state.userop_signer, &signing_credential, &request.sign_options.signing_options, typed_data)
+        sign_single_typed_data(
+            &state,
+            &signing_credential,
+            &request.sign_options.signing_options,
+            typed_data,
+        )
     });
 
     let results: Vec<SignResultItem> = join_all(sign_futures).await;
@@ -181,18 +227,45 @@ pub async fn sign_typed_data(
 // ===== HELPER FUNCTIONS =====
 
 async fn sign_single_typed_data(
-    signer: &Signer,
+    state: &EngineServerState,
     signing_credential: &SigningCredential,
     signing_options: &SigningOptions,
     typed_data: &TypedData,
 ) -> SignResultItem {
-    let params = TypedDataSignerParams {
-        credentials: signing_credential.clone(),
-        typed_data: typed_data.clone(),
-        signing_options: signing_options.clone(),
+    let result = match signing_options {
+        SigningOptions::Eoa(eoa_options) => {
+            // Direct EOA signing
+            state
+                .eoa_signer
+                .sign_typed_data(eoa_options.clone(), typed_data, signing_credential.clone())
+                .await
+        }
+        SigningOptions::SmartAccount(smart_account_options) => {
+            // Smart account signing via builder
+            match state.chains.get_chain(smart_account_options.chain_id) {
+                Ok(chain) => {
+                    match SmartAccountSignerBuilder::new(
+                        state.eoa_signer.clone(),
+                        signing_credential.clone(),
+                        smart_account_options.clone(),
+                        chain,
+                    )
+                    .build()
+                    .await
+                    {
+                        Ok(smart_signer) => smart_signer.sign_typed_data(typed_data).await,
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(EngineError::ValidationError {
+                    message: format!(
+                        "Failed to get chain {}: {}",
+                        smart_account_options.chain_id, e
+                    ),
+                }),
+            }
+        }
     };
-
-    let result = signer.sign_typed_data(params).await;
 
     match result {
         Ok(signature) => {
@@ -200,7 +273,7 @@ async fn sign_single_typed_data(
             let signed_data = serde_json::to_string(typed_data)
                 .unwrap_or_else(|_| "Failed to serialize typed data".to_string());
             SignResultItem::success(signature, signed_data)
-        },
+        }
         Err(e) => SignResultItem::failure(e),
     }
 }

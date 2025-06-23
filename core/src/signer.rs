@@ -10,8 +10,7 @@ use vault_sdk::VaultClient;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
 use crate::{
-    chain::Chain,
-    credentials::{self, SigningCredential},
+    credentials::SigningCredential,
     defs::AddressDef,
     error::EngineError,
     execution_options::aa::{EntrypointAndFactoryDetails, EntrypointAndFactoryDetailsDeserHelper},
@@ -65,9 +64,11 @@ pub struct SmartAccountSigningOptions {
 pub enum SigningOptions {
     /// Standard EOA (Externally Owned Account) signing
     #[serde(rename = "eoa")]
+    #[schema(title = "EOA Signing Options")]
     Eoa(EoaSigningOptions),
     /// Smart Account signing with advanced signature patterns
     #[serde(rename = "smart_account")]
+    #[schema(title = "Smart Account Signing Options")]
     SmartAccount(SmartAccountSigningOptions),
 }
 

@@ -1,58 +1,52 @@
-// Sign Message Operations
-
-use alloy::primitives::{Address, ChainId};
 use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
 };
+use engine_aa_core::signer::SmartAccountSignerBuilder;
 use engine_core::{
-    error::EngineError, 
-    signer::{EoaSigner, SigningOptions, SmartAccountSigningOptions},
+    chain::ChainService,
     credentials::SigningCredential,
+    error::EngineError,
+    signer::{AccountSigner, SigningOptions},
 };
-use engine_aa_core::signer::{SmartAccountSigner, SmartAccountSignerBuilder};
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use thirdweb_core::auth::ThirdwebAuth;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
 use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, SigningCredentialsExtractor},
     server::EngineServerState,
-    types::ErrorResponse,
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
-
-/// Options for signing messages
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SignOptions {
-    /// Configuration options for signing
-    #[serde(flatten)]
-    pub signing_options: SigningOptions,
-}
-
 /// Individual message to sign
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageInput {
     /// The message to sign
     pub message: String,
     /// Message format (text or hex)
     #[serde(default = "default_message_format")]
+    #[schema(value_type = MessageFormatDef)]
     pub format: MessageFormat,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageFormatDef {
+    Text,
+    Hex,
+}
+
 /// Request to sign messages
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SignMessageRequest {
     /// Configuration options for signing
-    pub sign_options: SignOptions,
+    pub signing_options: SigningOptions,
     /// List of messages to sign
     pub params: Vec<MessageInput>,
 }
@@ -177,7 +171,12 @@ pub async fn sign_message(
 ) -> Result<impl IntoResponse, ApiEngineError> {
     // Process all messages in parallel
     let sign_futures = request.params.iter().map(|message_input| {
-        sign_single_message(&state, &signing_credential, &request.sign_options.signing_options, message_input)
+        sign_single_message(
+            &state,
+            &signing_credential,
+            &request.signing_options,
+            message_input,
+        )
     });
 
     let results: Vec<SignResultItem> = join_all(sign_futures).await;
@@ -201,7 +200,8 @@ async fn sign_single_message(
     let result = match signing_options {
         SigningOptions::Eoa(eoa_options) => {
             // Direct EOA signing
-            state.eoa_signer
+            state
+                .eoa_signer
                 .sign_message(
                     eoa_options.clone(),
                     &message_input.message,
@@ -232,7 +232,10 @@ async fn sign_single_message(
                     }
                 }
                 Err(e) => Err(EngineError::ValidationError {
-                    message: format!("Failed to get chain {}: {}", smart_account_options.chain_id, e),
+                    message: format!(
+                        "Failed to get chain {}: {}",
+                        smart_account_options.chain_id, e
+                    ),
                 }),
             }
         }

@@ -38,7 +38,9 @@ async fn main() -> anyhow::Result<()> {
         rpc_base_url: config.thirdweb.urls.rpc,
     });
 
-    let signer = Arc::new(UserOpSigner { vault_client });
+    let signer = Arc::new(UserOpSigner {
+        vault_client: vault_client.clone(),
+    });
     let eoa_signer = Arc::new(EoaSigner { vault_client });
 
     let queue_manager =
