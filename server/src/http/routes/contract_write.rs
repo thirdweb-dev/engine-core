@@ -44,7 +44,7 @@ pub struct ContractWrite {
 }
 
 /// Request to execute write transactions to smart contracts
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteContractRequest {
     /// Execution configuration including chain, account, and transaction options
@@ -95,7 +95,7 @@ impl ContractWrite {
     )
 )]
 /// Write Contract
-/// 
+///
 /// Call a contract function with a transaction
 pub async fn write_contract(
     State(state): State<EngineServerState>,

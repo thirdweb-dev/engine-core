@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 
 use crate::transaction::InnerTransaction;
@@ -9,9 +10,11 @@ pub mod auto;
 
 // Base execution options for all transactions
 // All specific execution options share this
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseExecutionOptions {
+    #[serde_as(as = "DisplayFromStr")]
     pub chain_id: u64,
     #[serde(default = "default_idempotency_key")]
     pub idempotency_key: String,
@@ -56,7 +59,7 @@ where
 
 /// This is the exposed API for execution options
 /// Base and specific execution options are both flattened together
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExecutionOptions {
     #[serde(flatten)]
     pub base: BaseExecutionOptions,
@@ -72,7 +75,7 @@ pub struct WebhookOptions {
 
 /// Incoming transaction request, parsed into InnerTransaction
 /// Exposed API will have varying `params` but will all parse into InnerTransaction before execution
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SendTransactionRequest {
     pub execution_options: ExecutionOptions,
@@ -82,7 +85,7 @@ pub struct SendTransactionRequest {
 
 /// # QueuedTransaction
 /// Response for any request that queues one or more transactions
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedTransaction {
     /// The idempotency key this transaction was queued with
@@ -106,7 +109,7 @@ pub struct QueuedTransaction {
     pub transaction_params: Vec<InnerTransaction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueuedTransactionsResponse {
     pub transactions: Vec<QueuedTransaction>,
 }
