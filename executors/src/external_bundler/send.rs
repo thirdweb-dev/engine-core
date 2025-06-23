@@ -21,15 +21,18 @@ use engine_core::{
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{
-    FailHookData, NackHookData, Queue, SuccessHookData,
+    FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{DelayOptions, Job, JobResult, RequeuePosition, ToJobError, ToJobResult},
+    job::{BorrowedJob, DelayOptions, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
-use crate::webhook::{
-    WebhookJobHandler,
-    envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
+use crate::{
+    webhook::{
+        WebhookJobHandler,
+        envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
+    },
+    transaction_registry::TransactionRegistry,
 };
 
 use super::{
@@ -119,13 +122,22 @@ pub enum ExternalBundlerSendError {
 
     #[error("Internal error: {message}")]
     InternalError { message: String },
+
+    #[error("Transaction cancelled by user")]
+    UserCancelled,
 }
 
 impl From<TwmqError> for ExternalBundlerSendError {
     fn from(error: TwmqError) -> Self {
         ExternalBundlerSendError::InternalError {
-            message: format!("Deserialization error for job data: {}", error.to_string()),
+            message: format!("Deserialization error for job data: {}", error),
         }
+    }
+}
+
+impl UserCancellable for ExternalBundlerSendError {
+    fn user_cancelled() -> Self {
+        ExternalBundlerSendError::UserCancelled
     }
 }
 
@@ -172,6 +184,7 @@ where
     pub deployment_lock: RedisDeploymentLock,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub confirm_queue: Arc<Queue<UserOpConfirmationHandler<CS>>>,
+    pub transaction_registry: Arc<TransactionRegistry>,
 }
 
 impl<CS> ExternalBundlerSendHandler<CS>
@@ -219,12 +232,12 @@ where
     type ErrorData = ExternalBundlerSendError;
     type JobData = ExternalBundlerSendJobData;
 
-    #[tracing::instrument(skip(self, job), fields(transaction_id = job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
+    #[tracing::instrument(skip(self, job), fields(transaction_id = job.job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
     async fn process(
         &self,
-        job: &twmq::job::Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
     ) -> JobResult<Self::Output, Self::ErrorData> {
-        let job_data = &job.data;
+        let job_data = &job.job.data;
 
         // 1. Get Chain
         let chain = self
@@ -237,7 +250,7 @@ where
             .map_err_fail()?;
 
         let chain_auth_headers = job
-            .data
+            .job.data
             .rpc_credentials
             .to_header_map()
             .map_err(|e| ExternalBundlerSendError::InvalidRpcCredentials {
@@ -427,7 +440,7 @@ where
                 );
 
                 // if is_bundler_error_retryable(&e) {
-                if job.attempts < 100 {
+                if job.job.attempts < 100 {
                     mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
                 } else {
                     mapped_error.fail()
@@ -451,24 +464,31 @@ where
 
     async fn on_success(
         &self,
-        job: &Job<ExternalBundlerSendJobData>,
+        job: &BorrowedJob<ExternalBundlerSendJobData>,
         success_data: SuccessHookData<'_, ExternalBundlerSendResult>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Update transaction registry: move from send queue to confirm queue
+        self.transaction_registry.add_set_command(
+            tx.pipeline(),
+            &job.job.data.transaction_id,
+            "userop_confirm",
+        );
+
         let confirmation_job = self
             .confirm_queue
             .clone()
             .job(UserOpConfirmationJobData {
                 account_address: success_data.result.account_address,
-                chain_id: job.data.chain_id,
+                chain_id: job.job.data.chain_id,
                 nonce: success_data.result.nonce,
                 user_op_hash: success_data.result.user_op_hash.clone(),
-                transaction_id: job.data.transaction_id.clone(),
-                webhook_options: job.data.webhook_options().clone(),
-                rpc_credentials: job.data.rpc_credentials.clone(),
+                transaction_id: job.job.data.transaction_id.clone(),
+                webhook_options: job.job.data.webhook_options().clone(),
+                rpc_credentials: job.job.data.rpc_credentials.clone(),
                 deployment_lock_acquired: success_data.result.deployment_lock_acquired,
             })
-            .with_id(job.transaction_id())
+            .with_id(job.job.transaction_id())
             .with_delay(DelayOptions {
                 delay: Duration::from_secs(3),
                 position: RequeuePosition::Last,
@@ -476,7 +496,7 @@ where
 
         if let Err(e) = tx.queue_job(confirmation_job) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue confirmation job"
             );
@@ -484,7 +504,7 @@ where
 
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue success webhook"
             );
@@ -493,21 +513,21 @@ where
 
     async fn on_nack(
         &self,
-        job: &Job<ExternalBundlerSendJobData>,
+        job: &BorrowedJob<ExternalBundlerSendJobData>,
         nack_data: NackHookData<'_, ExternalBundlerSendError>,
         tx: &mut TransactionContext<'_>,
     ) {
         if let Some(account_address) = nack_data.error.did_acquire_lock() {
             self.deployment_lock.release_lock_with_pipeline(
                 tx.pipeline(),
-                job.data.chain_id,
+                job.job.data.chain_id,
                 &account_address,
             );
         }
 
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue nack webhook"
             );
@@ -516,21 +536,27 @@ where
 
     async fn on_fail(
         &self,
-        job: &Job<ExternalBundlerSendJobData>,
+        job: &BorrowedJob<ExternalBundlerSendJobData>,
         fail_data: FailHookData<'_, ExternalBundlerSendError>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Remove transaction from registry since it failed permanently
+        self.transaction_registry.add_remove_command(
+            tx.pipeline(),
+            &job.job.data.transaction_id,
+        );
+
         if let Some(account_address) = fail_data.error.did_acquire_lock() {
             self.deployment_lock.release_lock_with_pipeline(
                 tx.pipeline(),
-                job.data.chain_id,
+                job.job.data.chain_id,
                 &account_address,
             );
         }
 
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue fail webhook"
             );

@@ -1,24 +1,15 @@
 use std::sync::Arc;
 
-use aide::{
-    axum::{ApiRouter, IntoApiResponse, routing::post_with},
-    openapi::{Info, OpenApi},
-    scalar::Scalar,
-};
-use axum::{Extension, Json, Router, routing::get};
-use engine_core::userop::UserOpSigner;
+use axum::{Json, Router, routing::get};
+use engine_core::{signer::EoaSigner, userop::UserOpSigner};
 use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
+use utoipa::OpenApi;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    chains::ThirdwebChainService,
-    execution_router::ExecutionRouter,
-    http::routes::{
-        contract_encode::{encode_contract, encode_contract_docs},
-        contract_read::{read_contract, read_contract_docs},
-        contract_write::{write_contract, write_contract_docs},
-        transaction_write::{write_transaction, write_transaction_docs},
-    },
+    chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager,
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -28,10 +19,12 @@ use tower_http::{
 #[derive(Clone)]
 pub struct EngineServerState {
     pub chains: Arc<ThirdwebChainService>,
-    pub signer: Arc<UserOpSigner>,
+    pub userop_signer: Arc<UserOpSigner>,
+    pub eoa_signer: Arc<EoaSigner>,
     pub abi_service: Arc<ThirdwebAbiService>,
 
     pub execution_router: Arc<ExecutionRouter>,
+    pub queue_manager: Arc<QueueManager>,
 }
 
 pub struct EngineServer {
@@ -40,31 +33,12 @@ pub struct EngineServer {
     app: Router,
 }
 
-// Note that this clones the document on each request.
-// To be more efficient, we could wrap it into an Arc,
-// or even store it as a serialized string.
-async fn serve_api(Extension(api): Extension<Arc<OpenApi>>) -> impl IntoApiResponse {
-    Json(api)
-}
+const SCALAR_HTML: &str = include_str!("../../res/scalar.html");
 
 impl EngineServer {
     pub async fn new(state: EngineServerState) -> Self {
-        aide::generate::on_error(|error| {
-            println!("{error}");
-        });
-
-        aide::generate::extract_schemas(true);
-
-        let mut api = OpenApi {
-            info: Info {
-                description: Some("Engine Core API".to_string()),
-                title: "Engine Core API".to_string(),
-                ..Info::default()
-            },
-            components: None,
-
-            ..OpenApi::default()
-        };
+        #[derive(OpenApi)]
+        struct ApiDoc;
 
         let cors = CorsLayer::new()
             .allow_origin(Any)
@@ -72,41 +46,70 @@ impl EngineServer {
             .allow_headers(Any)
             .allow_credentials(false);
 
-        let v1_router = ApiRouter::new()
-            // generate Scalar API References using the openapi spec route
-            .api_route(
-                "/read/contract",
-                post_with(read_contract, read_contract_docs),
-            )
-            .api_route(
-                "/encode/contract",
-                post_with(encode_contract, encode_contract_docs),
-            )
-            .api_route(
-                "/write/contract",
-                post_with(write_contract, write_contract_docs),
-            )
-            .api_route(
-                "/write/transaction",
-                post_with(write_transaction, write_transaction_docs),
-            )
-            // We'll serve our generated document here.
-            .route("/api.json", get(serve_api))
-            // .route("/smart-account/status", post(smart_account_status))
-            // .route("/userop/create", post(create_user_op))
-            // .route("/test", post(read_contract))
+        let v1_router = OpenApiRouter::new()
+            .routes(routes!(crate::http::routes::contract_write::write_contract,))
+            .routes(routes!(
+                crate::http::routes::contract_encode::encode_contract
+            ))
+            .routes(routes!(crate::http::routes::contract_read::read_contract,))
+            .routes(routes!(
+                crate::http::routes::transaction_write::write_transaction
+            ))
+            .routes(routes!(
+                crate::http::routes::transaction::cancel_transaction
+            ))
+            .routes(routes!(crate::http::routes::sign_message::sign_message))
+            .routes(routes!(
+                crate::http::routes::sign_typed_data::sign_typed_data
+            ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
-            // Generate the documentation.
-            .route("/reference", Scalar::new("/v1/api.json").axum_route())
             .with_state(state);
 
-        let router = ApiRouter::new()
-            .nest_api_service("/v1", v1_router)
-            .finish_api(&mut api)
-            // Expose the documentation to the handlers.
-            .layer(Extension(Arc::new(api)));
-        // Add more routes here
+        let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+            .nest("/v1", v1_router)
+            .split_for_parts();
+
+        let api_clone = api.clone();
+        let router = router
+            .merge(Scalar::with_url("/reference", api).custom_html(SCALAR_HTML))
+            .route("/api.json", get(|| async { Json(api_clone) }));
+
+        // let v1_router = ApiRouter::new()
+        //     // generate Scalar API References using the openapi spec route
+        //     .api_route(
+        //         "/read/contract",
+        //         post_with(read_contract, read_contract_docs),
+        //     )
+        //     .api_route(
+        //         "/encode/contract",
+        //         post_with(encode_contract, encode_contract_docs),
+        //     )
+        //     .api_route(
+        //         "/write/contract",
+        //         post_with(write_contract, write_contract_docs),
+        //     )
+        //     .api_route(
+        //         "/write/transaction",
+        //         post_with(write_transaction, write_transaction_docs),
+        //     )
+        //     // We'll serve our generated document here.
+        //     .route("/api.json", get(serve_api))
+        //     // .route("/smart-account/status", post(smart_account_status))
+        //     // .route("/userop/create", post(create_user_op))
+        //     // .route("/test", post(read_contract))
+        //     .layer(cors)
+        //     .layer(TraceLayer::new_for_http())
+        //     // Generate the documentation.
+        //     .route("/reference", Scalar::new("/v1/api.json").axum_route())
+        //     .with_state(state);
+
+        // let router = ApiRouter::new()
+        //     .nest_api_service("/v1", v1_router)
+        //     .finish_api(&mut api)
+        //     // Expose the documentation to the handlers.
+        //     .layer(Extension(Arc::new(api)));
+        // // Add more routes here
 
         Self {
             handle: None,

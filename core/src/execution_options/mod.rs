@@ -1,12 +1,15 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::{Error, IntoDeserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 
 use crate::transaction::InnerTransaction;
 pub mod aa;
+pub mod auto;
 
-/// Base execution options for all transactions
-/// All specific execution options share this
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+// Base execution options for all transactions
+// All specific execution options share this
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseExecutionOptions {
     pub chain_id: u64,
@@ -19,57 +22,49 @@ fn default_idempotency_key() -> String {
 }
 
 /// All supported specific execution options are contained here
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(tag = "type")]
+#[schema(title = "Execution Option Variants")]
 pub enum SpecificExecutionOptions {
-    /// # ERC-4337 Execution Options
-    /// This struct allows flexible configuration of ERC-4337 execution options,
-    /// with intelligent defaults and inferences based on provided values.
-    ///
-    /// ## Field Inference
-    /// When fields are omitted, the system uses the following inference rules:
-    ///
-    /// 1. **Version Inference**:
-    ///    - If `entrypointVersion` is provided, it's used directly
-    ///    - Otherwise, tries to infer from `entrypointAddress` (if provided)
-    ///    - If that fails, tries to infer from `factoryAddress` (if provided)
-    ///    - Defaults to version 0.7 if no inference is possible
-    ///
-    /// 2. **Entrypoint Address Inference**:
-    ///    - If provided explicitly, it's used as-is
-    ///    - Otherwise, uses the default address corresponding to the inferred version:
-    ///      - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
-    ///      - V0.7: 0x0576a174D229E3cFA37253523E645A78A0C91B57
-    ///
-    /// 3. **Factory Address Inference**:
-    ///    - If provided explicitly, it's used as-is
-    ///    - Otherwise, uses the default factory corresponding to the inferred version:
-    ///      - V0.6: [DEFAULT_FACTORY_ADDRESS_V0_6]
-    ///      - V0.7: [DEFAULT_FACTORY_ADDRESS_V0_7]
-    ///
-    /// 4. **Account Salt**:
-    ///    - If provided explicitly, it's used as-is
-    ///    - Otherwise, defaults to "0x" (commonly used as the defauult "null" salt for smart accounts)
-    ///
-    /// 5. **Smart Account Address**:
-    ///    - If provided explicitly, it's used as-is
-    ///    - Otherwise, it's read from the smart account factory
-    ///
-    /// All optional fields can be omitted for a minimal configuration using version 0.7 defaults.
+    #[serde(rename = "auto")]
+    #[schema(title = "Auto Determine Execution")]
+    Auto(auto::AutoExecutionOptions),
+
+    #[schema(title = "ERC-4337 Execution Options")]
     ERC4337(aa::Erc4337ExecutionOptions),
+}
+
+fn deserialize_with_default_auto<'de, D>(
+    deserializer: D,
+) -> Result<SpecificExecutionOptions, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut map: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+
+    // If no "type" field exists, add it with "Auto"
+    if !map.contains_key("type") {
+        map.insert(
+            "type".to_string(),
+            serde_json::Value::String("auto".to_string()),
+        );
+    }
+
+    // Convert HashMap back to deserializer and deserialize normally
+    SpecificExecutionOptions::deserialize(map.into_deserializer()).map_err(D::Error::custom)
 }
 
 /// This is the exposed API for execution options
 /// Base and specific execution options are both flattened together
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ExecutionOptions {
     #[serde(flatten)]
     pub base: BaseExecutionOptions,
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_with_default_auto")]
     pub specific: SpecificExecutionOptions,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
 pub struct WebhookOptions {
     pub url: String,
     pub secret: Option<String>,
@@ -77,7 +72,7 @@ pub struct WebhookOptions {
 
 /// Incoming transaction request, parsed into InnerTransaction
 /// Exposed API will have varying `params` but will all parse into InnerTransaction before execution
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SendTransactionRequest {
     pub execution_options: ExecutionOptions,
@@ -87,7 +82,7 @@ pub struct SendTransactionRequest {
 
 /// # QueuedTransaction
 /// Response for any request that queues one or more transactions
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedTransaction {
     /// The idempotency key this transaction was queued with
@@ -111,7 +106,7 @@ pub struct QueuedTransaction {
     pub transaction_params: Vec<InnerTransaction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct QueuedTransactionsResponse {
     pub transactions: Vec<QueuedTransaction>,
 }
@@ -126,6 +121,7 @@ impl ExecutionOptions {
     pub fn executor_type(&self) -> ExecutorType {
         match &self.specific {
             SpecificExecutionOptions::ERC4337(_) => ExecutorType::Erc4337,
+            SpecificExecutionOptions::Auto(_) => ExecutorType::Erc4337,
         }
     }
 

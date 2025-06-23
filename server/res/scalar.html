@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+
+<head>
+  <title>Engine API Reference</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <style>
+    :root {
+
+      .scalar-app .markdown ol ul li:before,
+      .scalar-app .markdown ol ol ol ul li:before,
+      .scalar-app .markdown ol ol ol ol ol ol ul li:before {
+        content: none;
+      }
+
+      .scalar-app .markdown h1 {
+        --font-size: calc(var(--scalar-mini, var(--scalar-paragraph)) * 1.2);
+        --markdown-line-height: 1.3;
+      }
+
+      .scalar-app .markdown h2 {
+        --font-size: calc(var(--scalar-mini, var(--scalar-paragraph)) * 1.1);
+        --markdown-line-height: 1.3;
+      }
+
+      .scalar-app .markdown h3 {
+        --font-size: calc(var(--scalar-mini, var(--scalar-paragraph)) * 1.05);
+        --markdown-line-height: 1.3;
+      }
+
+      .scalar-app .property-description .markdown,
+      .scalar-app .property-description .markdown .text-ellipsis,
+      .scalar-app .property-description .markdown .text-ellipsis p {
+        font-size: var(--scalar-mini, var(--scalar-paragraph));
+        --markdown-spacing-md: 8px;
+      }
+    }
+  </style>
+  <link rel="icon" href="https://framerusercontent.com/images/6UCnwoW4U3z16zLNLf31n4ZkyY.png" type="image/png">
+</head>
+
+<body>
+
+  <script id="api-reference" type="application/json">
+    $spec
+</script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+
+</html>

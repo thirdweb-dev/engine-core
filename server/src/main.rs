@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use engine_core::userop::UserOpSigner;
+use engine_core::{signer::EoaSigner, userop::UserOpSigner};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
@@ -38,7 +38,10 @@ async fn main() -> anyhow::Result<()> {
         rpc_base_url: config.thirdweb.urls.rpc,
     });
 
-    let signer = Arc::new(UserOpSigner { vault_client });
+    let signer = Arc::new(UserOpSigner {
+        vault_client: vault_client.clone(),
+    });
+    let eoa_signer = Arc::new(EoaSigner { vault_client });
 
     let queue_manager =
         QueueManager::new(&config.redis, &config.queue, chains.clone(), signer.clone()).await?;
@@ -59,13 +62,16 @@ async fn main() -> anyhow::Result<()> {
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
+        transaction_registry: queue_manager.transaction_registry.clone(),
     };
 
     let mut server = EngineServer::new(EngineServerState {
-        signer: signer.clone(),
+        userop_signer: signer.clone(),
+        eoa_signer: eoa_signer.clone(),
         abi_service: Arc::new(abi_service),
         chains,
         execution_router: Arc::new(execution_router),
+        queue_manager: Arc::new(queue_manager),
     })
     .await;
 

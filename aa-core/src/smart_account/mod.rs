@@ -65,6 +65,7 @@ pub struct SmartAccountFromSalt<'a, C: Chain> {
     pub chain: &'a C,
 }
 
+#[derive(Clone, Debug)]
 pub struct DeterminedSmartAccount {
     pub address: Address,
 }

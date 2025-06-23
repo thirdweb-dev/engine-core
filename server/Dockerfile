@@ -2,12 +2,18 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
+# Install ssh and git for GitHub Actions environment
+RUN apt-get update && apt-get install -y ssh git && rm -rf /var/lib/apt/lists/*
+
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
+
+# Setup SSH for GitHub in clean CI environment
+RUN mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
 
 # Force cargo to use git CLI for SSH
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true

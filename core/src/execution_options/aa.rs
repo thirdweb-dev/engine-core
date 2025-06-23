@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::constants::{DEFAULT_FACTORY_ADDRESS_V0_7, ENTRYPOINT_ADDRESS_V0_7};
 
-#[derive(Deserialize, Serialize, Debug, JsonSchema, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, JsonSchema, Clone, Copy, utoipa::ToSchema)]
 pub enum EntrypointVersion {
     #[serde(rename = "0.6")]
     V0_6,
@@ -28,48 +28,50 @@ pub struct EntrypointAndFactoryDetails {
     pub factory_address: Address,
 }
 
-/// # ERC-4337 Execution Options
+/// ### ERC-4337 Execution Options
 /// This struct allows flexible configuration of ERC-4337 execution options,
 /// with intelligent defaults and inferences based on provided values.
 ///
-/// ## Field Inference
+/// ### Field Inference
 /// When fields are omitted, the system uses the following inference rules:
 ///
-/// 1. **Version Inference**:
-///    - If `entrypointVersion` is provided, it's used directly
-///    - Otherwise, tries to infer from `entrypointAddress` (if provided)
-///    - If that fails, tries to infer from `factoryAddress` (if provided)
-///    - Defaults to version 0.7 if no inference is possible
+/// 1. Version Inference:
+///     - If `entrypointVersion` is provided, it's used directly
+///     - Otherwise, tries to infer from `entrypointAddress` (if provided)
+///     - If that fails, tries to infer from `factoryAddress` (if provided)
+///     - Defaults to version 0.7 if no inference is possible
 ///
-/// 2. **Entrypoint Address Inference**:
+/// 2. Entrypoint Address Inference:
 ///    - If provided explicitly, it's used as-is
 ///    - Otherwise, uses the default address corresponding to the inferred version:
 ///      - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
 ///      - V0.7: 0x0576a174D229E3cFA37253523E645A78A0C91B57
 ///
-/// 3. **Factory Address Inference**:
+/// 3. Factory Address Inference:
 ///    - If provided explicitly, it's used as-is
 ///    - Otherwise, uses the default factory corresponding to the inferred version:
-///      - V0.6: [DEFAULT_FACTORY_ADDRESS_V0_6]
-///      - V0.7: [DEFAULT_FACTORY_ADDRESS_V0_7]
+///      - V0.6: 0x85e23b94e7F5E9cC1fF78BCe78cfb15B81f0DF00 [DEFAULT_FACTORY_ADDRESS_V0_6]
+///      - V0.7: 0x4bE0ddfebcA9A5A4a617dee4DeCe99E7c862dceb [DEFAULT_FACTORY_ADDRESS_V0_7]
 ///
-/// 4. **Account Salt**:
+/// 4. Account Salt:
 ///    - If provided explicitly, it's used as-is
 ///    - Otherwise, defaults to "0x" (commonly used as the defauult "null" salt for smart accounts)
 ///
-/// 5. **Smart Account Address**:
+/// 5. Smart Account Address:
 ///    - If provided explicitly, it's used as-is
 ///    - Otherwise, it's read from the smart account factory
 ///
 /// All optional fields can be omitted for a minimal configuration using version 0.7 defaults.
-#[derive(Deserialize, Serialize, Debug, Clone, JsonSchema)]
+#[derive(Deserialize, Serialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Erc4337ExecutionOptions {
     #[schemars(with = "AddressDef")]
+    #[schema(value_type = AddressDef)]
     pub signer_address: Address,
 
     #[serde(flatten)]
     #[schemars(with = "EntrypointAndFactoryDetailsDeserHelper")]
+    #[schema(value_type = EntrypointAndFactoryDetailsDeserHelper)]
     pub entrypoint_details: EntrypointAndFactoryDetails,
 
     #[serde(default = "default_account_salt")]
@@ -77,6 +79,7 @@ pub struct Erc4337ExecutionOptions {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option::<AddressDef>")]
+    #[schema(value_type = Option<AddressDef>)]
     pub smart_account_address: Option<Address>,
 }
 
@@ -91,9 +94,9 @@ pub fn default_entrypoint_address() -> Address {
 pub fn default_account_salt() -> String {
     "0x".to_string()
 }
-#[derive(Deserialize, JsonSchema)]
-struct EntrypointAndFactoryDetailsDeserHelper {
-    /// # Entrypoint Contract Address
+#[derive(Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct EntrypointAndFactoryDetailsDeserHelper {
+    /// ### Entrypoint Contract Address
     /// The address of the ERC-4337 entrypoint contract.
     ///
     /// If omitted, defaults to the standard address for the specified/inferred version.
@@ -101,13 +104,13 @@ struct EntrypointAndFactoryDetailsDeserHelper {
     /// Known addresses:
     ///
     /// - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
-    ///
     /// - V0.7: 0x0000000071727De22E5E9d8BAf0edAc6f37da032
     #[serde(rename = "entrypointAddress")]
     #[schemars(with = "Option<AddressDef>")]
+    #[schema(value_type = Option<AddressDef>)]
     entrypoint_address: Option<Address>,
 
-    /// # Entrypoint Version
+    /// ### Entrypoint Version
     /// The version of the ERC-4337 standard to use.
     ///
     /// If omitted, the version will be inferred from the entrypoint address,
@@ -115,17 +118,17 @@ struct EntrypointAndFactoryDetailsDeserHelper {
     #[serde(rename = "entrypointVersion")]
     version: Option<EntrypointVersion>,
 
-    /// # Account Factory Address
+    /// ### Account Factory Address
     /// The address of the smart account factory contract.
     /// If omitted, defaults to the thirweb default account factory for the specified/inferred version.
     ///
     /// Known addresses:
     ///
     /// - V0.6: 0x85e23b94e7F5E9cC1fF78BCe78cfb15B81f0DF00
-    ///
     /// - V0.7: 0x4bE0ddfebcA9A5A4a617dee4DeCe99E7c862dceb
     #[serde(rename = "factoryAddress")]
     #[schemars(with = "Option<AddressDef>")]
+    #[schema(value_type = Option<AddressDef>)]
     factory_address: Option<Address>,
 }
 

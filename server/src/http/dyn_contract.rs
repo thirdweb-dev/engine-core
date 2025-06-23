@@ -18,11 +18,12 @@ use thirdweb_core::{
 /// This is the base type used by all contract interaction endpoints.
 /// It supports both function names and full function signatures, with
 /// automatic ABI resolution when needed.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractCall {
     /// The address of the smart contract to call
     #[schemars(with = "AddressDef")]
+    #[schema(value_type = AddressDef)]
     pub contract_address: Address,
     /// The function to call - can be a name like "transfer" or full signature like "transfer(address,uint256)"
     pub method: String,
@@ -30,6 +31,7 @@ pub struct ContractCall {
     pub params: Vec<JsonValue>,
     /// Optional ABI to use instead of fetching from contract verification services
     #[schemars(with = "Option<JsonValue>")]
+    #[schema(value_type = Option<JsonValue>)]
     pub abi: Option<JsonAbi>,
 }
 

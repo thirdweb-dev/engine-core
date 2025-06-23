@@ -8,15 +8,18 @@ use engine_core::{
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{
-    DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
+    DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{Job, JobResult, RequeuePosition, ToJobResult},
+    job::{BorrowedJob, JobResult, RequeuePosition, ToJobResult},
 };
 
-use crate::webhook::{
-    WebhookJobHandler,
-    envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
+use crate::{
+    webhook::{
+        WebhookJobHandler,
+        envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
+    },
+    transaction_registry::TransactionRegistry,
 };
 
 use super::deployment::RedisDeploymentLock;
@@ -66,6 +69,9 @@ pub enum UserOpConfirmationError {
 
     #[error("Internal error: {message}")]
     InternalError { message: String },
+
+    #[error("Transaction cancelled by user")]
+    UserCancelled,
 }
 
 impl From<TwmqError> for UserOpConfirmationError {
@@ -73,6 +79,12 @@ impl From<TwmqError> for UserOpConfirmationError {
         UserOpConfirmationError::InternalError {
             message: format!("Deserialization error for job data: {}", error.to_string()),
         }
+    }
+}
+
+impl UserCancellable for UserOpConfirmationError {
+    fn user_cancelled() -> Self {
+        UserOpConfirmationError::UserCancelled
     }
 }
 
@@ -84,6 +96,7 @@ where
     pub chain_service: Arc<CS>,
     pub deployment_lock: RedisDeploymentLock,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
+    pub transaction_registry: Arc<TransactionRegistry>,
     pub max_confirmation_attempts: u32,
     pub confirmation_retry_delay: Duration,
 }
@@ -96,11 +109,13 @@ where
         chain_service: Arc<CS>,
         deployment_lock: RedisDeploymentLock,
         webhook_queue: Arc<Queue<WebhookJobHandler>>,
+        transaction_registry: Arc<TransactionRegistry>,
     ) -> Self {
         Self {
             chain_service,
             deployment_lock,
             webhook_queue,
+            transaction_registry,
             max_confirmation_attempts: 20, // ~5 minutes with 15 second delays
             confirmation_retry_delay: Duration::from_secs(15),
         }
@@ -121,9 +136,9 @@ where
     type ErrorData = UserOpConfirmationError;
     type JobData = UserOpConfirmationJobData;
 
-    #[tracing::instrument(skip(self, job), fields(transaction_id = job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
-        let job_data = &job.data;
+    #[tracing::instrument(skip(self, job), fields(transaction_id = job.job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
+    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+        let job_data = &job.job.data;
 
         // 1. Get Chain
         let chain = self
@@ -136,7 +151,7 @@ where
             .map_err_fail()?;
 
         let chain = chain.with_new_default_headers(
-            job.data
+            job.job.data
                 .rpc_credentials
                 .to_header_map()
                 .map_err(|e| UserOpConfirmationError::InternalError {
@@ -161,17 +176,17 @@ where
             Some(receipt) => receipt,
             None => {
                 // Receipt not available and max attempts reached - permanent failure
-                if job.attempts >= self.max_confirmation_attempts {
+                if job.job.attempts >= self.max_confirmation_attempts {
                     return Err(UserOpConfirmationError::ReceiptNotAvailable {
                         user_op_hash: job_data.user_op_hash.clone(),
-                        attempt_number: job.attempts,
+                        attempt_number: job.job.attempts,
                     })
                     .map_err_fail(); // FAIL - triggers on_fail hook which will release lock
                 }
 
                 return Err(UserOpConfirmationError::ReceiptNotAvailable {
                     user_op_hash: job_data.user_op_hash.clone(),
-                    attempt_number: job.attempts,
+                    attempt_number: job.job.attempts,
                 })
                 .map_err_nack(Some(self.confirmation_retry_delay), RequeuePosition::Last);
                 // NACK - triggers on_nack hook which keeps lock for retry
@@ -197,23 +212,29 @@ where
 
     async fn on_success(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         success_data: SuccessHookData<'_, Self::Output>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Remove transaction from registry since confirmation is complete
+        self.transaction_registry.add_remove_command(
+            tx.pipeline(),
+            &job.job.data.transaction_id,
+        );
+
         // Atomic cleanup: release lock + update cache if lock was acquired
-        if job.data.deployment_lock_acquired {
+        if job.job.data.deployment_lock_acquired {
             self.deployment_lock
                 .release_lock_and_update_cache_with_pipeline(
                     tx.pipeline(),
-                    job.data.chain_id,
-                    &job.data.account_address,
+                    job.job.data.chain_id,
+                    &job.job.data.account_address,
                     true, // is_deployed = true
                 );
 
             tracing::info!(
-                transaction_id = %job.data.transaction_id,
-                account_address = ?job.data.account_address,
+                transaction_id = %job.job.data.transaction_id,
+                account_address = ?job.job.data.account_address,
                 "Added atomic lock release and cache update to transaction pipeline"
             );
         }
@@ -221,7 +242,7 @@ where
         // Queue success webhook
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue success webhook"
             );
@@ -230,7 +251,7 @@ where
 
     async fn on_nack(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         nack_data: NackHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
     ) {
@@ -238,31 +259,37 @@ where
         // Just queue webhook with current status
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue nack webhook"
             );
         }
 
         tracing::debug!(
-            transaction_id = %job.data.transaction_id,
-            attempt = %job.attempts,
+            transaction_id = %job.job.data.transaction_id,
+            attempt = %job.job.attempts,
             "Confirmation job NACKed, retaining lock for retry"
         );
     }
 
     async fn on_fail(
         &self,
-        job: &Job<Self::JobData>,
+        job: &BorrowedJob<Self::JobData>,
         fail_data: FailHookData<'_, Self::ErrorData>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Remove transaction from registry since it failed permanently
+        self.transaction_registry.add_remove_command(
+            tx.pipeline(),
+            &job.job.data.transaction_id,
+        );
+
         // Always release lock on permanent failure
-        if job.data.deployment_lock_acquired {
+        if job.job.data.deployment_lock_acquired {
             self.deployment_lock.release_lock_with_pipeline(
                 tx.pipeline(),
-                job.data.chain_id,
-                &job.data.account_address,
+                job.job.data.chain_id,
+                &job.job.data.account_address,
             );
 
             let failure_reason = match fail_data.error {
@@ -273,8 +300,8 @@ where
             };
 
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
-                account_address = ?job.data.account_address,
+                transaction_id = %job.job.data.transaction_id,
+                account_address = ?job.job.data.account_address,
                 reason = %failure_reason,
                 "Added lock release to transaction pipeline due to permanent failure"
             );
@@ -283,7 +310,7 @@ where
         // Queue failure webhook
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
-                transaction_id = %job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
                 error = %e,
                 "Failed to queue fail webhook"
             );

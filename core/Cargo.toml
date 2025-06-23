@@ -17,3 +17,4 @@ async-nats = "0.40.0"
 twmq = { version = "0.1.0", path = "../twmq" }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
 uuid = { version = "1.17.0", features = ["v4"] }
+utoipa = "5.4.0"

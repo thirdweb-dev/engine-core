@@ -1,8 +1,11 @@
 // 8:12 PM - COLOCATION: Contract Encode Operations
 
-use aide::{axum::IntoApiResponse, transform::TransformOperation};
 use alloy::{hex, primitives::ChainId};
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Json},
+};
 use engine_core::error::EngineError;
 use futures::future::join_all;
 use schemars::JsonSchema;
@@ -20,7 +23,7 @@ use crate::http::{
 // ===== REQUEST/RESPONSE TYPES =====
 
 /// Options for encoding contract function calls
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EncodeOptions {
     /// The blockchain network ID to encode for
@@ -30,7 +33,7 @@ pub struct EncodeOptions {
 }
 
 /// Request to encode contract function calls
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EncodeRequest {
     /// Configuration options for encoding
@@ -45,7 +48,7 @@ pub struct EncodeRequest {
 ///
 /// Each result can either be successful (containing the encoded transaction data)
 /// or failed (containing detailed error information).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum EncodeResultItem {
     Success(EncodeResultSuccessItem),
@@ -53,11 +56,12 @@ pub enum EncodeResultItem {
 }
 
 /// Successful result from a contract encode operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EncodeResultSuccessItem {
     /// Always true for successful operations
     #[schemars(with = "bool")]
+    #[schema(value_type = bool)]
     pub success: serde_bool::True,
     /// The contract address that would be called
     pub target: String,
@@ -73,24 +77,25 @@ pub struct EncodeResultSuccessItem {
 }
 
 /// Failed result from a contract encode operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct EncodeResultFailureItem {
     /// Always false for failed operations
     #[schemars(with = "bool")]
+    #[schema(value_type = bool)]
     pub success: serde_bool::False,
     /// Detailed error information describing what went wrong
     pub error: EngineError,
 }
 
 /// Collection of results from multiple contract encode operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct EncodeResults {
     /// Array of results, one for each input contract call
     pub results: Vec<EncodeResultItem>,
 }
 
 /// Response from the contract encode endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct EncodeResponse {
     /// Container for all encode operation results
     pub result: EncodeResults,
@@ -150,14 +155,31 @@ impl EncodeResultItem {
 
 // ===== ROUTE HANDLER =====
 
+#[utoipa::path(
+    post,
+    operation_id = "encodeContract",
+    path = "/encode/contract",
+    tag = "Read",
+    request_body(content = EncodeRequest, description = "Encode contract request", content_type = "application/json"),
+    responses(
+        (status = 200, description = "Successfully encoded contract calls", body = EncodeResponse, content_type = "application/json"),
+    ),
+    params(
+        ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
+        ("x-thirdweb-service-key" = Option<String>, Header, description = "Thirdweb service key, passed when using the client ID"),
+        ("x-thirdweb-secret-key" = Option<String>, Header, description = "Thirdweb secret key, passed standalone"),
+    )
+)]
+/// Encode Contract
+///
 /// Encode contract function calls without execution
 pub async fn encode_contract(
     State(state): State<EngineServerState>,
     OptionalRpcCredentialsExtractor(rpc_credentials): OptionalRpcCredentialsExtractor,
     EngineJson(request): EngineJson<EncodeRequest>,
-) -> Result<impl IntoApiResponse, ApiEngineError> {
-    let auth: Option<ThirdwebAuth> = rpc_credentials.and_then(|creds| match creds {
-        engine_core::chain::RpcCredentials::Thirdweb(auth) => Some(auth),
+) -> Result<impl IntoResponse, ApiEngineError> {
+    let auth: Option<ThirdwebAuth> = rpc_credentials.map(|creds| match creds {
+        engine_core::chain::RpcCredentials::Thirdweb(auth) => auth,
     });
 
     let chain_id: ChainId = request.encode_options.chain_id.parse().map_err(|_| {
@@ -202,34 +224,4 @@ pub async fn encode_contract(
             result: EncodeResults { results },
         }),
     ))
-}
-
-// ===== DOCUMENTATION =====
-
-pub fn encode_contract_docs(op: TransformOperation) -> TransformOperation {
-    op.id("encodeContract")
-        .description(
-            "Encode contract function calls without execution.\n\n\
-            This endpoint prepares contract function calls and returns the encoded \
-            transaction data without executing them. This is useful for:\n\
-            - Preparing transaction data for later execution\n\
-            - Debugging contract interactions\n\
-            - Building complex transaction batches\n\
-            - Integration with external signing systems\n\n\
-            ## Features\n\
-            - Encode multiple contract calls in one request\n\
-            - Automatic ABI resolution or use provided ABIs\n\
-            - Returns function selector, call data, and metadata\n\
-            - Detailed error information for each failed encoding\n\n\
-            ## Authentication\n\
-            - Optional: Same as read endpoint for ABI resolution",
-        )
-        .summary("Encode contract call data")
-        .response_with::<200, Json<EncodeResponse>, _>(|res| {
-            res.description("Successfully encoded contract calls")
-        })
-        .response_with::<400, Json<ErrorResponse>, _>(|res| {
-            res.description("Bad request - invalid parameters")
-        })
-        .tag("Contract Operations")
 }

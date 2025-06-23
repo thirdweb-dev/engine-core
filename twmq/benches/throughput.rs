@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use twmq::error::TwmqError;
 use twmq::job::JobError;
+use twmq::{BorrowedJob, UserCancellable};
 
 use twmq::{
     DurableExecution, Queue,
@@ -40,6 +41,14 @@ impl From<TwmqError> for BenchmarkErrorData {
     fn from(error: TwmqError) -> Self {
         BenchmarkErrorData {
             reason: error.to_string(),
+        }
+    }
+}
+
+impl UserCancellable for BenchmarkErrorData {
+    fn user_cancelled() -> Self {
+        BenchmarkErrorData {
+            reason: "Transaction cancelled by user".to_string(),
         }
     }
 }
@@ -100,7 +109,10 @@ impl DurableExecution for BenchmarkJobHandler {
     type ErrorData = BenchmarkErrorData;
     type JobData = BenchmarkJobData;
 
-    async fn process(&self, job: &Job<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -119,7 +131,7 @@ impl DurableExecution for BenchmarkJobHandler {
             .fetch_add(processing_time, Ordering::SeqCst);
 
         // Fresh random decision each processing attempt
-        if rand::thread_rng().gen_bool(job.data.nack_probability) {
+        if rand::thread_rng().gen_bool(job.job.data.nack_probability) {
             self.metrics.jobs_nacked.fetch_add(1, Ordering::SeqCst);
 
             // Random position for nacks as requested
@@ -140,7 +152,7 @@ impl DurableExecution for BenchmarkJobHandler {
             self.metrics.jobs_succeeded.fetch_add(1, Ordering::SeqCst);
 
             Ok(BenchmarkOutput {
-                job_id: job.id.clone(),
+                job_id: job.id().to_string(),
                 processed_at: end_time,
             })
         }

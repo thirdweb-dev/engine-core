@@ -10,6 +10,7 @@ use engine_executors::{
         send::ExternalBundlerSendHandler,
     },
     webhook::{WebhookJobHandler, WebhookRetryConfig},
+    transaction_registry::TransactionRegistry,
 };
 use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 
@@ -22,6 +23,7 @@ pub struct QueueManager {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub transaction_registry: Arc<TransactionRegistry>,
 }
 
 fn get_queue_name_for_namespace(namespace: &Option<String>, name: &str) -> String {
@@ -44,6 +46,12 @@ impl QueueManager {
     ) -> Result<Self, EngineError> {
         // Create Redis clients
         let redis_client = twmq::redis::Client::open(redis_config.url.as_str())?;
+        
+        // Create transaction registry
+        let transaction_registry = Arc::new(TransactionRegistry::new(
+            redis_client.get_connection_manager().await?,
+            queue_config.execution_namespace.clone(),
+        ));
 
         // Create deployment cache and lock
         let deployment_cache = RedisDeploymentCache::new(redis_client.clone()).await?;
@@ -102,6 +110,7 @@ impl QueueManager {
             chain_service.clone(),
             deployment_lock.clone(),
             webhook_queue.clone(),
+            transaction_registry.clone(),
         );
 
         let userop_confirm_queue = Queue::builder()
@@ -121,6 +130,7 @@ impl QueueManager {
             deployment_lock,
             webhook_queue: webhook_queue.clone(),
             confirm_queue: userop_confirm_queue.clone(),
+            transaction_registry: transaction_registry.clone(),
         };
 
         let external_bundler_send_queue = Queue::builder()
@@ -136,6 +146,7 @@ impl QueueManager {
             webhook_queue,
             external_bundler_send_queue,
             userop_confirm_queue,
+            transaction_registry,
         })
     }
 

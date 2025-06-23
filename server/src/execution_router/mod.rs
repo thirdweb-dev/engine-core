@@ -16,6 +16,7 @@ use engine_executors::{
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
     },
     webhook::WebhookJobHandler,
+    transaction_registry::TransactionRegistry,
 };
 use twmq::{Queue, error::TwmqError};
 
@@ -25,6 +26,7 @@ pub struct ExecutionRouter {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub transaction_registry: Arc<TransactionRegistry>,
 }
 
 impl ExecutionRouter {
@@ -59,6 +61,10 @@ impl ExecutionRouter {
 
                 Ok(vec![queued_transaction])
             }
+
+            SpecificExecutionOptions::Auto(auto_execution_options) => {
+                todo!()
+            }
         }
     }
 
@@ -67,19 +73,28 @@ impl ExecutionRouter {
         base_execution_options: &BaseExecutionOptions,
         erc4337_execution_options: &Erc4337ExecutionOptions,
         webhook_options: &Option<Vec<WebhookOptions>>,
-        transactions: &Vec<InnerTransaction>,
+        transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
     ) -> Result<(), TwmqError> {
         let job_data = ExternalBundlerSendJobData {
             transaction_id: base_execution_options.idempotency_key.clone(),
             chain_id: base_execution_options.chain_id,
-            transactions: transactions.clone(),
+            transactions: transactions.to_vec(),
             execution_options: erc4337_execution_options.clone(),
             signing_credential,
             webhook_options: webhook_options.clone(),
             rpc_credentials,
         };
+
+        // Register transaction in registry first
+        self.transaction_registry
+            .set_transaction_queue(
+                &base_execution_options.idempotency_key,
+                "external_bundler_send",
+            )
+            .await
+            .map_err(|e| TwmqError::Runtime(format!("Failed to register transaction: {}", e)))?;
 
         // Create job with transaction ID as the job ID for idempotency
         self.external_bundler_send_queue

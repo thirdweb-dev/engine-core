@@ -1,6 +1,5 @@
 // 8:12 PM - COLOCATION: Contract Read Operations
 
-use aide::{axum::IntoApiResponse, transform::TransformOperation};
 use alloy::dyn_abi::FunctionExt;
 use alloy::primitives::{Address, ChainId, address};
 use alloy::providers::RootProvider;
@@ -8,7 +7,11 @@ use alloy::{
     providers::Provider, rpc::types::eth::TransactionRequest as AlloyTransactionRequest, sol,
     sol_types::SolCall,
 };
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Json},
+};
 use engine_core::{
     chain::{Chain, ChainService},
     defs::AddressDef,
@@ -52,7 +55,7 @@ const MULTICALL3_DEFAULT_ADDRESS: Address = address!("0xcA11bde05977b36311670288
 // ===== REQUEST/RESPONSE TYPES =====
 
 /// Options for reading from smart contracts
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadOptions {
     /// The blockchain network ID to read from
@@ -63,6 +66,7 @@ pub struct ReadOptions {
     /// which is deployed on most networks
     #[serde(default = "default_multicall_address")]
     #[schemars(with = "AddressDef")]
+    #[schema(value_type = AddressDef)]
     pub multicall_address: Address,
     /// Optional address to use as the caller for view functions
     ///
@@ -70,6 +74,7 @@ pub struct ReadOptions {
     /// based on the caller's address or permissions
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<AddressDef>")]
+    #[schema(value_type = Option<AddressDef>)]
     pub from: Option<Address>,
 }
 
@@ -78,7 +83,7 @@ fn default_multicall_address() -> Address {
 }
 
 /// Request to read from multiple smart contracts
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadRequest {
     /// Configuration options for the read operation
@@ -94,7 +99,7 @@ pub struct ReadRequest {
 /// Each result can either be successful (containing the function return value)
 /// or failed (containing detailed error information). The `success` field
 /// indicates which case applies.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum ReadResultItem {
     Success(ReadResultSuccessItem),
@@ -102,10 +107,11 @@ pub enum ReadResultItem {
 }
 
 /// Successful result from a contract read operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ReadResultSuccessItem {
     /// Always true for successful operations
     #[schemars(with = "bool")]
+    #[schema(value_type = bool)]
     pub success: serde_bool::True,
     /// The decoded return value from the contract function
     ///
@@ -115,10 +121,11 @@ pub struct ReadResultSuccessItem {
 }
 
 /// Failed result from a contract read operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ReadResultFailureItem {
     /// Always false for failed operations
     #[schemars(with = "bool")]
+    #[schema(value_type = bool)]
     pub success: serde_bool::False,
     /// Detailed error information describing what went wrong
     ///
@@ -128,7 +135,7 @@ pub struct ReadResultFailureItem {
 }
 
 /// Collection of results from multiple contract read operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ReadResults {
     /// Array of results, one for each input contract call
     ///
@@ -137,7 +144,7 @@ pub struct ReadResults {
 }
 
 /// Response from the contract read endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ReadResponse {
     /// Container for all read operation results
     pub result: ReadResults,
@@ -179,12 +186,29 @@ impl ReadResultItem {
 
 // ===== ROUTE HANDLER =====
 
+#[utoipa::path(
+    post,
+    operation_id = "readContract",
+    path = "/read/contract",
+    tag = "Read",
+    request_body(content = ReadRequest, description = "Read contract request", content_type = "application/json"),
+    responses(
+        (status = 200, description = "Successfully read contract data", body = ReadResponse, content_type = "application/json"),
+    ),
+    params(
+        ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
+        ("x-thirdweb-service-key" = Option<String>, Header, description = "Thirdweb service key, passed when using the client ID"),
+        ("x-thirdweb-secret-key" = Option<String>, Header, description = "Thirdweb secret key, passed standalone"),
+    )
+)]
+/// Read Contract
+/// 
 /// Read from multiple smart contracts using multicall
 pub async fn read_contract(
     State(state): State<EngineServerState>,
     OptionalRpcCredentialsExtractor(rpc_credentials): OptionalRpcCredentialsExtractor,
     EngineJson(request): EngineJson<ReadRequest>,
-) -> Result<impl IntoApiResponse, ApiEngineError> {
+) -> Result<impl IntoResponse, ApiEngineError> {
     let auth: Option<ThirdwebAuth> = rpc_credentials.and_then(|creds| match creds {
         engine_core::chain::RpcCredentials::Thirdweb(auth) => Some(auth),
     });
@@ -355,44 +379,3 @@ fn process_multicall_result(
     }
 }
 
-// ===== DOCUMENTATION =====
-
-pub fn read_contract_docs(op: TransformOperation) -> TransformOperation {
-    op.id("readContract")
-        .description(
-            "Read from multiple smart contracts using multicall.\n\n\
-            This endpoint allows you to efficiently call multiple read-only contract functions \
-            in a single request. All calls are batched using the Multicall3 contract for \
-            optimal gas usage and performance.\n\n\
-            ## Features\n\
-            - Batch multiple contract calls in one request\n\
-            - Automatic ABI resolution or use provided ABIs\n\
-            - Support for function names, signatures, or full function declarations\n\
-            - Detailed error information for each failed call\n\
-            - Preserves original parameter order in results\n\n\
-            ## Authentication\n\
-            - Optional: Provide `x-thirdweb-secret-key` or `x-thirdweb-client-id` + `x-thirdweb-service-key`\n\
-            - If provided, will be used for ABI resolution from verified contracts\n\n\
-            ## Error Handling\n\
-            - Individual call failures don't affect other calls\n\
-            - Each result includes success status and detailed error information\n\
-            - Preparation errors (ABI resolution, parameter encoding) are preserved\n\
-            - Execution errors (multicall failures) are clearly identified"
-        )
-        .summary("Batch read contract functions")
-        .response_with::<200, Json<ReadResponse>, _>(|res| {
-            res.description("Successfully read contract data")
-                .example(ReadResponse {
-                    result: ReadResults {
-                        results: vec![],
-                    },
-                })
-        })
-        .response_with::<400, Json<ErrorResponse>, _>(|res| {
-            res.description("Bad request - invalid parameters or chain ID")
-        })
-        .response_with::<500, Json<ErrorResponse>, _>(|res| {
-            res.description("Internal server error")
-        })
-        .tag("Contract Operations")
-}
