@@ -4,16 +4,16 @@ server:
 
 thirdweb:
   urls:
-    rpc: rpc.thirdweb-dev.com
-    bundler: bundler.thirdweb-dev.com
-    paymaster: bundler.thirdweb-dev.com
-    vault: https://d2w4ge7u2axqfk.cloudfront.net
-    abi_service: https://contract.thirdweb.com/abi/
+    rpc: rpc.thirdweb.com
+    bundler: bundler.thirdweb.com
+    paymaster: bundler.thirdweb.com
+    vault: https://d145tet905juug.cloudfront.net # override in env
+    abi_service: https://contract.thirdweb.com/abi/ # override in env
   secret: read_from_env
   client_id: read_from_env
 
 redis:
-  url: redis://localhost:6379
+  url: override_in_env
 
 queue:
   webhook_workers: 100
