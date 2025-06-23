@@ -46,7 +46,7 @@ where
     if !map.contains_key("type") {
         map.insert(
             "type".to_string(),
-            serde_json::Value::String("Auto".to_string()),
+            serde_json::Value::String("auto".to_string()),
         );
     }
 

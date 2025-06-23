@@ -1,5 +1,3 @@
-use std::option;
-
 use alloy::{
     dyn_abi::TypedData,
     primitives::{Address, ChainId},

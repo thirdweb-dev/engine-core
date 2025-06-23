@@ -270,9 +270,12 @@ async fn sign_single_typed_data(
     match result {
         Ok(signature) => {
             // Convert typed data to JSON string for signed_data field
-            let signed_data = serde_json::to_string(typed_data)
-                .unwrap_or_else(|_| "Failed to serialize typed data".to_string());
-            SignResultItem::success(signature, signed_data)
+            match serde_json::to_string(typed_data) {
+                Ok(signed_data) => SignResultItem::success(signature, signed_data),
+                Err(e) => SignResultItem::failure(EngineError::ValidationError {
+                    message: format!("Failed to serialize typed data: {}", e),
+                }),
+            }
         }
         Err(e) => SignResultItem::failure(e),
     }
