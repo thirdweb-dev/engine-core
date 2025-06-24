@@ -1,7 +1,9 @@
 // 8:12 PM - COLOCATION: Transaction Write Operations
 
 use axum::{
-    debug_handler, extract::State, http::StatusCode,
+    debug_handler,
+    extract::State,
+    http::StatusCode,
     response::{IntoResponse, Json},
 };
 use engine_core::execution_options::{QueuedTransactionsResponse, SendTransactionRequest};
@@ -22,7 +24,7 @@ use crate::http::{
     tag = "Write",
     request_body(content = SendTransactionRequest, description = "Transaction request", content_type = "application/json"),
     responses(
-        (status = 202, description = "Transaction queued successfully", body = QueuedTransactionsResponse, content_type = "application/json"),
+        (status = 202, description = "Transaction queued successfully", body = SuccessResponse<QueuedTransactionsResponse>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -32,7 +34,7 @@ use crate::http::{
     )
 )]
 /// Write Transaction
-/// 
+///
 /// Execute raw transactions
 #[debug_handler]
 pub async fn write_transaction(
@@ -70,4 +72,3 @@ pub async fn write_transaction(
         })),
     ))
 }
-

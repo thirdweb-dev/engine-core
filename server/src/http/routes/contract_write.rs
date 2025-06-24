@@ -82,7 +82,7 @@ impl ContractWrite {
     tag = "Write",
     request_body(content = WriteContractRequest, description = "Write contract request", content_type = "application/json"),
     responses(
-        (status = 202, description = "Transaction(s) queued successfully", body = QueuedTransactionsResponse, content_type = "application/json",
+        (status = 202, description = "Transaction(s) queued successfully", body = SuccessResponse<QueuedTransactionsResponse>, content_type = "application/json",
             example = json!({"transactions": [{"id": "1", "batchIndex": 0, "executionParams": {"chainId": 1, "idempotencyKey": "123", "executorType": "ERC4337"}, "transactionParams": [{"to": "0x123", "data": "0x123", "value": "0x123"}]}]})
         ),
     ),

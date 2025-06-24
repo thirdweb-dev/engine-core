@@ -3,7 +3,7 @@ use engine_core::error::EngineError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, OperationIo)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, OperationIo, utoipa::ToSchema)]
 pub struct SuccessResponse<T> {
     pub result: T,
 }
