@@ -13,9 +13,11 @@ pub struct InnerTransaction {
 
     #[schemars(with = "BytesDef")]
     #[schema(value_type = BytesDef)]
+    #[serde(default)]
     pub data: Bytes,
 
     #[schemars(with = "U256Def")]
     #[schema(value_type = U256Def)]
+    #[serde(default)]
     pub value: U256,
 }
