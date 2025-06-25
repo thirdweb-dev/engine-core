@@ -312,7 +312,7 @@ impl ContractCall {
         value: U256,
     ) -> InnerTransaction {
         InnerTransaction {
-            to: prepared.target,
+            to: Some(prepared.target),
             data: prepared.call_data.clone(),
             value,
         }

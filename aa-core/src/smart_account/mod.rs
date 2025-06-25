@@ -38,7 +38,7 @@ pub trait SmartAccount {
     /// Encode a transaction call to the account
     fn encode_execute(&self, tx: &InnerTransaction) -> Bytes {
         executeCall {
-            _target: tx.to,
+            _target: tx.to.unwrap_or(Address::ZERO),
             _value: tx.value,
             _calldata: tx.data.clone(),
         }
@@ -49,7 +49,10 @@ pub trait SmartAccount {
     /// Encode a batch transaction call to the account
     fn encode_execute_batch(&self, batch: &Vec<InnerTransaction>) -> Bytes {
         executeBatchCall {
-            _target: batch.iter().map(|tx| tx.to).collect(),
+            _target: batch
+                .iter()
+                .map(|tx| tx.to.unwrap_or(Address::ZERO))
+                .collect(),
             _value: batch.iter().map(|tx| tx.value).collect(),
             _calldata: batch.iter().map(|tx| tx.data.clone()).collect(),
         }
