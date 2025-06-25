@@ -13,7 +13,7 @@ use engine_aa_core::{
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
-    error::{AlloyRpcErrorToEngineError, EngineError},
+    error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
     execution_options::{WebhookOptions, aa::Erc4337ExecutionOptions},
     transaction::InnerTransaction,
     userop::{UserOpSigner, UserOpVersion},
@@ -28,11 +28,11 @@ use twmq::{
 };
 
 use crate::{
+    transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
         envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
     },
-    transaction_registry::TransactionRegistry,
 };
 
 use super::{
@@ -250,7 +250,8 @@ where
             .map_err_fail()?;
 
         let chain_auth_headers = job
-            .job.data
+            .job
+            .data
             .rpc_credentials
             .to_header_map()
             .map_err(|e| ExternalBundlerSendError::InvalidRpcCredentials {
@@ -541,10 +542,8 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Remove transaction from registry since it failed permanently
-        self.transaction_registry.add_remove_command(
-            tx.pipeline(),
-            &job.job.data.transaction_id,
-        );
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         if let Some(account_address) = fail_data.error.did_acquire_lock() {
             self.deployment_lock.release_lock_with_pipeline(
@@ -572,11 +571,10 @@ fn map_build_error(
     had_lock: bool,
 ) -> ExternalBundlerSendError {
     let stage = match engine_error {
-        EngineError::RpcError { kind, .. }
-        | EngineError::PaymasterError { kind, .. }
-        | EngineError::BundlerError { kind, .. } => format!("{:?}", kind),
+        EngineError::RpcError { .. } | EngineError::PaymasterError { .. } => "BUILDING".to_string(),
+        EngineError::BundlerError { .. } => "BUNDLING".to_string(),
         EngineError::VaultError { .. } => "Signing".to_string(),
-        _ => "UnknownBuildStep".to_string(),
+        _ => "UNKNOWN".to_string(),
     };
 
     ExternalBundlerSendError::UserOpBuildFailed {
@@ -609,25 +607,75 @@ fn map_bundler_error(
     }
 }
 
-fn is_http_error_code(kind: &engine_core::error::RpcErrorKind, error_code: u16) -> bool {
-    matches!(kind, engine_core::error::RpcErrorKind::TransportHttpError { status, .. } if *status == error_code)
-}
+// fn is_http_error_code(kind: &engine_core::error::RpcErrorKind, error_code: u16) -> bool {
+//     matches!(kind, engine_core::error::RpcErrorKind::TransportHttpError { status, .. } if *status == error_code)
+// }
 
+/// Determines if an error should be retried based on its type and content
 fn is_build_error_retryable(e: &EngineError) -> bool {
     match e {
-        EngineError::RpcError { kind, .. } => {
-            !(is_http_error_code(kind, 400) || is_http_error_code(kind, 401))
-        }
+        // Standard RPC errors - don't retry client errors (4xx)
+        EngineError::RpcError { kind, .. } => !is_client_error(kind),
+
+        // Paymaster and Bundler errors - more restrictive retry policy
         EngineError::PaymasterError { kind, .. } | EngineError::BundlerError { kind, .. } => {
-            !is_http_error_code(kind, 400)
-                && !is_http_error_code(kind, 401)
-                && !matches!(
-                    kind,
-                    engine_core::error::RpcErrorKind::ErrorResp(r)
-                    if r.code == -32000 || r.code == -32603
-                )
+            is_retryable_rpc_error(kind)
         }
+
+        // Vault errors are never retryable (auth/encryption issues)
         EngineError::VaultError { .. } => false,
+
+        // All other errors are not retryable by default
+        _ => false,
+    }
+}
+
+/// Check if an RPC error represents a client error (4xx) that shouldn't be retried
+fn is_client_error(kind: &RpcErrorKind) -> bool {
+    matches!(kind,
+        RpcErrorKind::TransportHttpError { status, .. }
+        if *status >= 400 && *status < 500
+    )
+}
+
+/// Determine if an RPC error from paymaster/bundler should be retried
+fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
+    match kind {
+        // Don't retry client errors (4xx)
+        RpcErrorKind::TransportHttpError { status, .. } if *status >= 400 && *status < 500 => false,
+
+        // Don't retry 500 errors that contain revert data (contract reverts)
+        RpcErrorKind::TransportHttpError { status: 500, body } => !contains_revert_data(body),
+
+        // Don't retry specific JSON-RPC error codes
+        RpcErrorKind::ErrorResp(resp) if is_non_retryable_rpc_code(resp.code) => false,
+
+        // Retry other errors (network issues, temporary server errors, etc.)
+        _ => true,
+    }
+}
+
+/// Check if the error body contains revert data indicating a contract revert
+fn contains_revert_data(body: &str) -> bool {
+    // Common revert selectors that indicate contract execution failures
+    const REVERT_SELECTORS: &[&str] = &[
+        "0x08c379a0", // Error(string)
+        "0x4e487b71", // Panic(uint256)
+    ];
+
+    // Check if body contains any revert selectors
+    REVERT_SELECTORS.iter().any(|selector| body.contains(selector)) ||
+    // Also check for common revert-related keywords
+    body.contains("reverted during simulation") ||
+    body.contains("execution reverted") ||
+    body.contains("UserOperation reverted")
+}
+
+/// Check if an RPC error code should not be retried
+fn is_non_retryable_rpc_code(code: i64) -> bool {
+    match code {
+        -32000 => true, // Invalid input / execution error
+        -32603 => true, // Internal error (often indicates invalid params)
         _ => false,
     }
 }

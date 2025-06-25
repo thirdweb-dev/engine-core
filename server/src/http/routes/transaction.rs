@@ -1,18 +1,16 @@
 // Transaction Management Operations
 
 use axum::{
-    debug_handler, extract::{Path, State}, http::StatusCode,
+    debug_handler,
+    extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Json},
 };
-use serde::{Deserialize, Serialize};
-use twmq::{error::TwmqError, CancelResult as TwmqCancelResult};
+use serde::Serialize;
+use twmq::{CancelResult as TwmqCancelResult, error::TwmqError};
 use utoipa::ToSchema;
 
-use crate::http::{
-    error::ApiEngineError,
-    server::EngineServerState,
-    types::{ErrorResponse, SuccessResponse},
-};
+use crate::http::{error::ApiEngineError, server::EngineServerState, types::SuccessResponse};
 
 // ===== TYPES =====
 
@@ -37,18 +35,17 @@ pub enum CancelResult {
 #[utoipa::path(
     post,
     operation_id = "cancelTransaction",
-    path = "/transaction/{id}/cancel",
-    tag = "Transaction",
+    path = "/transactions/{id}/cancel",
+    tag = "Transactions",
     responses(
         (status = 200, description = "Transaction cancellation result", body = TransactionCancelResponse, content_type = "application/json"),
-        (status = 404, description = "Transaction not found", body = ApiEngineError, content_type = "application/json"),
     ),
     params(
         ("id" = String, Path, description = "Transaction ID to cancel"),
     )
 )]
 /// Cancel Transaction
-/// 
+///
 /// Attempt to cancel a queued transaction. Transactions that have been sent and are waiting for mine cannot be cancelled.
 #[debug_handler]
 pub async fn cancel_transaction(
@@ -86,12 +83,12 @@ pub async fn cancel_transaction(
                         .remove_transaction(&transaction_id)
                         .await
                         .map_err(|e| ApiEngineError(e.into()))?;
-                    
+
                     tracing::info!(
                         transaction_id = %transaction_id,
                         "Transaction cancelled immediately"
                     );
-                    
+
                     CancelResult::CancelledImmediately
                 }
                 TwmqCancelResult::CancellationPending => {
@@ -99,7 +96,7 @@ pub async fn cancel_transaction(
                         transaction_id = %transaction_id,
                         "Transaction cancellation pending"
                     );
-                    
+
                     CancelResult::CancellationPending
                 }
                 TwmqCancelResult::NotFound => {
@@ -107,7 +104,7 @@ pub async fn cancel_transaction(
                         transaction_id = %transaction_id,
                         "Transaction not found in send queue"
                     );
-                    
+
                     CancelResult::NotFound
                 }
             }
@@ -117,7 +114,7 @@ pub async fn cancel_transaction(
                 transaction_id = %transaction_id,
                 "Cannot cancel transaction - already sent and waiting for mine"
             );
-            
+
             CancelResult::CannotCancel {
                 reason: "Transaction has been sent and is waiting for mine".to_string(),
             }
@@ -128,7 +125,7 @@ pub async fn cancel_transaction(
                 queue = %other_queue,
                 "Transaction in unsupported queue for cancellation"
             );
-            
+
             CancelResult::CannotCancel {
                 reason: format!("Transaction in unsupported queue: {}", other_queue),
             }
@@ -138,7 +135,7 @@ pub async fn cancel_transaction(
                 transaction_id = %transaction_id,
                 "Transaction not found in registry"
             );
-            
+
             CancelResult::NotFound
         }
     };
@@ -148,8 +145,5 @@ pub async fn cancel_transaction(
         result,
     };
 
-    Ok((
-        StatusCode::OK,
-        Json(SuccessResponse::new(response)),
-    ))
+    Ok((StatusCode::OK, Json(SuccessResponse::new(response))))
 }

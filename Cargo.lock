@@ -5881,6 +5881,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
 ]
 
 [[package]]

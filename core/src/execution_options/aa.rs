@@ -62,6 +62,8 @@ pub struct EntrypointAndFactoryDetails {
 ///    - Otherwise, it's read from the smart account factory
 ///
 /// All optional fields can be omitted for a minimal configuration using version 0.7 defaults.
+///
+/// The most minimal usage only requires `signerAddress` + `chainId`
 #[derive(Deserialize, Serialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Erc4337ExecutionOptions {

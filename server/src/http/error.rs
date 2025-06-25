@@ -1,15 +1,10 @@
-use crate::http::types::ErrorResponse;
-use aide::OperationIo;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use engine_core::error::{ContractInteractionErrorKind, EngineError, RpcErrorKind};
-use schemars::JsonSchema;
 use serde_json::json;
 
 // Extension trait that lets you pair an error with a status code
 /// Extension trait for EngineError to add HTTP response conversion
-#[derive(OperationIo, JsonSchema, utoipa::ToSchema)]
-#[schemars(transparent)]
-pub struct ApiEngineError(#[schemars(with = "ErrorResponse")] pub EngineError);
+pub struct ApiEngineError(pub EngineError);
 
 // 2. Allow automatic conversion from EngineError
 impl From<EngineError> for ApiEngineError {
@@ -44,8 +39,8 @@ impl ApiEngineError {
         match &self.0 {
             EngineError::RpcError { kind, .. } => match kind {
                 RpcErrorKind::NullResp => StatusCode::BAD_GATEWAY,
-                RpcErrorKind::ErrorResp(_) => StatusCode::BAD_GATEWAY,
-                RpcErrorKind::UnsupportedFeature(_) => StatusCode::NOT_IMPLEMENTED,
+                RpcErrorKind::ErrorResp { .. } => StatusCode::BAD_GATEWAY,
+                RpcErrorKind::UnsupportedFeature { .. } => StatusCode::NOT_IMPLEMENTED,
                 RpcErrorKind::TransportHttpError { status, .. } => {
                     StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
                 }
@@ -53,19 +48,19 @@ impl ApiEngineError {
             },
             EngineError::RpcConfigError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             EngineError::ContractInteractionError { kind, .. } => match kind {
-                ContractInteractionErrorKind::UnknownFunction(_)
-                | ContractInteractionErrorKind::UnknownSelector(_)
-                | ContractInteractionErrorKind::AbiError(_)
-                | ContractInteractionErrorKind::ParameterValidationFailed(_)
-                | ContractInteractionErrorKind::FunctionResolutionFailed(_)
-                | ContractInteractionErrorKind::PreparationFailed(_) => StatusCode::BAD_REQUEST,
+                ContractInteractionErrorKind::UnknownFunction { .. }
+                | ContractInteractionErrorKind::UnknownSelector { .. }
+                | ContractInteractionErrorKind::AbiError { .. }
+                | ContractInteractionErrorKind::ParameterValidationFailed { .. }
+                | ContractInteractionErrorKind::FunctionResolutionFailed { .. }
+                | ContractInteractionErrorKind::PreparationFailed { .. } => StatusCode::BAD_REQUEST,
 
                 ContractInteractionErrorKind::ZeroData { .. } => StatusCode::NOT_FOUND,
 
-                ContractInteractionErrorKind::MulticallExecutionFailed(_)
-                | ContractInteractionErrorKind::TransportError(_) => StatusCode::BAD_GATEWAY,
+                ContractInteractionErrorKind::MulticallExecutionFailed { .. }
+                | ContractInteractionErrorKind::TransportError { .. } => StatusCode::BAD_GATEWAY,
 
-                ContractInteractionErrorKind::ResultDecodingFailed(_) => {
+                ContractInteractionErrorKind::ResultDecodingFailed { .. } => {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
 
@@ -76,7 +71,7 @@ impl ApiEngineError {
             EngineError::PaymasterError { .. } => StatusCode::BAD_REQUEST,
             EngineError::ValidationError { .. } => StatusCode::BAD_REQUEST,
             EngineError::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            EngineError::ThirdwebError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            EngineError::ThirdwebError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

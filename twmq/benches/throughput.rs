@@ -14,7 +14,7 @@ use twmq::{BorrowedJob, UserCancellable};
 
 use twmq::{
     DurableExecution, Queue,
-    job::{Job, JobResult, JobStatus, RequeuePosition},
+    job::{JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
 };
 
@@ -240,7 +240,7 @@ async fn load_test_throughput(
                 if queue
                     .clone()
                     .job(job)
-                    .with_id(&format!("job_{}", job_counter))
+                    .with_id(format!("job_{}", job_counter))
                     .push()
                     .await
                     .is_ok()

@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_with::{DisplayFromStr, serde_as};
+use serde_with::serde_as;
 use std::collections::HashMap;
 
 use crate::transaction::InnerTransaction;
@@ -14,7 +14,6 @@ pub mod auto;
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseExecutionOptions {
-    #[serde_as(as = "DisplayFromStr")]
     pub chain_id: u64,
     #[serde(default = "default_idempotency_key")]
     pub idempotency_key: String,

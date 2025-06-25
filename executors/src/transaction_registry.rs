@@ -13,7 +13,7 @@ pub enum TransactionRegistryError {
 
 impl From<TransactionRegistryError> for EngineError {
     fn from(err: TransactionRegistryError) -> Self {
-        EngineError::InternalError(err.to_string())
+        EngineError::InternalError { message: err.to_string() }
     }
 }
 

@@ -17,7 +17,7 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, OptionalRpcCredentialsExtractor},
     server::EngineServerState,
-    types::ErrorResponse,
+    types::{BatchResultItem, BatchResults, SuccessResponse},
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
@@ -44,25 +44,10 @@ pub struct EncodeRequest {
     pub params: Vec<ContractCall>,
 }
 
-/// Result of a single contract encode operation
-///
-/// Each result can either be successful (containing the encoded transaction data)
-/// or failed (containing detailed error information).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum EncodeResultItem {
-    Success(EncodeResultSuccessItem),
-    Failure(EncodeResultFailureItem),
-}
-
 /// Successful result from a contract encode operation
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EncodeResultSuccessItem {
-    /// Always true for successful operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::True,
     /// The contract address that would be called
     pub target: String,
     /// The encoded function call data
@@ -76,31 +61,6 @@ pub struct EncodeResultSuccessItem {
     pub function_name: String,
 }
 
-/// Failed result from a contract encode operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct EncodeResultFailureItem {
-    /// Always false for failed operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::False,
-    /// Detailed error information describing what went wrong
-    pub error: EngineError,
-}
-
-/// Collection of results from multiple contract encode operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct EncodeResults {
-    /// Array of results, one for each input contract call
-    pub results: Vec<EncodeResultItem>,
-}
-
-/// Response from the contract encode endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct EncodeResponse {
-    /// Container for all encode operation results
-    pub result: EncodeResults,
-}
-
 // ===== CONVENIENCE CONSTRUCTORS =====
 
 impl EncodeResultSuccessItem {
@@ -112,44 +72,11 @@ impl EncodeResultSuccessItem {
         function_name: String,
     ) -> Self {
         Self {
-            success: serde_bool::True,
             target,
             call_data,
             function_selector,
             function_name,
         }
-    }
-}
-
-impl EncodeResultFailureItem {
-    /// Create a new failed encode result
-    pub fn new(error: EngineError) -> Self {
-        Self {
-            success: serde_bool::False,
-            error,
-        }
-    }
-}
-
-impl EncodeResultItem {
-    /// Create a successful encode result item
-    pub fn success(
-        target: String,
-        call_data: String,
-        function_selector: String,
-        function_name: String,
-    ) -> Self {
-        EncodeResultItem::Success(EncodeResultSuccessItem::new(
-            target,
-            call_data,
-            function_selector,
-            function_name,
-        ))
-    }
-
-    /// Create a failed encode result item
-    pub fn failure(error: EngineError) -> Self {
-        EncodeResultItem::Failure(EncodeResultFailureItem::new(error))
     }
 }
 
@@ -162,7 +89,7 @@ impl EncodeResultItem {
     tag = "Read",
     request_body(content = EncodeRequest, description = "Encode contract request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully encoded contract calls", body = EncodeResponse, content_type = "application/json"),
+        (status = 200, description = "Successfully encoded contract calls", body = SuccessResponse<BatchResults<EncodeResultSuccessItem>>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -197,7 +124,7 @@ pub async fn encode_contract(
         join_all(prepare_futures).await;
 
     // Convert all results to encode result items
-    let results: Vec<EncodeResultItem> = preparation_results
+    let results: Vec<BatchResultItem<EncodeResultSuccessItem>> = preparation_results
         .iter()
         .map(|prep_result| match prep_result {
             ContractOperationResult::Success(prepared_call) => {
@@ -207,21 +134,19 @@ pub async fn encode_contract(
                     "0x".to_string()
                 };
 
-                EncodeResultItem::success(
+                BatchResultItem::success(EncodeResultSuccessItem::new(
                     format!("{:#x}", prepared_call.target),
                     format!("0x{}", hex::encode(&prepared_call.call_data)),
                     selector,
                     prepared_call.function.name.clone(),
-                )
+                ))
             }
-            ContractOperationResult::Failure(error) => EncodeResultItem::failure(error.clone()),
+            ContractOperationResult::Failure(error) => BatchResultItem::failure(error.clone()),
         })
         .collect();
 
     Ok((
         StatusCode::OK,
-        Json(EncodeResponse {
-            result: EncodeResults { results },
-        }),
+        Json(SuccessResponse::new(BatchResults { results })),
     ))
 }

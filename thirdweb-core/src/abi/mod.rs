@@ -55,7 +55,7 @@ impl ThirdwebAbiServiceBuilder {
     pub fn build(self) -> Result<ThirdwebAbiService, ThirdwebError> {
         let client = reqwest::Client::builder()
             .build()
-            .map_err(|e| ThirdwebError::http_client_backend(e))?;
+            .map_err(ThirdwebError::http_client_backend)?;
 
         let cache = moka::future::Cache::builder()
             .max_capacity(self.cache_capacity)

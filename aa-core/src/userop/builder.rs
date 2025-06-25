@@ -130,7 +130,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
         let pm_response = self
             .chain
             .paymaster_client()
-            .get_user_op_paymaster_and_data_v0_6(&self.userop, self.entrypoint.clone())
+            .get_user_op_paymaster_and_data_v0_6(&self.userop, self.entrypoint)
             .await
             .map_err(|err| err.to_engine_paymaster_error(self.chain))?;
 

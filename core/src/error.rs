@@ -14,6 +14,7 @@ use twmq::error::TwmqError;
 use crate::chain::Chain;
 
 #[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcErrorKind {
     /// Server returned an error response.
     #[error("server returned an error response: {0}")]
@@ -100,14 +101,22 @@ pub struct RpcErrorInfo {
 
 /// A serializable contract interaction error type
 #[derive(Debug, Error, Serialize, Deserialize, Clone, JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ContractInteractionErrorKind {
     /// Unknown function referenced.
-    #[error("unknown function: function {0} does not exist")]
-    UnknownFunction(String),
+    #[error("unknown function: function {function_name} does not exist")]
+    UnknownFunction {
+        #[serde(rename = "functionName")]
+        function_name: String,
+    },
 
     /// Unknown function selector referenced.
-    #[error("unknown function: function with selector {0:?} does not exist")]
-    UnknownSelector(String), // Serialize as string instead of Selector
+    #[error("unknown function: function with selector {function_selector:?} does not exist")]
+    UnknownSelector {
+        #[serde(rename = "functionSelector")]
+        function_selector: String,
+    }, // Serialize as string instead of Selector
 
     /// Called `deploy` with a transaction that is not a deployment transaction.
     #[error("transaction is not a deployment transaction")]
@@ -127,40 +136,42 @@ pub enum ContractInteractionErrorKind {
     },
 
     /// An error occurred ABI encoding or decoding.
-    #[error("ABI error: {0}")]
-    AbiError(String),
+    #[error("ABI error: {message}")]
+    AbiError { message: String },
 
     /// An error occurred interacting with a contract over RPC.
-    #[error("transport error: {0}")]
-    TransportError(String),
+    #[error("transport error: {message}")]
+    TransportError { message: String },
 
     /// An error occured while waiting for a pending transaction.
-    #[error("pending transaction error: {0}")]
-    PendingTransactionError(String),
+    #[error("pending transaction error: {message}")]
+    PendingTransactionError { message: String },
 
     /// Error during contract function preparation (ABI resolution, parameter encoding)
-    #[error("contract preparation failed: {0}")]
-    PreparationFailed(String),
+    #[error("contract preparation failed: {message}")]
+    PreparationFailed { message: String },
 
     /// Error during multicall execution
-    #[error("multicall execution failed: {0}")]
-    MulticallExecutionFailed(String),
+    #[error("multicall execution failed: {message}")]
+    MulticallExecutionFailed { message: String },
 
     /// Error during result decoding
-    #[error("result decoding failed: {0}")]
-    ResultDecodingFailed(String),
+    #[error("result decoding failed: {message}")]
+    ResultDecodingFailed { message: String },
 
     /// Parameter validation error
-    #[error("parameter validation failed: {0}")]
-    ParameterValidationFailed(String),
+    #[error("parameter validation failed: {message}")]
+    ParameterValidationFailed { message: String },
 
     /// Function resolution error
-    #[error("function resolution failed: {0}")]
-    FunctionResolutionFailed(String),
+    #[error("function resolution failed: {message}")]
+    FunctionResolutionFailed { message: String },
 }
 
-#[derive(Error, Debug, Serialize, Clone, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Error, Debug, Serialize, Clone, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "type")]
 pub enum EngineError {
+    #[schema(title = "EVM RPC Error")]
     #[error("RPC error on chain {chain_id} at {rpc_url}: {message}")]
     RpcError {
         /// Detailed RPC error information
@@ -170,6 +181,7 @@ pub enum EngineError {
         kind: RpcErrorKind,
     },
 
+    #[schema(title = "ERC4337 Paymster Error")]
     #[error("Paymaster error on chain {chain_id} at {rpc_url}: {message}")]
     PaymasterError {
         /// Detailed RPC error information
@@ -179,6 +191,7 @@ pub enum EngineError {
         kind: RpcErrorKind,
     },
 
+    #[schema(title = "ERC4337 Bundler Error")]
     #[error("BundlerError error on chain {chain_id} at {rpc_url}: {message}")]
     BundlerError {
         /// Detailed RPC error information
@@ -188,16 +201,18 @@ pub enum EngineError {
         kind: RpcErrorKind,
     },
 
+    #[schema(title = "Engine Vault KMS Error")]
     #[error("Error interaction with vault: {message}")]
     VaultError { message: String },
 
+    #[schema(title = "RPC Configuration Error")]
     #[error("Bad RPC configuration: {message}")]
     RpcConfigError { message: String },
 
+    #[schema(title = "EVM Contract Interaction Error")]
     #[error("Contract interaction error: {message}")]
     ContractInteractionError {
         /// Contract address
-        #[schemars(with = "Option<AddressDef>")]
         #[schema(value_type = Option<AddressDef>)]
         contract_address: Option<Address>,
         /// Chain ID
@@ -208,14 +223,17 @@ pub enum EngineError {
         kind: ContractInteractionErrorKind,
     },
 
+    #[schema(title = "Validation Error")]
     #[error("Validation error: {message}")]
     ValidationError { message: String },
 
-    #[error("Thirdweb error: {0}")]
-    ThirdwebError(#[from] ThirdwebError),
+    #[schema(title = "Thirdweb Services Error")]
+    #[error("Thirdweb error: {message}")]
+    ThirdwebError { message: String },
 
-    #[error("Internal error: {0}")]
-    InternalError(String),
+    #[schema(title = "Engine Internal Error")]
+    #[error("Internal error: {message}")]
+    InternalError { message: String },
 }
 
 impl From<InvalidHeaderValue> for EngineError {
@@ -236,7 +254,7 @@ impl EngineError {
             contract_address,
             chain_id,
             message: message.clone(),
-            kind: ContractInteractionErrorKind::PreparationFailed(message),
+            kind: ContractInteractionErrorKind::PreparationFailed { message },
         }
     }
 
@@ -245,7 +263,7 @@ impl EngineError {
             contract_address: None,
             chain_id,
             message: message.clone(),
-            kind: ContractInteractionErrorKind::MulticallExecutionFailed(message),
+            kind: ContractInteractionErrorKind::MulticallExecutionFailed { message },
         }
     }
 
@@ -258,7 +276,7 @@ impl EngineError {
             contract_address,
             chain_id,
             message: message.clone(),
-            kind: ContractInteractionErrorKind::ResultDecodingFailed(message),
+            kind: ContractInteractionErrorKind::ResultDecodingFailed { message },
         }
     }
 }
@@ -338,11 +356,15 @@ impl ContractErrorToEngineError for alloy::contract::Error {
         let (message, kind) = match self {
             alloy::contract::Error::UnknownFunction(name) => (
                 format!("Unknown function: {}", name),
-                ContractInteractionErrorKind::UnknownFunction(name),
+                ContractInteractionErrorKind::UnknownFunction {
+                    function_name: name,
+                },
             ),
             alloy::contract::Error::UnknownSelector(selector) => (
                 format!("Unknown selector: {:?}", selector),
-                ContractInteractionErrorKind::UnknownSelector(format!("{:?}", selector)),
+                ContractInteractionErrorKind::UnknownSelector {
+                    function_selector: format!("{:?}", selector),
+                },
             ),
             alloy::contract::Error::NotADeploymentTransaction => (
                 "Transaction is not a deployment transaction".to_string(),
@@ -361,15 +383,21 @@ impl ContractErrorToEngineError for alloy::contract::Error {
             ),
             alloy::contract::Error::AbiError(err) => (
                 format!("ABI error: {}", err),
-                ContractInteractionErrorKind::AbiError(err.to_string()),
+                ContractInteractionErrorKind::AbiError {
+                    message: err.to_string(),
+                },
             ),
             alloy::contract::Error::TransportError(err) => (
                 format!("Transport error: {}", err),
-                ContractInteractionErrorKind::TransportError(err.to_string()),
+                ContractInteractionErrorKind::TransportError {
+                    message: err.to_string(),
+                },
             ),
             alloy::contract::Error::PendingTransactionError(err) => (
                 format!("Pending transaction error: {}", err),
-                ContractInteractionErrorKind::PendingTransactionError(err.to_string()),
+                ContractInteractionErrorKind::PendingTransactionError {
+                    message: err.to_string(),
+                },
             ),
         };
 
@@ -382,14 +410,26 @@ impl ContractErrorToEngineError for alloy::contract::Error {
     }
 }
 
+impl From<ThirdwebError> for EngineError {
+    fn from(error: ThirdwebError) -> Self {
+        EngineError::ThirdwebError {
+            message: error.to_string(),
+        }
+    }
+}
+
 impl From<twmq::redis::RedisError> for EngineError {
     fn from(error: twmq::redis::RedisError) -> Self {
-        EngineError::InternalError(error.to_string())
+        EngineError::InternalError {
+            message: error.to_string(),
+        }
     }
 }
 
 impl From<TwmqError> for EngineError {
     fn from(error: TwmqError) -> Self {
-        EngineError::InternalError(error.to_string())
+        EngineError::InternalError {
+            message: error.to_string(),
+        }
     }
 }

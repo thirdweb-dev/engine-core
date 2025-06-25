@@ -19,6 +19,7 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, SigningCredentialsExtractor},
     server::EngineServerState,
+    types::{BatchResultItem, BatchResults, SuccessResponse},
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
@@ -51,26 +52,6 @@ pub struct SignMessageRequest {
     pub params: Vec<MessageInput>,
 }
 
-/// Result of a single message signing operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum SignResultItem {
-    Success(SignResultSuccessItem),
-    Failure(SignResultFailureItem),
-}
-
-/// Successful result from a message signing operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SignResultSuccessItem {
-    /// Always true for successful operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::True,
-    /// The signing result data
-    pub result: SignResultData,
-}
-
 /// Data returned from successful signing
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -79,68 +60,6 @@ pub struct SignResultData {
     pub signature: String,
     /// The data that was signed (original message)
     pub signed_data: String,
-}
-
-/// Failed result from a message signing operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SignResultFailureItem {
-    /// Always false for failed operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::False,
-    /// Detailed error information describing what went wrong
-    pub error: EngineError,
-}
-
-/// Collection of results from multiple message signing operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SignResults {
-    /// Array of results, one for each input message
-    pub results: Vec<SignResultItem>,
-}
-
-/// Response from the sign message endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SignMessageResponse {
-    /// Container for all message signing results
-    pub result: SignResults,
-}
-
-// ===== CONVENIENCE CONSTRUCTORS =====
-
-impl SignResultSuccessItem {
-    /// Create a new successful sign result
-    pub fn new(signature: String, signed_data: String) -> Self {
-        Self {
-            success: serde_bool::True,
-            result: SignResultData {
-                signature,
-                signed_data,
-            },
-        }
-    }
-}
-
-impl SignResultFailureItem {
-    /// Create a new failed sign result
-    pub fn new(error: EngineError) -> Self {
-        Self {
-            success: serde_bool::False,
-            error,
-        }
-    }
-}
-
-impl SignResultItem {
-    /// Create a successful sign result item
-    pub fn success(signature: String, signed_data: String) -> Self {
-        SignResultItem::Success(SignResultSuccessItem::new(signature, signed_data))
-    }
-
-    /// Create a failed sign result item
-    pub fn failure(error: EngineError) -> Self {
-        SignResultItem::Failure(SignResultFailureItem::new(error))
-    }
 }
 
 // ===== ROUTE HANDLER =====
@@ -152,7 +71,7 @@ impl SignResultItem {
     tag = "Signature",
     request_body(content = SignMessageRequest, description = "Sign message request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully signed messages", body = SignMessageResponse, content_type = "application/json"),
+        (status = 200, description = "Successfully signed messages", body = SuccessResponse<BatchResults<SignResultData>>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -179,12 +98,12 @@ pub async fn sign_message(
         )
     });
 
-    let results: Vec<SignResultItem> = join_all(sign_futures).await;
+    let results: Vec<BatchResultItem<SignResultData>> = join_all(sign_futures).await;
 
     Ok((
         StatusCode::OK,
-        Json(SignMessageResponse {
-            result: SignResults { results },
+        Json(SuccessResponse {
+            result: BatchResults { results },
         }),
     ))
 }
@@ -196,7 +115,7 @@ async fn sign_single_message(
     signing_credential: &SigningCredential,
     signing_options: &SigningOptions,
     message_input: &MessageInput,
-) -> SignResultItem {
+) -> BatchResultItem<SignResultData> {
     let result = match signing_options {
         SigningOptions::Eoa(eoa_options) => {
             // Direct EOA signing
@@ -210,7 +129,7 @@ async fn sign_single_message(
                 )
                 .await
         }
-        SigningOptions::SmartAccount(smart_account_options) => {
+        SigningOptions::ERC4337(smart_account_options) => {
             // Smart account signing via builder
             match state.chains.get_chain(smart_account_options.chain_id) {
                 Ok(chain) => {
@@ -242,8 +161,11 @@ async fn sign_single_message(
     };
 
     match result {
-        Ok(signature) => SignResultItem::success(signature, message_input.message.clone()),
-        Err(e) => SignResultItem::failure(e),
+        Ok(signature) => BatchResultItem::success(SignResultData {
+            signature,
+            signed_data: message_input.message.clone(),
+        }),
+        Err(e) => BatchResultItem::failure(e),
     }
 }
 

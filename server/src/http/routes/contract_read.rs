@@ -24,6 +24,7 @@ use serde_json::Value as JsonValue;
 use thirdweb_core::auth::ThirdwebAuth;
 
 use crate::http::extractors::EngineJson;
+use crate::http::types::{BatchResultItem, BatchResults, SuccessResponse};
 use crate::http::{
     dyn_contract::{
         ContractCall, ContractOperationResult, PreparedContractCall, dyn_sol_value_to_json,
@@ -31,7 +32,6 @@ use crate::http::{
     error::ApiEngineError,
     extractors::OptionalRpcCredentialsExtractor,
     server::EngineServerState,
-    types::ErrorResponse,
 };
 
 // Multicall3 contract ABI for aggregate3 function
@@ -94,95 +94,16 @@ pub struct ReadRequest {
     pub params: Vec<ContractCall>,
 }
 
-/// Result of a single contract read operation
-///
-/// Each result can either be successful (containing the function return value)
-/// or failed (containing detailed error information). The `success` field
-/// indicates which case applies.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum ReadResultItem {
-    Success(ReadResultSuccessItem),
-    Failure(ReadResultFailureItem),
-}
-
 /// Successful result from a contract read operation
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ReadResultSuccessItem {
-    /// Always true for successful operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::True,
+#[serde(transparent)]
+pub struct ReadResultSuccessItem(
     /// The decoded return value from the contract function
     ///
     /// For functions returning a single value, this will be that value.
     /// For functions returning multiple values, this will be an array.
-    pub result: JsonValue,
-}
-
-/// Failed result from a contract read operation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ReadResultFailureItem {
-    /// Always false for failed operations
-    #[schemars(with = "bool")]
-    #[schema(value_type = bool)]
-    pub success: serde_bool::False,
-    /// Detailed error information describing what went wrong
-    ///
-    /// This includes the error type, chain information, and specific
-    /// failure details to help with debugging
-    pub error: EngineError,
-}
-
-/// Collection of results from multiple contract read operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ReadResults {
-    /// Array of results, one for each input contract call
-    ///
-    /// Results are returned in the same order as the input parameters
-    pub results: Vec<ReadResultItem>,
-}
-
-/// Response from the contract read endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ReadResponse {
-    /// Container for all read operation results
-    pub result: ReadResults,
-}
-
-// ===== CONVENIENCE CONSTRUCTORS =====
-
-impl ReadResultSuccessItem {
-    /// Create a new successful read result
-    pub fn new(result: JsonValue) -> Self {
-        Self {
-            success: serde_bool::True,
-            result,
-        }
-    }
-}
-
-impl ReadResultFailureItem {
-    /// Create a new failed read result
-    pub fn new(error: EngineError) -> Self {
-        Self {
-            success: serde_bool::False,
-            error,
-        }
-    }
-}
-
-impl ReadResultItem {
-    /// Create a successful read result item
-    pub fn success(result: JsonValue) -> Self {
-        ReadResultItem::Success(ReadResultSuccessItem::new(result))
-    }
-
-    /// Create a failed read result item
-    pub fn failure(error: EngineError) -> Self {
-        ReadResultItem::Failure(ReadResultFailureItem::new(error))
-    }
-}
+    JsonValue,
+);
 
 // ===== ROUTE HANDLER =====
 
@@ -193,7 +114,7 @@ impl ReadResultItem {
     tag = "Read",
     request_body(content = ReadRequest, description = "Read contract request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully read contract data", body = ReadResponse, content_type = "application/json"),
+        (status = 200, description = "Successfully read contract data", body = SuccessResponse<BatchResults<ReadResultSuccessItem>>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -202,15 +123,15 @@ impl ReadResultItem {
     )
 )]
 /// Read Contract
-/// 
+///
 /// Read from multiple smart contracts using multicall
 pub async fn read_contract(
     State(state): State<EngineServerState>,
     OptionalRpcCredentialsExtractor(rpc_credentials): OptionalRpcCredentialsExtractor,
     EngineJson(request): EngineJson<ReadRequest>,
 ) -> Result<impl IntoResponse, ApiEngineError> {
-    let auth: Option<ThirdwebAuth> = rpc_credentials.and_then(|creds| match creds {
-        engine_core::chain::RpcCredentials::Thirdweb(auth) => Some(auth),
+    let auth: Option<ThirdwebAuth> = rpc_credentials.map(|creds| match creds {
+        engine_core::chain::RpcCredentials::Thirdweb(auth) => auth,
     });
 
     let chain_id: ChainId = request.read_options.chain_id.parse().map_err(|_| {
@@ -274,8 +195,8 @@ pub async fn read_contract(
 
     Ok((
         StatusCode::OK,
-        Json(ReadResponse {
-            result: ReadResults { results },
+        Json(SuccessResponse {
+            result: BatchResults { results },
         }),
     ))
 }
@@ -316,7 +237,7 @@ fn map_results_to_original_order(
     preparation_results: &[ContractOperationResult<PreparedContractCall>],
     multicall_results: Option<&[Result3]>,
     call_indices: &[usize],
-) -> Vec<ReadResultItem> {
+) -> Vec<BatchResultItem<ReadResultSuccessItem>> {
     let mut multicall_iter = multicall_results.unwrap_or(&[]).iter();
 
     preparation_results
@@ -329,18 +250,19 @@ fn map_results_to_original_order(
                         if let Some(multicall_result) = multicall_iter.next() {
                             process_multicall_result(multicall_result, prepared_call)
                         } else {
-                            ReadResultItem::failure(EngineError::contract_multicall_error(
+                            BatchResultItem::failure(EngineError::contract_multicall_error(
                                 0, // Chain ID not available here
                                 "Multicall execution failed".to_string(),
                             ))
                         }
                     } else {
-                        ReadResultItem::failure(EngineError::InternalError(
-                            "Internal error: prepared call not found in multicall".to_string(),
-                        ))
+                        BatchResultItem::failure(EngineError::InternalError {
+                            message: "Internal error: prepared call not found in multicall"
+                                .to_string(),
+                        })
                     }
                 }
-                ContractOperationResult::Failure(error) => ReadResultItem::failure(error.clone()),
+                ContractOperationResult::Failure(error) => BatchResultItem::failure(error.clone()),
             }
         })
         .collect()
@@ -350,9 +272,9 @@ fn map_results_to_original_order(
 fn process_multicall_result(
     multicall_result: &Result3,
     prepared_call: &PreparedContractCall,
-) -> ReadResultItem {
+) -> BatchResultItem<ReadResultSuccessItem> {
     if !multicall_result.success {
-        return ReadResultItem::failure(EngineError::contract_multicall_error(
+        return BatchResultItem::failure(EngineError::contract_multicall_error(
             0, // Chain ID not available here
             "Multicall execution failed".to_string(),
         ));
@@ -367,10 +289,10 @@ fn process_multicall_result(
                 1 => dyn_sol_value_to_json(&decoded_values[0]),
                 _ => JsonValue::Array(decoded_values.iter().map(dyn_sol_value_to_json).collect()),
             };
-            ReadResultItem::success(result_json)
+            BatchResultItem::success(ReadResultSuccessItem(result_json))
         }
         Err(e) => {
-            ReadResultItem::failure(EngineError::contract_decoding_error(
+            BatchResultItem::failure(EngineError::contract_decoding_error(
                 Some(prepared_call.target),
                 0, // Chain ID not available here
                 format!("Failed to decode result: {}", e),
@@ -378,4 +300,3 @@ fn process_multicall_result(
         }
     }
 }
-

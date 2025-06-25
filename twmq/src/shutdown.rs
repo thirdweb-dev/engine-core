@@ -17,7 +17,7 @@ impl<H: crate::DurableExecution> WorkerHandle<H> {
         );
 
         // Signal shutdown to the worker
-        if let Err(_) = self.shutdown_tx.send(()) {
+        if self.shutdown_tx.send(()).is_err() {
             tracing::warn!(
                 "Worker for queue {} was already shutting down",
                 self.queue.name()
@@ -47,7 +47,7 @@ impl<H: crate::DurableExecution> WorkerHandle<H> {
                     self.queue.name(),
                     e
                 );
-                Err(TwmqError::Runtime(format!("Worker panic: {}", e)))
+                Err(TwmqError::Runtime { message: format!("Worker panic: {}", e) })
             }
         }
     }
@@ -81,7 +81,7 @@ impl ShutdownHandle {
 
         // Send shutdown signals to all workers first
         for shutdown_tx in self.shutdown_txs {
-            if let Err(_) = shutdown_tx.send(()) {
+            if shutdown_tx.send(()).is_err() {
                 tracing::warn!("A worker was already shutting down");
             }
         }
@@ -101,7 +101,7 @@ impl ShutdownHandle {
                     errors.push(e);
                 }
                 Err(e) => {
-                    let runtime_error = TwmqError::Runtime(format!("Worker {} panic: {}", i, e));
+                    let runtime_error = TwmqError::Runtime { message: format!("Worker {} panic: {}", i, e) };
                     tracing::error!("Worker {} task panicked during shutdown: {:?}", i, e);
                     errors.push(runtime_error);
                 }

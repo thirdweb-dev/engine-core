@@ -15,11 +15,11 @@ use twmq::{
 };
 
 use crate::{
+    transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
         envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
     },
-    transaction_registry::TransactionRegistry,
 };
 
 use super::deployment::RedisDeploymentLock;
@@ -77,7 +77,7 @@ pub enum UserOpConfirmationError {
 impl From<TwmqError> for UserOpConfirmationError {
     fn from(error: TwmqError) -> Self {
         UserOpConfirmationError::InternalError {
-            message: format!("Deserialization error for job data: {}", error.to_string()),
+            message: format!("Deserialization error for job data: {}", error),
         }
     }
 }
@@ -117,7 +117,7 @@ where
             webhook_queue,
             transaction_registry,
             max_confirmation_attempts: 20, // ~5 minutes with 15 second delays
-            confirmation_retry_delay: Duration::from_secs(15),
+            confirmation_retry_delay: Duration::from_secs(5),
         }
     }
 
@@ -137,7 +137,10 @@ where
     type JobData = UserOpConfirmationJobData;
 
     #[tracing::instrument(skip(self, job), fields(transaction_id = job.job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
 
         // 1. Get Chain
@@ -151,7 +154,8 @@ where
             .map_err_fail()?;
 
         let chain = chain.with_new_default_headers(
-            job.job.data
+            job.job
+                .data
                 .rpc_credentials
                 .to_header_map()
                 .map_err(|e| UserOpConfirmationError::InternalError {
@@ -217,10 +221,8 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Remove transaction from registry since confirmation is complete
-        self.transaction_registry.add_remove_command(
-            tx.pipeline(),
-            &job.job.data.transaction_id,
-        );
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         // Atomic cleanup: release lock + update cache if lock was acquired
         if job.job.data.deployment_lock_acquired {
@@ -279,10 +281,8 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Remove transaction from registry since it failed permanently
-        self.transaction_registry.add_remove_command(
-            tx.pipeline(),
-            &job.job.data.transaction_id,
-        );
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         // Always release lock on permanent failure
         if job.job.data.deployment_lock_acquired {

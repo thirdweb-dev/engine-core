@@ -59,6 +59,12 @@ where
     _phantom: PhantomData<(R, N, Hn)>,
 }
 
+impl<H: DurableExecution> Default for QueueBuilder<H, NoRedis, NoName, NoHandler> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<H: DurableExecution> QueueBuilder<H, NoRedis, NoName, NoHandler> {
     /// Create a new queue builder
     pub fn new() -> Self {

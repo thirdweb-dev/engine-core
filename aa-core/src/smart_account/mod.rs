@@ -28,11 +28,11 @@ pub trait SmartAccount {
     async fn is_deployed(&self, chain: &impl Chain) -> Result<bool, EngineError> {
         let code = chain
             .provider()
-            .get_code_at(self.address().clone())
+            .get_code_at(self.address().to_owned())
             .await
             .map_err(|t| t.to_engine_error(chain))?;
 
-        Ok(code.len() > 0)
+        Ok(!code.is_empty())
     }
 
     /// Encode a transaction call to the account
@@ -74,7 +74,7 @@ impl<C: Chain> SmartAccountFromSalt<'_, C> {
     pub async fn to_determined_smart_account(self) -> Result<DeterminedSmartAccount, EngineError> {
         let factory = get_account_factory(self.chain, self.factory_address, None);
         let address = factory
-            .predict_address(&self.admin_address, &self.salt_data)
+            .predict_address(&self.admin_address, self.salt_data)
             .await?;
 
         Ok(DeterminedSmartAccount { address })

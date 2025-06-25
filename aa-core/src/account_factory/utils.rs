@@ -34,7 +34,7 @@ pub fn predict_deterministic_address(
     init_code.extend_from_slice(&code_prefix);
 
     // Add the implementation address
-    init_code.extend_from_slice(&implementation.as_slice());
+    init_code.extend_from_slice(implementation.as_slice());
 
     // Add the suffix, but without the final 'ff' byte
     // The suffix in your constant is 16 bytes, but OpenZeppelin uses 15 bytes

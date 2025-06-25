@@ -443,7 +443,7 @@ impl<H: DurableExecution> Queue<H> {
             },
             "cancellation_pending" => Ok(CancelResult::CancellationPending),
             "not_found" => Ok(CancelResult::NotFound),
-            _ => Err(TwmqError::Runtime(format!("Unexpected cancel result: {}", result))),
+            _ => Err(TwmqError::Runtime { message: format!("Unexpected cancel result: {}", result) }),
         }
     }
 
@@ -536,7 +536,7 @@ impl<H: DurableExecution> Queue<H> {
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
-                    TwmqError::Runtime(format!("Failed to acquire permits during shutdown: {}", e))
+                    TwmqError::Runtime { message: format!("Failed to acquire permits during shutdown: {}", e) }
                 })?;
 
             tracing::info!(
@@ -1188,7 +1188,7 @@ impl<H: DurableExecution> Queue<H> {
         let mut hook_pipeline = redis::pipe();
         let mut tx_context = TransactionContext::new(&mut hook_pipeline, self.name().to_string());
 
-        let twmq_error = TwmqError::Runtime("Job processing failed with user error".to_string());
+        let twmq_error = TwmqError::Runtime { message: "Job processing failed with user error".to_string() };
         let queue_error_hook_data = QueueInternalErrorHookData { error: &twmq_error };
         self.handler.on_queue_error(job, queue_error_hook_data, &mut tx_context).await;
 

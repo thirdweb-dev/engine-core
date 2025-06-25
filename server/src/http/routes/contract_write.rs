@@ -22,7 +22,7 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{RpcCredentialsExtractor, SigningCredentialsExtractor},
     server::EngineServerState,
-    types::{ErrorResponse, SuccessResponse},
+    types::SuccessResponse,
 };
 
 // ===== REQUEST/RESPONSE TYPES =====

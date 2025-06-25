@@ -3,18 +3,26 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Error, Serialize, Deserialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ThirdwebError {
-    #[error("SerializationError: {0}")]
-    SerializationError(ThirdwebSerializationError),
+    #[error("SerializationError: {error}")]
+    #[serde(rename_all = "camelCase")]
+    SerializationError {
+        #[from]
+        error: ThirdwebSerializationError,
+    },
 
     #[error("UrlParseError: {message}")]
     UrlParseError { value: String, message: String },
 
-    #[error("HttpClientBackendError: {0}")]
-    HttpClientBackendError(String),
+    #[error("HttpClientBackendError: {message}")]
+    HttpClientBackendError { message: String },
 
-    #[error("HttpError: {0}")]
-    HttpError(#[from] SerializableReqwestError),
+    #[error("HttpError: {error}")]
+    HttpError {
+        #[from]
+        error: SerializableReqwestError,
+    },
 }
 
 #[derive(Error, Serialize, Deserialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
@@ -25,7 +33,9 @@ pub enum ThirdwebSerializationError {
 
 impl ThirdwebError {
     pub fn header_value(value: String) -> Self {
-        Self::SerializationError(ThirdwebSerializationError::HeaderValue { value })
+        Self::SerializationError {
+            error: ThirdwebSerializationError::HeaderValue { value },
+        }
     }
 
     pub fn url(value: String, error: url::ParseError) -> Self {
@@ -36,13 +46,9 @@ impl ThirdwebError {
     }
 
     pub fn http_client_backend(error: reqwest::Error) -> Self {
-        Self::HttpClientBackendError(error.to_string())
-    }
-}
-
-impl From<ThirdwebSerializationError> for ThirdwebError {
-    fn from(err: ThirdwebSerializationError) -> Self {
-        Self::SerializationError(err)
+        Self::HttpClientBackendError {
+            message: error.to_string(),
+        }
     }
 }
 

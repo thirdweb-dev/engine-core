@@ -4,6 +4,7 @@ use alloy::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use vault_sdk::VaultClient;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
@@ -27,24 +28,56 @@ pub struct EoaSigningOptions {
     pub chain_id: Option<ChainId>,
 }
 
-/// Smart Account signing options
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+/// ### ERC4337 (Smart Account) Signing Options
+/// This struct allows flexible configuration of ERC-4337 signing options,
+/// with intelligent defaults and inferences based on provided values.
+///
+/// ### Field Inference
+/// When fields are omitted, the system uses the following inference rules:
+///
+/// 1. Version Inference:
+///     - If `entrypointVersion` is provided, it's used directly
+///     - Otherwise, tries to infer from `entrypointAddress` (if provided)
+///     - If that fails, tries to infer from `factoryAddress` (if provided)
+///     - Defaults to version 0.7 if no inference is possible
+///
+/// 2. Entrypoint Address Inference:
+///    - If provided explicitly, it's used as-is
+///    - Otherwise, uses the default address corresponding to the inferred version:
+///      - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+///      - V0.7: 0x0576a174D229E3cFA37253523E645A78A0C91B57
+///
+/// 3. Factory Address Inference:
+///    - If provided explicitly, it's used as-is
+///    - Otherwise, uses the default factory corresponding to the inferred version:
+///      - V0.6: 0x85e23b94e7F5E9cC1fF78BCe78cfb15B81f0DF00 [DEFAULT_FACTORY_ADDRESS_V0_6]
+///      - V0.7: 0x4bE0ddfebcA9A5A4a617dee4DeCe99E7c862dceb [DEFAULT_FACTORY_ADDRESS_V0_7]
+///
+/// 4. Account Salt:
+///    - If provided explicitly, it's used as-is
+///    - Otherwise, defaults to "0x" (commonly used as the defauult "null" salt for smart accounts)
+///
+/// 5. Smart Account Address:
+///    - If provided explicitly, it's used as-is
+///    - Otherwise, it's read from the smart account factory
+///
+/// All optional fields can be omitted for a minimal configuration using version 0.7 defaults.
+///
+/// The most minimal usage only requires `signerAddress` + `chainId`
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SmartAccountSigningOptions {
+pub struct Erc4337SigningOptions {
     /// The smart account address (if deployed)
-    #[schemars(with = "Option<AddressDef>")]
     #[schema(value_type = Option<AddressDef>)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smart_account_address: Option<Address>,
 
     /// The EOA that controls the smart account
-    #[schemars(with = "AddressDef")]
     #[schema(value_type = AddressDef)]
     pub signer_address: Address,
 
-    /// Entrypoint and factory configuration
     #[serde(flatten)]
-    #[schemars(with = "EntrypointAndFactoryDetailsDeserHelper")]
     #[schema(value_type = EntrypointAndFactoryDetailsDeserHelper)]
     pub entrypoint_details: EntrypointAndFactoryDetails,
 
@@ -53,21 +86,57 @@ pub struct SmartAccountSigningOptions {
     pub account_salt: String,
 
     /// Chain ID for smart account operations
+    // #[serde_as(as = "DisplayFromStr")]
     pub chain_id: ChainId,
 }
 
 /// Configuration options for signing operations
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SigningOptions {
-    /// Standard EOA (Externally Owned Account) signing
     #[serde(rename = "eoa")]
     #[schema(title = "EOA Signing Options")]
     Eoa(EoaSigningOptions),
-    /// Smart Account signing with advanced signature patterns
-    #[serde(rename = "smart_account")]
-    #[schema(title = "Smart Account Signing Options")]
-    SmartAccount(SmartAccountSigningOptions),
+
+    /// ### ERC4337 (Smart Account) Signing Options
+    /// This struct allows flexible configuration of ERC-4337 signing options,
+    /// with intelligent defaults and inferences based on provided values.
+    ///
+    /// ### Field Inference
+    /// When fields are omitted, the system uses the following inference rules:
+    ///
+    /// 1. Version Inference:
+    ///     - If `entrypointVersion` is provided, it's used directly
+    ///     - Otherwise, tries to infer from `entrypointAddress` (if provided)
+    ///     - If that fails, tries to infer from `factoryAddress` (if provided)
+    ///     - Defaults to version 0.7 if no inference is possible
+    ///
+    /// 2. Entrypoint Address Inference:
+    ///    - If provided explicitly, it's used as-is
+    ///    - Otherwise, uses the default address corresponding to the inferred version:
+    ///      - V0.6: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+    ///      - V0.7: 0x0576a174D229E3cFA37253523E645A78A0C91B57
+    ///
+    /// 3. Factory Address Inference:
+    ///    - If provided explicitly, it's used as-is
+    ///    - Otherwise, uses the default factory corresponding to the inferred version:
+    ///      - V0.6: 0x85e23b94e7F5E9cC1fF78BCe78cfb15B81f0DF00 [DEFAULT_FACTORY_ADDRESS_V0_6]
+    ///      - V0.7: 0x4bE0ddfebcA9A5A4a617dee4DeCe99E7c862dceb [DEFAULT_FACTORY_ADDRESS_V0_7]
+    ///
+    /// 4. Account Salt:
+    ///    - If provided explicitly, it's used as-is
+    ///    - Otherwise, defaults to "0x" (commonly used as the defauult "null" salt for smart accounts)
+    ///
+    /// 5. Smart Account Address:
+    ///    - If provided explicitly, it's used as-is
+    ///    - Otherwise, it's read from the smart account factory
+    ///
+    /// All optional fields can be omitted for a minimal configuration using version 0.7 defaults.
+    ///
+    /// The most minimal usage only requires `signerAddress` + `chainId`
+    #[serde(rename = "ERC4337")]
+    #[schema(title = "ERC4337 Signing Options")]
+    ERC4337(Erc4337SigningOptions),
 }
 
 /// Account signer trait using impl Future pattern like TWMQ

@@ -12,14 +12,14 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, RpcCredentialsExtractor, SigningCredentialsExtractor},
     server::EngineServerState,
-    types::{ErrorResponse, SuccessResponse},
+    types::SuccessResponse,
 };
 
 // ===== ROUTE HANDLER =====
 
 #[utoipa::path(
     post,
-    operation_id = "writeTransaction",
+    operation_id = "sendTransaction",
     path = "/write/transaction",
     tag = "Write",
     request_body(content = SendTransactionRequest, description = "Transaction request", content_type = "application/json"),
@@ -57,7 +57,7 @@ pub async fn write_transaction(
         .execution_router
         .execute(request, rpc_credentials, signing_credential)
         .await
-        .map_err(|e| ApiEngineError(e))?;
+        .map_err(ApiEngineError)?;
 
     tracing::info!(
         transaction_id = %transaction_id,

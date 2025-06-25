@@ -124,7 +124,7 @@ impl Chain for ThirdwebChain {
     }
 }
 
-impl<'a> ThirdwebChainConfig<'a> {
+impl ThirdwebChainConfig<'_> {
     pub fn to_chain(&self) -> Result<ThirdwebChain, EngineError> {
         let rpc_url = Url::parse(&format!(
             "https://{chain_id}.{base_url}/{client_id}",
@@ -133,7 +133,7 @@ impl<'a> ThirdwebChainConfig<'a> {
             client_id = self.client_id,
         ))
         .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse RPC URL: {}", e.to_string()),
+            message: format!("Failed to parse RPC URL: {}", e),
         })?;
 
         let bundler_url = Url::parse(&format!(
@@ -142,7 +142,7 @@ impl<'a> ThirdwebChainConfig<'a> {
             base_url = self.bundler_base_url,
         ))
         .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse Bundler URL: {}", e.to_string()),
+            message: format!("Failed to parse Bundler URL: {}", e),
         })?;
 
         let paymaster_url = Url::parse(&format!(
@@ -151,20 +151,20 @@ impl<'a> ThirdwebChainConfig<'a> {
             base_url = self.paymaster_base_url,
         ))
         .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse Paymaster URL: {}", e.to_string()),
+            message: format!("Failed to parse Paymaster URL: {}", e),
         })?;
 
         let mut sensitive_headers = HeaderMap::new();
         sensitive_headers.insert(
             "x-client-id",
-            HeaderValue::from_str(&self.client_id).map_err(|e| EngineError::RpcConfigError {
+            HeaderValue::from_str(self.client_id).map_err(|e| EngineError::RpcConfigError {
                 message: format!("Unserialisable client-id used: {e}"),
             })?,
         );
 
         sensitive_headers.insert(
             "x-secret-key",
-            HeaderValue::from_str(&self.secret_key).map_err(|e| EngineError::RpcConfigError {
+            HeaderValue::from_str(self.secret_key).map_err(|e| EngineError::RpcConfigError {
                 message: format!("Unserialisable secret-key used: {e}"),
             })?,
         );
@@ -217,8 +217,7 @@ impl<'a> ThirdwebChainConfig<'a> {
 
             provider: ProviderBuilder::new()
                 .disable_recommended_fillers()
-                .connect_http(rpc_url)
-                .into(),
+                .connect_http(rpc_url),
 
             bundler_url,
             paymaster_url,

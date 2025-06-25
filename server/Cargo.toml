@@ -8,7 +8,7 @@ alloy = { version = "1.0.8", features = ["serde"] }
 async-nats = "0.40.0"
 axum = { version = "0.8.4", features = ["macros"] }
 config = "0.15.11"
-serde = "1.0.219"
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
 vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
@@ -32,6 +32,12 @@ aide = { version = "0.14.2", features = [
     "scalar",
 ] }
 schemars = "0.8.22"
-utoipa = { version = "5.4.0", features = ["macros", "chrono", "uuid", "axum_extras"] }
+utoipa = { version = "5.4.0", features = [
+    "macros",
+    "chrono",
+    "uuid",
+    "axum_extras",
+    "preserve_order",
+] }
 utoipa-axum = "0.2.0"
 utoipa-scalar = { version = "0.3.0", features = ["axum"] }

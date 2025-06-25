@@ -122,8 +122,8 @@ impl RpcCredentialsExtractor {
 
 impl OptionalRpcCredentialsExtractor {
     pub fn into_thirdweb_auth(self) -> Option<ThirdwebAuth> {
-        self.0.and_then(|creds| match creds {
-            RpcCredentials::Thirdweb(auth) => Some(auth),
+        self.0.map(|creds| match creds {
+            RpcCredentials::Thirdweb(auth) => auth,
             // _ => None,
         })
     }

@@ -15,8 +15,8 @@ use engine_executors::{
         confirm::UserOpConfirmationHandler,
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
     },
-    webhook::WebhookJobHandler,
     transaction_registry::TransactionRegistry,
+    webhook::WebhookJobHandler,
 };
 use twmq::{Queue, error::TwmqError};
 
@@ -62,7 +62,7 @@ impl ExecutionRouter {
                 Ok(vec![queued_transaction])
             }
 
-            SpecificExecutionOptions::Auto(auto_execution_options) => {
+            SpecificExecutionOptions::Auto(_auto_execution_options) => {
                 todo!()
             }
         }
@@ -94,7 +94,9 @@ impl ExecutionRouter {
                 "external_bundler_send",
             )
             .await
-            .map_err(|e| TwmqError::Runtime(format!("Failed to register transaction: {}", e)))?;
+            .map_err(|e| TwmqError::Runtime {
+                message: format!("Failed to register transaction: {}", e),
+            })?;
 
         // Create job with transaction ID as the job ID for idempotency
         self.external_bundler_send_queue

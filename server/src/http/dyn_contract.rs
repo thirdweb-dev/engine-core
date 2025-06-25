@@ -147,7 +147,7 @@ impl ContractCall {
         chain_id: ChainId,
     ) -> Result<Function, EngineError> {
         for function in candidates {
-            if let Ok(_) = self.encode_parameters(function, chain_id) {
+            if self.encode_parameters(function, chain_id).is_ok() {
                 return Ok(function.clone());
             }
         }

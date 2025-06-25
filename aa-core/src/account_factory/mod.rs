@@ -53,7 +53,7 @@ pub enum SmartAccountFactory<'a, C: Chain> {
 }
 
 // Implement the AccountFactory trait for our enum
-impl<'a, C: Chain> AccountFactory for SmartAccountFactory<'a, C> {
+impl<C: Chain> AccountFactory for SmartAccountFactory<'_, C> {
     fn factory_address(&self) -> &Address {
         match self {
             Self::Default(factory) => &factory.factory_address,
@@ -81,11 +81,11 @@ impl<'a, C: Chain> AccountFactory for SmartAccountFactory<'a, C> {
 }
 
 /// Get the appropriate account factory based on the factory address
-pub fn get_account_factory<'a, C: Chain>(
-    chain: &'a C,
+pub fn get_account_factory<C: Chain>(
+    chain: &C,
     factory_address: Address,
     implementation_address: Option<Address>,
-) -> SmartAccountFactory<'a, C> {
+) -> SmartAccountFactory<'_, C> {
     // Check if the factory address matches default v0.6
     if factory_address == DEFAULT_FACTORY_ADDRESS_V0_6 {
         SmartAccountFactory::Default(DefaultAccountFactory::v0_6())

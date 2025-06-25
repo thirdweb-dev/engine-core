@@ -36,7 +36,7 @@ impl ThirdwebAuth {
                 let mut headers = HeaderMap::new();
                 headers.insert(
                     "x-secret-key",
-                    HeaderValue::from_str(&secret_key)
+                    HeaderValue::from_str(secret_key)
                         .map_err(|_| ThirdwebError::header_value(secret_key.clone()))?,
                 );
                 Ok(headers)

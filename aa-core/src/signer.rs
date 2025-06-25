@@ -5,14 +5,15 @@ use alloy::{
     hex::FromHex,
     primitives::{Address, B256, Bytes, hex, keccak256},
     sol,
-    sol_types::{SolCall, SolStruct, SolValue, eip712_domain},
+    sol_types::{SolCall, SolValue, decode_revert_reason, eip712_domain},
 };
 use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
     error::EngineError,
-    signer::{AccountSigner, EoaSigner, EoaSigningOptions, SmartAccountSigningOptions},
+    signer::{AccountSigner, EoaSigner, EoaSigningOptions, Erc4337SigningOptions},
 };
+use serde::Serialize;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
 use crate::{
@@ -35,6 +36,7 @@ sol! {
 }
 
 sol! {
+    #[derive(Serialize)]
     struct AccountMessage {
         bytes message;
     }
@@ -48,7 +50,7 @@ const ERC6492_MAGIC_SUFFIX: [u8; 32] =
 pub struct SmartAccountSignerBuilder<C: Chain> {
     eoa_signer: Arc<EoaSigner>,
     credentials: SigningCredential,
-    options: SmartAccountSigningOptions,
+    options: Erc4337SigningOptions,
     chain: C,
 }
 
@@ -56,7 +58,7 @@ impl<C: Chain + Clone> SmartAccountSignerBuilder<C> {
     pub fn new(
         eoa_signer: Arc<EoaSigner>,
         credentials: SigningCredential,
-        options: SmartAccountSigningOptions,
+        options: Erc4337SigningOptions,
         chain: C,
     ) -> Self {
         Self {
@@ -141,7 +143,7 @@ impl<C: Chain + Clone> SmartAccountSignerBuilder<C> {
 /// Smart Account signer with pre-computed address and factory pattern support
 #[derive(Clone)]
 pub struct SmartAccountSigner<C: Chain> {
-    options: SmartAccountSigningOptions,
+    options: Erc4337SigningOptions,
     credentials: SigningCredential,
     chain: C,
     eoa_signer: Arc<EoaSigner>,
@@ -242,17 +244,16 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
         };
 
         // Get the EIP712 signing hash using alloy's native functionality
-        let signing_hash = account_message.eip712_signing_hash(&domain);
+        let typed_data = TypedData::from_struct(&account_message, Some(domain));
 
         // Sign the hash directly with EOA
         self.eoa_signer
-            .sign_message(
+            .sign_typed_data(
                 EoaSigningOptions {
                     chain_id: Some(self.chain.chain_id()),
                     from: self.options.signer_address,
                 },
-                &format!("0x{}", hex::encode(signing_hash)),
-                MessageFormat::Hex,
+                &typed_data,
                 self.credentials.clone(),
             )
             .await
@@ -268,16 +269,25 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
         let contract =
             ERC1271Contract::new(self.smart_account.address, self.chain.provider().clone());
 
+        dbg!(self.options.signer_address);
+        dbg!(hash);
+        dbg!(signature);
+
         match contract
             .isValidSignature(hash, signature_bytes.into())
             .call()
             .await
         {
             Ok(response) => {
+                dbg!(response);
                 let expected_magic = ERC1271Contract::isValidSignatureCall::SELECTOR;
                 Ok(response.as_slice() == expected_magic)
             }
-            Err(_) => Ok(false),
+            Err(e) => {
+                let data = e.as_revert_data().unwrap();
+                dbg!(decode_revert_reason(data.as_ref()));
+                Ok(false)
+            }
         }
     }
 
