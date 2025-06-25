@@ -4,7 +4,7 @@ use alloy::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
+use serde_with::{DisplayFromStr, PickFirst, serde_as};
 use vault_sdk::VaultClient;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
@@ -86,7 +86,7 @@ pub struct Erc4337SigningOptions {
     pub account_salt: String,
 
     /// Chain ID for smart account operations
-    // #[serde_as(as = "DisplayFromStr")]
+    #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     pub chain_id: ChainId,
 }
 
