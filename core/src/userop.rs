@@ -94,9 +94,7 @@ impl UserOpSigner {
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing userop: {:?}", e);
-                        EngineError::VaultError {
-                            message: e.to_string(),
-                        }
+                        e
                     })?;
 
                 Ok(Bytes::from_hex(vault_result.signature).map_err(|_| {

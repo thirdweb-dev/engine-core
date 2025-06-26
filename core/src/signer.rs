@@ -197,9 +197,7 @@ impl AccountSigner for EoaSigner {
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing message with EOA: {:?}", e);
-                        EngineError::VaultError {
-                            message: e.to_string(),
-                        }
+                        e
                     })?;
 
                 Ok(vault_result.signature)
@@ -221,9 +219,7 @@ impl AccountSigner for EoaSigner {
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing typed data with EOA: {:?}", e);
-                        EngineError::VaultError {
-                            message: e.to_string(),
-                        }
+                        e
                     })?;
 
                 Ok(vault_result.signature)

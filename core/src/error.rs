@@ -203,6 +203,7 @@ pub enum EngineError {
 
     #[schema(title = "Engine Vault KMS Error")]
     #[error("Error interaction with vault: {message}")]
+    #[serde(rename_all = "camelCase")]
     VaultError { message: String },
 
     #[schema(title = "RPC Configuration Error")]
@@ -211,6 +212,7 @@ pub enum EngineError {
 
     #[schema(title = "EVM Contract Interaction Error")]
     #[error("Contract interaction error: {message}")]
+    #[serde(rename_all = "camelCase")]
     ContractInteractionError {
         /// Contract address
         #[schema(value_type = Option<AddressDef>)]
@@ -234,6 +236,27 @@ pub enum EngineError {
     #[schema(title = "Engine Internal Error")]
     #[error("Internal error: {message}")]
     InternalError { message: String },
+}
+
+impl From<vault_sdk::error::VaultError> for EngineError {
+    fn from(err: vault_sdk::error::VaultError) -> Self {
+        let message = match &err {
+            vault_sdk::error::VaultError::EnclaveError {
+                code,
+                message,
+                details,
+            } => match details {
+                Some(details) => format!(
+                    "Enclave error: {} - {} - details: {}",
+                    code, message, details
+                ),
+                None => format!("Enclave error: {} - {}", code, message),
+            },
+            _ => err.to_string(),
+        };
+
+        EngineError::VaultError { message }
+    }
 }
 
 impl From<InvalidHeaderValue> for EngineError {

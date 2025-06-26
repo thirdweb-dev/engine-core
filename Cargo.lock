@@ -621,7 +621,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde 0.15.8",
  "alloy-sol-types",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -641,7 +641,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde 1.0.8",
  "alloy-sol-types",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -3297,15 +3297,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4158,7 +4149,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -6054,7 +6045,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "vault-sdk"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#a23ed3ad0919f7c36b0704c76010e864402cf9c2"
+source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#0308dc7d233b5af4e83c97aba4e757766fad810d"
 dependencies = [
  "alloy 0.15.10",
  "chacha20poly1305",
@@ -6074,7 +6065,7 @@ dependencies = [
 [[package]]
 name = "vault-types"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#a23ed3ad0919f7c36b0704c76010e864402cf9c2"
+source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#0308dc7d233b5af4e83c97aba4e757766fad810d"
 dependencies = [
  "alloy 0.15.10",
  "bincode",
