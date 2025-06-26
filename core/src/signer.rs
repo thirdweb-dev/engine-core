@@ -2,7 +2,6 @@ use alloy::{
     dyn_abi::TypedData,
     primitives::{Address, ChainId},
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
 use vault_sdk::VaultClient;
@@ -16,15 +15,16 @@ use crate::{
 };
 
 /// EOA signing options
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EoaSigningOptions {
     /// The EOA address to sign with
-    #[schemars(with = "AddressDef")]
     #[schema(value_type = AddressDef)]
     pub from: Address,
     /// Optional chain ID for the signature
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "Option<PickFirst<(_, DisplayFromStr)>>")]
     pub chain_id: Option<ChainId>,
 }
 
