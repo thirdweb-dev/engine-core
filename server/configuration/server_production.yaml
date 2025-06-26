@@ -9,6 +9,7 @@ thirdweb:
     paymaster: bundler.thirdweb.com
     vault: https://d145tet905juug.cloudfront.net # override in env
     abi_service: https://contract.thirdweb.com/abi/ # override in env
+    iaw_service: https://embedded-wallet.thirdweb.com # override in env
   secret: read_from_env
   client_id: read_from_env
 

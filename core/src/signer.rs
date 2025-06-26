@@ -5,6 +5,7 @@ use alloy::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
+use thirdweb_core::iaw::IAWClient;
 use vault_sdk::VaultClient;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
@@ -164,12 +165,13 @@ pub trait AccountSigner {
 #[derive(Clone)]
 pub struct EoaSigner {
     pub vault_client: VaultClient,
+    pub iaw_client: IAWClient,
 }
 
 impl EoaSigner {
     /// Create a new EOA signer
-    pub fn new(vault_client: VaultClient) -> Self {
-        Self { vault_client }
+    pub fn new(vault_client: VaultClient, iaw_client: IAWClient) -> Self {
+        Self { vault_client, iaw_client }
     }
 }
 
@@ -196,11 +198,36 @@ impl AccountSigner for EoaSigner {
                     )
                     .await
                     .map_err(|e| {
-                        tracing::error!("Error signing message with EOA: {:?}", e);
+                        tracing::error!("Error signing message with EOA (Vault): {:?}", e);
                         e
                     })?;
 
                 Ok(vault_result.signature)
+            }
+            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+                // Convert MessageFormat to IAW MessageFormat
+                let iaw_format = match format {
+                    MessageFormat::Text => thirdweb_core::iaw::MessageFormat::Text,
+                    MessageFormat::Hex => thirdweb_core::iaw::MessageFormat::Hex,
+                };
+
+                let iaw_result = self
+                    .iaw_client
+                    .sign_message(
+                        auth_token,
+                        thirdweb_auth,
+                        message.to_string(),
+                        options.from,
+                        options.chain_id,
+                        Some(iaw_format),
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing message with EOA (IAW): {:?}", e);
+                        EngineError::from(e)
+                    })?;
+
+                Ok(iaw_result.signature)
             }
         }
     }
@@ -218,11 +245,28 @@ impl AccountSigner for EoaSigner {
                     .sign_typed_data(auth_method.clone(), typed_data.clone(), options.from)
                     .await
                     .map_err(|e| {
-                        tracing::error!("Error signing typed data with EOA: {:?}", e);
+                        tracing::error!("Error signing typed data with EOA (Vault): {:?}", e);
                         e
                     })?;
 
                 Ok(vault_result.signature)
+            }
+            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+                let iaw_result = self
+                    .iaw_client
+                    .sign_typed_data(
+                        auth_token.clone(),
+                        thirdweb_auth.clone(),
+                        typed_data.clone(),
+                        options.from,
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing typed data with EOA (IAW): {:?}", e);
+                        EngineError::from(e)
+                    })?;
+
+                Ok(iaw_result.signature)
             }
         }
     }

@@ -9,6 +9,7 @@ thirdweb:
     paymaster: bundler.thirdweb-dev.com
     vault: https://d2w4ge7u2axqfk.cloudfront.net
     abi_service: https://contract.thirdweb.com/abi/
+    iaw_service: https://embedded-wallet.thirdweb-dev.com
   secret: read_from_env
   client_id: read_from_env
 

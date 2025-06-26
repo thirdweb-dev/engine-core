@@ -103,6 +103,12 @@ impl UserOpSigner {
                     }
                 })?)
             }
+            SigningCredential::Iaw { auth_token: _, thirdweb_auth: _ } => {
+                // IAW doesn't support UserOp signing yet
+                Err(EngineError::ValidationError {
+                    message: "IAW service does not support UserOperation signing".to_string(),
+                })
+            }
         }
     }
 }
