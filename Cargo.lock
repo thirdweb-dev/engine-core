@@ -2425,13 +2425,25 @@ name = "engine-aa-core"
 version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
+ "engine-aa-types",
  "engine-core",
  "serde",
- "thirdweb-core",
  "tokio",
  "tracing",
  "vault-sdk",
  "vault-types",
+]
+
+[[package]]
+name = "engine-aa-types"
+version = "0.1.0"
+dependencies = [
+ "alloy 1.0.9",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "utoipa",
 ]
 
 [[package]]
@@ -2440,6 +2452,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
  "async-nats",
+ "engine-aa-types",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2449,7 +2462,6 @@ dependencies = [
  "tower",
  "tracing",
  "twmq",
- "types-core",
  "utoipa",
  "uuid",
  "vault-sdk",
@@ -2463,6 +2475,7 @@ dependencies = [
  "alloy 1.0.9",
  "chrono",
  "engine-aa-core",
+ "engine-aa-types",
  "engine-core",
  "hex",
  "hmac",
@@ -2474,7 +2487,6 @@ dependencies = [
  "thiserror 2.0.12",
  "tracing",
  "twmq",
- "types-core",
  "uuid",
 ]
 
@@ -5425,6 +5437,7 @@ name = "thirdweb-core"
 version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
+ "engine-aa-types",
  "moka",
  "reqwest",
  "schemars 0.8.22",
@@ -5432,7 +5445,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.12",
  "tracing",
- "types-core",
  "url",
  "utoipa",
 ]
@@ -5945,15 +5957,6 @@ name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
-
-[[package]]
-name = "types-core"
-version = "0.1.0"
-dependencies = [
- "alloy 1.0.9",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "ucd-trie"

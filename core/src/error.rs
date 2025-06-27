@@ -208,9 +208,12 @@ pub enum EngineError {
     VaultError { message: String },
 
     #[schema(title = "Engine IAW Service Error")]
-    #[error("Error interaction with IAW service: {message}")]
+    #[error("Error interaction with IAW service: {error}")]
     #[serde(rename_all = "camelCase")]
-    IawError { message: String },
+    IawError {
+        #[from]
+        error: thirdweb_core::iaw::IAWError,
+    },
 
     #[schema(title = "RPC Configuration Error")]
     #[error("Bad RPC configuration: {message}")]
@@ -463,10 +466,3 @@ impl From<TwmqError> for EngineError {
     }
 }
 
-impl From<thirdweb_core::iaw::IAWError> for EngineError {
-    fn from(error: thirdweb_core::iaw::IAWError) -> Self {
-        EngineError::IawError {
-            message: error.to_string(),
-        }
-    }
-}

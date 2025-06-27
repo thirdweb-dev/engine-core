@@ -1,6 +1,6 @@
 use alloy::{
     hex::FromHex,
-    primitives::{Address, Bytes, U256}, transports::RpcError,
+    primitives::{Address, Bytes, U256},
 };
 use engine_aa_core::{
     account_factory::{AccountFactory, get_account_factory},
@@ -10,15 +10,15 @@ use engine_aa_core::{
         deployment::{AcquireLockResult, DeploymentLock, DeploymentManager, DeploymentStatus},
     },
 };
+use engine_aa_types::VersionedUserOp;
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
-    execution_options::{WebhookOptions, aa::Erc4337ExecutionOptions},
+    execution_options::{aa::Erc4337ExecutionOptions, WebhookOptions},
     transaction::InnerTransaction,
-    userop::{UserOpSigner},
+    userop::UserOpSigner,
 };
-use types_core::UserOpVersion;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{
@@ -69,7 +69,7 @@ pub struct ExternalBundlerSendResult {
     pub account_address: Address,
     pub nonce: U256,
     pub user_op_hash: Bytes,
-    pub user_operation_sent: UserOpVersion,
+    pub user_operation_sent: VersionedUserOp,
     pub deployment_lock_acquired: bool,
 }
 
@@ -113,7 +113,7 @@ pub enum ExternalBundlerSendError {
         account_address: Address,
         nonce_used: U256,
         had_deployment_lock: bool,
-        user_op: UserOpVersion,
+        user_op: VersionedUserOp,
         message: String,
         inner_error: Option<EngineError>,
     },
@@ -446,7 +446,7 @@ where
                     "error"
                 );
 
-                if is_bundler_error_retryable(mapped_error.to_owned().to_string()) {
+                if is_bundler_error_retryable(&mapped_error.to_string()) {
                     if job.job.attempts < 100 {
                         mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
                     } else {
@@ -596,7 +596,7 @@ fn map_bundler_error(
     bundler_error: impl AlloyRpcErrorToEngineError,
     smart_account: &DeterminedSmartAccount,
     nonce: U256,
-    signed_user_op: &UserOpVersion,
+    signed_user_op: &VersionedUserOp,
     chain: &impl Chain,
     had_lock: bool,
 ) -> ExternalBundlerSendError {
@@ -685,11 +685,54 @@ fn is_non_retryable_rpc_code(code: i64) -> bool {
     }
 }
 
-fn is_bundler_error_retryable(e: String) -> bool {
-    // TODO proper error parsing / handling
-    if e.contains("AA24") {
+/// Determines if a bundler error should be retried based on its content
+fn is_bundler_error_retryable(error_msg: &str) -> bool {
+    // Check for specific AA error codes that should not be retried
+    if error_msg.contains("AA10") || // sender already constructed
+       error_msg.contains("AA13") || // initCode failed or OOG
+       error_msg.contains("AA14") || // initCode must return sender
+       error_msg.contains("AA15") || // initCode must create sender
+       error_msg.contains("AA21") || // didn't pay prefund
+       error_msg.contains("AA22") || // expired or not due
+       error_msg.contains("AA23") || // reverted (or OOG)
+       error_msg.contains("AA24") || // signature error
+       error_msg.contains("AA25") || // invalid account nonce
+       error_msg.contains("AA31") || // paymaster deposit too low
+       error_msg.contains("AA32") || // paymaster stake too low
+       error_msg.contains("AA33") || // reverted (or OOG)
+       error_msg.contains("AA34") || // signature error
+       error_msg.contains("AA40") || // over verificationGasLimit
+       error_msg.contains("AA41") || // too little verificationGas
+       error_msg.contains("AA50") || // postOp reverted
+       error_msg.contains("AA51")    // prefund below actualGasCost
+    {
         return false;
     }
 
-    return true;
+    // Check for revert-related messages that indicate permanent failures
+    if error_msg.contains("execution reverted") ||
+       error_msg.contains("UserOperation reverted") ||
+       error_msg.contains("reverted during simulation") ||
+       error_msg.contains("invalid signature") ||
+       error_msg.contains("signature error") ||
+       error_msg.contains("nonce too low") ||
+       error_msg.contains("nonce too high") ||
+       error_msg.contains("insufficient funds")
+    {
+        return false;
+    }
+
+    // Check for HTTP status codes that shouldn't be retried (4xx client errors)
+    if error_msg.contains("status: 400") ||
+       error_msg.contains("status: 401") ||
+       error_msg.contains("status: 403") ||
+       error_msg.contains("status: 404") ||
+       error_msg.contains("status: 422") ||
+       error_msg.contains("status: 429") // rate limit - could be retried but often permanent
+    {
+        return false;
+    }
+
+    // Retry everything else (network issues, 5xx errors, timeouts, etc.)
+    true
 }

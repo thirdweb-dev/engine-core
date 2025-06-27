@@ -3,7 +3,6 @@ use alloy::{
     primitives::{Address, Bytes, ChainId},
 };
 use thirdweb_core::iaw::IAWClient;
-use types_core::UserOpVersion;
 use vault_sdk::VaultClient;
 use vault_types::{
     enclave::encrypted::eoa::StructuredMessageInput,
@@ -11,6 +10,9 @@ use vault_types::{
 };
 
 use crate::{credentials::SigningCredential, error::EngineError};
+
+// Re-export for convenience
+pub use engine_aa_types::VersionedUserOp;
 
 #[derive(Clone)]
 pub struct UserOpSigner {
@@ -21,14 +23,14 @@ pub struct UserOpSigner {
 pub struct UserOpSignerParams {
     pub credentials: SigningCredential,
     pub entrypoint: Address,
-    pub userop: UserOpVersion,
+    pub userop: VersionedUserOp,
     pub signer_address: Address,
     pub chain_id: ChainId,
 }
 
-fn userop_to_vault_input(userop: &UserOpVersion, entrypoint: Address) -> StructuredMessageInput {
+fn userop_to_vault_input(userop: &VersionedUserOp, entrypoint: Address) -> StructuredMessageInput {
     match userop {
-        UserOpVersion::V0_6(userop) => {
+        VersionedUserOp::V0_6(userop) => {
             StructuredMessageInput::UserOperationV06Input(UserOperationV06Input {
                 call_data: userop.call_data.clone(),
                 init_code: userop.init_code.clone(),
@@ -44,7 +46,7 @@ fn userop_to_vault_input(userop: &UserOpVersion, entrypoint: Address) -> Structu
                 entrypoint,
             })
         }
-        UserOpVersion::V0_7(userop) => {
+        VersionedUserOp::V0_7(userop) => {
             StructuredMessageInput::UserOperationV07Input(UserOperationV07Input {
                 call_data: userop.call_data.clone(),
                 nonce: userop.nonce,
@@ -55,9 +57,7 @@ fn userop_to_vault_input(userop: &UserOpVersion, entrypoint: Address) -> Structu
                 paymaster_data: userop.paymaster_data.clone().unwrap_or_default(),
                 factory: userop.factory.unwrap_or_default(),
                 factory_data: userop.factory_data.clone().unwrap_or_default(),
-                paymaster_post_op_gas_limit: userop
-                    .paymaster_post_op_gas_limit
-                    .unwrap_or_default(),
+                paymaster_post_op_gas_limit: userop.paymaster_post_op_gas_limit.unwrap_or_default(),
                 paymaster_verification_gas_limit: userop
                     .paymaster_verification_gas_limit
                     .unwrap_or_default(),
@@ -95,18 +95,25 @@ impl UserOpSigner {
                     }
                 })?)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
-                let result = self.iaw_client.sign_userop(
-                    auth_token.clone(),
-                    thirdweb_auth.clone(),
-                    params.userop,
-                    params.entrypoint,
-                    params.signer_address,
-                    params.chain_id,
-                ).await.map_err(|e| EngineError::ValidationError {
-                    message: format!("Failed to sign userop: {}", e),
-                })?;
-                
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
+                let result = self
+                    .iaw_client
+                    .sign_userop(
+                        auth_token.clone(),
+                        thirdweb_auth.clone(),
+                        params.userop,
+                        params.entrypoint,
+                        params.signer_address,
+                        params.chain_id,
+                    )
+                    .await
+                    .map_err(|e| EngineError::ValidationError {
+                        message: format!("Failed to sign userop: {}", e),
+                    })?;
+
                 Ok(Bytes::from_hex(&result.signature).map_err(|_| {
                     EngineError::ValidationError {
                         message: "Bad signature received from IAW".to_string(),

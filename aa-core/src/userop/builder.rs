@@ -6,6 +6,7 @@ use alloy::{
     providers::Provider,
     rpc::types::{PackedUserOperation, UserOperation},
 };
+use engine_aa_types::VersionedUserOp;
 use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
@@ -13,7 +14,6 @@ use engine_core::{
     execution_options::aa::{EntrypointAndFactoryDetails, EntrypointVersion},
     userop::{UserOpSigner, UserOpSignerParams},
 };
-use thirdweb_core::iaw::UserOpVersion;
 
 pub struct UserOpBuilderConfig<'a, C: Chain> {
     pub account_address: Address,
@@ -41,7 +41,7 @@ impl<'a, C: Chain> UserOpBuilder<'a, C> {
         Self { config }
     }
 
-    pub async fn build(self) -> Result<UserOpVersion, EngineError> {
+    pub async fn build(self) -> Result<VersionedUserOp, EngineError> {
         let mut userop = match self.config.entrypoint_and_factory.version {
             EntrypointVersion::V0_6 => UserOpBuilderV0_6::new(&self.config).build().await?,
             EntrypointVersion::V0_7 => UserOpBuilderV0_7::new(&self.config).build().await?,
@@ -62,10 +62,10 @@ impl<'a, C: Chain> UserOpBuilder<'a, C> {
             .await?;
 
         match &mut userop {
-            UserOpVersion::V0_6(userop) => {
+            VersionedUserOp::V0_6(userop) => {
                 userop.signature = signature;
             }
-            UserOpVersion::V0_7(userop) => {
+            VersionedUserOp::V0_7(userop) => {
                 userop.signature = signature;
             }
         }
@@ -115,7 +115,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
         }
     }
 
-    async fn build(mut self) -> Result<UserOpVersion, EngineError> {
+    async fn build(mut self) -> Result<VersionedUserOp, EngineError> {
         let prices = self
             .chain
             .provider()
@@ -154,7 +154,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
                     .chain
                     .bundler_client()
                     .estimate_user_op_gas(
-                        &UserOpVersion::V0_6(self.userop.clone()),
+                        &VersionedUserOp::V0_6(self.userop.clone()),
                         self.entrypoint,
                         None,
                     )
@@ -173,7 +173,7 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
         self.userop.verification_gas_limit = verification_gas_limit;
         self.userop.pre_verification_gas = pre_verification_gas;
 
-        Ok(UserOpVersion::V0_6(self.userop))
+        Ok(VersionedUserOp::V0_6(self.userop))
     }
 }
 
@@ -220,7 +220,7 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
         }
     }
 
-    async fn build(mut self) -> Result<UserOpVersion, EngineError> {
+    async fn build(mut self) -> Result<VersionedUserOp, EngineError> {
         // Get gas prices, same as v0.6
         let prices = self
             .chain
@@ -273,7 +273,7 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
                     .chain
                     .bundler_client()
                     .estimate_user_op_gas(
-                        &UserOpVersion::V0_7(self.userop.clone()),
+                        &VersionedUserOp::V0_7(self.userop.clone()),
                         self.entrypoint,
                         None,
                     )
@@ -301,6 +301,6 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
         self.userop.paymaster_verification_gas_limit = Some(paymaster_verification_gas_limit);
         self.userop.paymaster_post_op_gas_limit = Some(paymaster_post_op_gas_limit);
 
-        Ok(UserOpVersion::V0_7(self.userop))
+        Ok(VersionedUserOp::V0_7(self.userop))
     }
 }

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 alloy = { version = "1.0.8", features = ["serde", "json-rpc"] }
+engine-aa-types = { path = "../aa-types" }
 schemars = "0.8.22"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
@@ -16,7 +17,6 @@ tracing = "0.1.41"
 async-nats = "0.40.0"
 twmq = { version = "0.1.0", path = "../twmq" }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
-types-core = { path = "../types-core" }
 uuid = { version = "1.17.0", features = ["v4"] }
 utoipa = { version = "5.4.0", features = ["preserve_order"] }
 serde_with = "3.13.0"

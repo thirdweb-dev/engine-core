@@ -6,7 +6,7 @@ use alloy::transports::{IntoBoxTransport, TransportResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use types_core::UserOpVersion;
+use crate::userop::VersionedUserOp;
 
 // Gas buffer added for managed account factories (matches TypeScript)
 pub const MANAGED_ACCOUNT_GAS_BUFFER: U256 = U256::from_limbs([21_000, 0, 0, 0]);
@@ -81,7 +81,7 @@ impl BundlerClient {
     /// Estimate the gas for a user operation
     pub async fn estimate_user_op_gas(
         &self,
-        user_op: &UserOpVersion,
+        user_op: &VersionedUserOp,
         entrypoint: Address,
         state_overrides: Option<HashMap<String, HashMap<String, String>>>,
     ) -> TransportResult<UseropGasEstimation> {
@@ -104,7 +104,7 @@ impl BundlerClient {
 
     pub async fn send_user_op(
         &self,
-        user_op: &UserOpVersion,
+        user_op: &VersionedUserOp,
         entrypoint: Address,
     ) -> TransportResult<Bytes> {
         let result: Bytes = self

@@ -9,32 +9,51 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::time::Duration;
 use thiserror::Error;
-pub use types_core::UserOpVersion;
 
 
-use crate::auth::ThirdwebAuth;
-
-pub mod userop;
-use userop::{compute_user_op_v06_hash, compute_user_op_v07_hash};
+use crate::{auth::ThirdwebAuth, error::SerializableReqwestError};
+use engine_aa_types::{VersionedUserOp, UserOpError, compute_user_op_v06_hash, compute_user_op_v07_hash};
 
 /// Authentication token for IAW operations
 pub type AuthToken = String;
 
 /// Error types for IAW operations
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IAWError {
     #[error("API error: {0}")]
     ApiError(String),
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
-    #[error("Network error: {0}")]
-    NetworkError(#[from] reqwest::Error),
+    #[error("Serialization error: {message}")]
+    SerializationError { message: String },
+    #[error("Network error: {error}")]
+    NetworkError {
+        #[from]
+        error: SerializableReqwestError,
+    },
     #[error("Authentication error: {0}")]
     AuthError(String),
     #[error("Thirdweb error: {0}")]
     ThirdwebError(#[from] crate::error::ThirdwebError),
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
+    #[error("UserOp error: {0}")]
+    UserOpError(#[from] UserOpError),
+}
+
+impl From<serde_json::Error> for IAWError {
+    fn from(err: serde_json::Error) -> Self {
+        IAWError::SerializationError {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<reqwest::Error> for IAWError {
+    fn from(err: reqwest::Error) -> Self {
+        IAWError::NetworkError {
+            error: SerializableReqwestError::from(err),
+        }
+    }
 }
 
 /// Message format for signing operations
@@ -101,7 +120,7 @@ impl IAWClient {
             .http2_keep_alive_timeout(Duration::from_secs(5))
             .http2_keep_alive_while_idle(true)
             .build()
-            .map_err(|e| IAWError::NetworkError(e))?;
+            .map_err(IAWError::from)?;
 
         Ok(Self {
             _base_url: base_url.into(),
@@ -378,17 +397,17 @@ impl IAWClient {
         &self,
         auth_token: AuthToken,
         thirdweb_auth: ThirdwebAuth,
-        userop: UserOpVersion,
+        userop: VersionedUserOp,
         entrypoint: Address,
         _from: Address,
         chain_id: ChainId,
     ) -> Result<SignUserOpData, IAWError> {
         // Compute the userop hash based on version
         let hash = match &userop {
-            UserOpVersion::V0_6(op) => {
+            VersionedUserOp::V0_6(op) => {
                 compute_user_op_v06_hash(op, entrypoint, chain_id)?
             }
-            UserOpVersion::V0_7(op) => {
+            VersionedUserOp::V0_7(op) => {
                 compute_user_op_v07_hash(op, entrypoint, chain_id)?
             }
         };

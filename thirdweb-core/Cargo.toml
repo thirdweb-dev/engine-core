@@ -4,7 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0.9", features = ["json-abi", "consensus", "dyn-abi", "eips", "eip712"] }
+alloy = { version = "1.0.9", features = [
+  "json-abi",
+  "consensus",
+  "dyn-abi",
+  "eips",
+  "eip712",
+] }
+engine-aa-types = { path = "../aa-types" }
 moka = { version = "0.12.10", features = ["future"] }
 reqwest = "0.12.18"
 schemars = "0.8.22"
@@ -14,4 +21,3 @@ thiserror = "2.0.12"
 tracing = "0.1.41"
 url = "2.5.4"
 utoipa = "5.4.0"
-types-core = { path = "../types-core" }
