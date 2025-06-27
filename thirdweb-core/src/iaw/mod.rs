@@ -417,16 +417,11 @@ impl IAWClient {
                 "message": userop_hash,
                 "isRaw": true,
                 "chainId": chain_id,
-                "originalMessage": userop,
+                "originalMessage": serde_json::to_string(&userop).unwrap(),
             }
         });
 
-        tracing::warn!(
-            payload = serde_json::to_string(&payload).unwrap(),
-            "Payload"
-        );
-
-        // Make the request to IAW service
+        // Make the request to IAW service with explicit timeout
         let url = format!("{}/api/v1/enclave-wallet/sign-message", self._base_url);
         let response = self._http_client
             .post(&url)

@@ -1,6 +1,6 @@
 use alloy::{
     hex::FromHex,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, U256}, transports::RpcError,
 };
 use engine_aa_core::{
     account_factory::{AccountFactory, get_account_factory},
@@ -441,16 +441,20 @@ where
                     needs_init_code,
                 );
 
-                // if is_bundler_error_retryable(&e) {
-                if job.job.attempts < 100 {
-                    mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
+                tracing::warn!(
+                    error = serde_json::to_string(&mapped_error).unwrap(),
+                    "error"
+                );
+
+                if is_bundler_error_retryable(mapped_error.to_owned().to_string()) {
+                    if job.job.attempts < 100 {
+                        mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
+                    } else {
+                        mapped_error.fail()
+                    }
                 } else {
                     mapped_error.fail()
                 }
-
-                // } else {
-                //     mapped_error.fail()
-                // }
             })?;
 
         tracing::debug!(userop_hash = ?user_op_hash, "User operation sent to bundler");
@@ -679,4 +683,13 @@ fn is_non_retryable_rpc_code(code: i64) -> bool {
         -32603 => true, // Internal error (often indicates invalid params)
         _ => false,
     }
+}
+
+fn is_bundler_error_retryable(e: String) -> bool {
+    // TODO proper error parsing / handling
+    if e.contains("AA24") {
+        return false;
+    }
+
+    return true;
 }
