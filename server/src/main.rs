@@ -13,16 +13,19 @@ use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::Subscrib
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
+    let config = config::get_config();
+
+    let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             // Default to info level if RUST_LOG environment variable is not set
             "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=debug,engine_executors=debug,thirdweb_core=debug"
                 .into()
-        }))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+        }));
 
-    let config = config::get_config();
+    match config.server.log_format {
+        config::LogFormat::Json => subscriber.with(tracing_subscriber::fmt::layer().json()).init(),
+        config::LogFormat::Pretty => subscriber.with(tracing_subscriber::fmt::layer()).init(),
+    }
 
     let vault_client = vault_sdk::VaultClient::builder(config.thirdweb.urls.vault)
         .build()

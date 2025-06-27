@@ -35,6 +35,7 @@ pub struct RedisConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub log_format: LogFormat,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,11 +55,19 @@ pub struct ThirdwebUrls {
     pub iaw_service: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    Json,
+    Pretty,
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             port: 3000,
             host: "0.0.0.0".into(),
+            log_format: LogFormat::Pretty,
         }
     }
 }

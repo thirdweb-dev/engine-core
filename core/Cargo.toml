@@ -14,7 +14,6 @@ vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vaul
 vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
 tower = "0.5.2"
 tracing = "0.1.41"
-async-nats = "0.40.0"
 twmq = { version = "0.1.0", path = "../twmq" }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
 uuid = { version = "1.17.0", features = ["v4"] }

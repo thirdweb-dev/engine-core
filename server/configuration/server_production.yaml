@@ -1,6 +1,7 @@
 server:
   host: 0.0.0.0
   port: 3069
+  log_format: json
 
 thirdweb:
   urls:
