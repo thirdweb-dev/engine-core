@@ -1,136 +1,227 @@
 # Thirdweb Engine Core
 
-A high-performance, Rust-based blockchain transaction engine that provides robust infrastructure for Web3 applications. Engine Core handles smart contract interactions, Account Abstraction (ERC-4337), and transaction management with enterprise-grade reliability.
+Production-grade blockchain transaction infrastructure built in Rust. Engine Core is a high-performance, horizontally-scalable system designed for developers building serious Web3 applications that require reliable smart contract interactions, Account Abstraction support, and enterprise-level transaction processing.
 
-## 🏗️ Architecture Overview
+## Why Engine Core?
 
-Thirdweb Engine Core is built as a modular Rust workspace with the following key components:
+### Performance & Scalability
+Built with Rust's zero-cost abstractions and memory safety guarantees. The architecture supports horizontal scaling through Redis-backed job queues with configurable worker pools and lease-based concurrency control.
 
-### Core Components
+### Production-Ready Infrastructure
+- Redis-backed message queues with atomic operations and retry logic
+- Graceful shutdown handling with job completion guarantees  
+- Comprehensive error handling and transaction rollback mechanisms
+- Built-in monitoring and observability through structured logging
 
-- **`server/`** - Main HTTP API server (`thirdweb-engine`)
-- **`core/`** - Core blockchain functionality (`engine-core`)
-- **`aa-core/`** - Account Abstraction support (`engine-aa-core`)
-- **`executors/`** - Background job processors (`engine-executors`)
-- **`thirdweb-core/`** - Thirdweb-specific integrations
-- **`twmq/`** - Thirdweb Message Queue - Redis-backed job queue system
+### Developer Experience
+- Complete OpenAPI specification with interactive documentation
+- Type-safe configuration system with environment variable overrides
+- Modular architecture allowing selective component deployment
+- Extensive test coverage including integration tests with Redis
 
-### Key Features
+## 🏗️ Architecture
 
-- ✅ **Account Abstraction (ERC-4337)** - Full support for UserOperations v0.6 and v0.7
-- ✅ **Multi-chain Support** - Works with any EVM-compatible blockchain
-- ✅ **Smart Contract Interactions** - Read, write, and encode contract calls
-- ✅ **Background Job Processing** - Reliable webhook delivery and transaction confirmation
-- ✅ **Secure Wallet Management** - Integration with Thirdweb Vault for key management
-- ✅ **REST API** - OpenAPI-documented endpoints with Scalar documentation
-- ✅ **Enterprise Reliability** - Redis-backed job queues with retry logic and error handling
+Engine Core implements a microservices-like architecture within a single binary, using Rust's workspace system for clean module separation:
 
-## 🚀 Quick Start
+### Core Infrastructure (`core/`)
+**Purpose**: Fundamental blockchain operations and abstractions
+- **Chain Management** (`chain.rs`): Multi-chain RPC client management with automatic failover
+- **Transaction Primitives** (`transaction.rs`): Raw transaction building, signing, and broadcasting
+- **UserOperation Support** (`userop.rs`): Complete ERC-4337 implementation with v0.6/v0.7 compatibility
+- **RPC Clients** (`rpc_clients/`): Specialized clients for bundlers, paymasters, and JSON-RPC endpoints
+- **Error Handling** (`error.rs`): Comprehensive error types with context preservation
 
-### Prerequisites
+### Account Abstraction Engine (`aa-core/`)
+**Purpose**: Complete ERC-4337 Account Abstraction implementation
+- **Smart Account Management** (`smart_account/`): Account factory integrations and deployment
+- **UserOperation Builder** (`userop/`): Gas estimation, signature aggregation, and bundler submission
+- **Account Factory Support** (`account_factory/`): Pluggable factory implementations (default, chained)
+- **Signature Handling** (`signer.rs`): Multi-signature support with Vault integration
 
-- **Rust** (latest stable version)
-- **Redis** server running locally or accessible remotely
-- **Thirdweb API credentials** (secret key and client ID)
+### HTTP API Server (`server/`)
+**Purpose**: REST API layer with comprehensive endpoint coverage
+- **Contract Operations**: Read, write, and encode smart contract functions
+- **Transaction Management**: Raw transaction sending with AA support
+- **Message Signing**: EIP-712 typed data and personal message signing
+- **Dynamic ABI**: Runtime contract introspection and interaction
+- **OpenAPI Documentation**: Auto-generated specs with Scalar UI
 
-### Environment Setup
+### Background Job System (`executors/` + `twmq/`)
+**Purpose**: Reliable asynchronous processing with Redis persistence
 
-1. **Clone the repository:**
+#### TWMQ (Thirdweb Message Queue)
+Advanced Redis-backed job queue with enterprise features:
+- **Lease-Based Concurrency**: Prevents job duplication across worker instances
+- **Atomic Operations**: All queue operations use Lua scripts for consistency
+- **Retry Logic**: Configurable backoff strategies with failure categorization
+- **Job Lifecycle Management**: Pending → Active → Success/Failed with full audit trail
+- **Delayed Jobs**: Schedule jobs for future execution with precise timing
+- **Cancellation Support**: Cancel jobs in any state with immediate or pending cancellation
 
-   ```bash
-   git clone <repo-url>
-   cd engine-core
-   ```
+#### Executor Types
+- **Webhook Delivery**: Reliable HTTP webhook notifications with configurable retries
+- **Transaction Confirmation**: Block confirmation tracking with reorganization handling  
+- **External Bundler Integration**: UserOperation submission and status monitoring
 
-2. **Install dependencies:**
+### Thirdweb Service Integration (`thirdweb-core/`)
+**Purpose**: First-party service integrations
+- **Vault SDK**: Hardware-backed private key management
+- **IAW (In-App Wallets)**: Embedded wallet creation and management
+- **ABI Service**: Dynamic contract ABI resolution and caching
 
-   ```bash
-   cargo build
-   ```
+## 🚀 Getting Started
 
-3. **Set up Redis:**
+### System Requirements
 
-   ```bash
-   # Using Docker
-   docker run -d --name redis -p 6379:6379 redis:7-alpine
+- **Rust 1.70+** (2021 edition with async support)
+- **Redis 6.0+** (required for job queue persistence and atomic operations)
+- **Thirdweb API Credentials** (secret key and client ID from dashboard)
 
-   # Or install locally (macOS)
-   brew install redis
-   brew services start redis
-   ```
+### Quick Setup
 
-### Configuration
+```bash
+# Clone and build
+git clone <repo-url> && cd engine-core
+cargo build --release
 
-The server uses a layered configuration system with YAML files and environment variables.
+# Start Redis (Docker recommended for development)
+docker run -d --name redis -p 6379:6379 redis:7-alpine
 
-#### Configuration Files
+# Configure credentials
+export APP__THIRDWEB__SECRET="your_secret_key"
+export APP__THIRDWEB__CLIENT_ID="your_client_id"
 
-Create configuration files in the `server/configuration/` directory:
+# Launch engine
+RUST_LOG=info ./target/release/thirdweb-engine
+```
 
-**`server/configuration/server_local.yaml`:**
+### Configuration System
+
+Engine Core uses a hierarchical configuration system: YAML files + environment variables with full type safety and validation.
+
+#### Configuration Layers
+1. **Base Configuration** (`server_base.yaml`) - Default values
+2. **Environment-Specific** (`server_development.yaml`, `server_production.yaml`)
+3. **Environment Variables** - Highest priority, prefix with `APP__`
+
+#### Essential Configuration
 
 ```yaml
+# server/configuration/server_local.yaml
+server:
+  host: "0.0.0.0"
+  port: 3069
+
 thirdweb:
   secret: "your_thirdweb_secret_key"
   client_id: "your_thirdweb_client_id"
+  urls:
+    vault: "https://vault.thirdweb.com"
+    bundler: "bundler.thirdweb.com" 
+    paymaster: "bundler.thirdweb.com"
+
+redis:
+  url: "redis://localhost:6379"
+
+queue:
+  webhook_workers: 50
+  external_bundler_send_workers: 20
+  userop_confirm_workers: 10
+  local_concurrency: 100
+  polling_interval_ms: 100
+  lease_duration_seconds: 600
 ```
 
-#### Or with Environment Variables
-
-You can also override any configuration using environment variables with the prefix `APP__`:
+#### Environment Variable Override Examples
 
 ```bash
-export APP__THIRDWEB__SECRET="your_secret_key"
-export APP__THIRDWEB__CLIENT_ID="your_client_id"
-export APP__REDIS__URL="redis://localhost:6379"
-export APP__SERVER__PORT=3069
+# Scale worker pools for high throughput
+export APP__QUEUE__WEBHOOK_WORKERS=200
+export APP__QUEUE__LOCAL_CONCURRENCY=500
+
+# Custom Redis configuration
+export APP__REDIS__URL="redis://redis-cluster:6379"
+
+# Debug logging for development
+export RUST_LOG="thirdweb_engine=debug,twmq=debug"
 ```
 
-#### Required Configuration
+### Docker Deployment
 
-- **`thirdweb.secret`** - Your Thirdweb secret key
-- **`thirdweb.client_id`** - Your Thirdweb client ID
-- **`redis.url`** - Redis connection URL (default: `redis://localhost:6379`)
+```dockerfile
+FROM rust:1.70 as builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release
 
-### Running the Server
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates
+COPY --from=builder /app/target/release/thirdweb-engine /usr/local/bin/
+EXPOSE 3069
+CMD ["thirdweb-engine"]
+```
 
-1. **Start Redis** (if not already running):
+### Health Checks & Monitoring
 
-   ```bash
-   redis-server
-   ```
+```bash
+# API health check
+curl http://localhost:3069/v1/api.json
 
-2. **Run the server:**
+# Queue statistics (if monitoring endpoint enabled)
+curl http://localhost:3069/v1/queue/stats
 
-   ```bash
-   # Development mode with debug logging
-   RUST_LOG=debug cargo run --bin thirdweb-engine
+# Structured logging output
+RUST_LOG="thirdweb_engine=info,twmq=warn" ./thirdweb-engine
+```
 
-   # Or build and run the optimized binary
-   cargo build --release
-   ./target/release/thirdweb-engine
-   ```
+## 🌩️ Thirdweb Engine Cloud
 
-3. **Verify the server is running:**
-   ```bash
-   curl http://localhost:3069/v1/api.json
-   ```
+**Want Engine without the ops overhead?** [**Thirdweb Engine Cloud**](https://thirdweb.com/engine) is our fully-managed, production-ready service built on Engine Core with enterprise enhancements:
 
-The server will start on `http://localhost:3069` by default.
+### ⚡ Enhanced Features Beyond Core
+- **Auto Execution Resolution**: Smart execution strategy selection with cached Account Abstraction details
+- **Streamlined Wallet Management**: Convenient wallet creation and management through dashboard
+- **Smart Account Cache**: Pre-resolved AA configurations (signer addresses, factory details, gas policies)
+- **Global Edge Network**: Optimized RPC routing and intelligent caching for sub-100ms response times
+- **Advanced Analytics**: Real-time transaction monitoring, gas usage insights, and performance metrics
+- **Zero-Config Account Abstraction**: Automatic paymaster selection and gas sponsorship
 
-## 📚 API Documentation
+### 🛡️ Production-Ready Operations
+- **High Availability** with automated failover and disaster recovery
+- **Horizontal Auto-Scaling** based on transaction volume and queue depth
+- **Enterprise Security**: Encryption at rest/transit, comprehensive audit logging
+- **Expert Support** with dedicated technical assistance
+- **Custom Rate Limits** and priority processing for high-volume applications
 
-Once the server is running, you can access:
+### 🚀 Get Started Instantly
+```bash
+# No infrastructure setup required
+curl -X POST "https://api.engine.thirdweb.com/contract/write" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "executionOptions": {
+      "chainId": 137,
+      "type": "auto",
+      "from": "0x..."
+    },
+    "params": [{
+      "contractAddress": "0x...",
+      "functionName": "mint",
+      "args": ["0x...", "1"]
+    }]
+  }'
+```
 
-- **API Documentation**: `http://localhost:3069/v1/reference`
-- **OpenAPI Spec**: `http://localhost:3069/v1/api.json`
+**[Start Building →](https://thirdweb.com/engine)** | **[View Cloud API Reference →](https://engine.thirdweb.com/reference)**
 
-### Available Endpoints
+---
 
-- `POST /v1/read/contract` - Read from smart contracts
-- `POST /v1/write/contract` - Write to smart contracts (with AA support)
-- `POST /v1/encode/contract` - Encode contract function calls
-- `POST /v1/write/transaction` - Send raw transactions
+## 📚 Self-Hosted API Documentation
+
+For self-hosted Engine Core instances:
+- **Interactive Documentation**: `http://localhost:3069/reference`
+- **OpenAPI Specification**: `http://localhost:3069/api.json`
 
 ## 🔧 Development
 
@@ -278,7 +369,7 @@ MIT
 
 For issues and questions:
 
-1. Check the API documentation at `/v1/reference`
+1. Check the API documentation at `/reference`
 2. Review server logs for error details
 3. Ensure Redis is running and accessible
 4. Verify Thirdweb credentials are valid
