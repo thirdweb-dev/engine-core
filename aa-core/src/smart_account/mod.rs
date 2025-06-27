@@ -47,7 +47,7 @@ pub trait SmartAccount {
     }
 
     /// Encode a batch transaction call to the account
-    fn encode_execute_batch(&self, batch: &Vec<InnerTransaction>) -> Bytes {
+    fn encode_execute_batch(&self, batch: &[InnerTransaction]) -> Bytes {
         executeBatchCall {
             _target: batch
                 .iter()

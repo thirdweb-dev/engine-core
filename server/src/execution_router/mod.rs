@@ -102,7 +102,7 @@ impl ExecutionRouter {
         let encoded_calldata = if transactions.len() == 1 {
             smart_account.encode_execute(&transactions[0])
         } else {
-            smart_account.encode_execute_batch(&transactions.to_vec())
+            smart_account.encode_execute_batch(transactions)
         };
 
         // Create rules for UserOp restrictions
