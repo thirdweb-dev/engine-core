@@ -172,8 +172,6 @@ impl IAWClient {
             reqwest::header::HeaderValue::from_static("application/json"),
         );
 
-        tracing::info!("Headers: {:?}", headers);
-
         // Convert MessageFormat to isRaw boolean (Hex = true, Text = false)
         let is_raw = match format.unwrap_or_default() {
             MessageFormat::Hex => true,
