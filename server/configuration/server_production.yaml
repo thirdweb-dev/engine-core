@@ -17,6 +17,7 @@ redis:
   url: override_in_env
 
 queue:
+  execution_namespace: "engine-cloud"
   webhook_workers: 100
   external_bundler_send_workers: 100
   userop_confirm_workers: 100
