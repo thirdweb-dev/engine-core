@@ -10,15 +10,24 @@ use serde_json;
 use std::time::Duration;
 use thiserror::Error;
 
-
 use crate::{auth::ThirdwebAuth, error::SerializableReqwestError};
-use engine_aa_types::{VersionedUserOp, UserOpError, compute_user_op_v06_hash, compute_user_op_v07_hash};
+use engine_aa_types::{
+    UserOpError, VersionedUserOp, compute_user_op_v06_hash, compute_user_op_v07_hash,
+};
 
 /// Authentication token for IAW operations
 pub type AuthToken = String;
 
 /// Error types for IAW operations
-#[derive(Error, Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, utoipa::ToSchema)]
+#[derive(
+    Error,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    utoipa::ToSchema,
+)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IAWError {
     #[error("API error: {0}")]
@@ -99,13 +108,11 @@ pub struct SignUserOpData {
     pub signature: String,
 }
 
-
-
 /// Client for interacting with the IAW (In-App Wallet) service
 #[derive(Clone)]
 pub struct IAWClient {
-    _base_url: String,
-    _http_client: reqwest::Client,
+    base_url: String,
+    http_client: reqwest::Client,
 }
 
 impl IAWClient {
@@ -123,19 +130,16 @@ impl IAWClient {
             .map_err(IAWError::from)?;
 
         Ok(Self {
-            _base_url: base_url.into(),
-            _http_client: http_client,
+            base_url: base_url.into(),
+            http_client,
         })
     }
 
     /// Create a new IAWClient with a custom HTTP client
-    pub fn with_http_client(
-        base_url: impl Into<String>,
-        http_client: reqwest::Client,
-    ) -> Self {
+    pub fn with_http_client(base_url: impl Into<String>, http_client: reqwest::Client) -> Self {
         Self {
-            _base_url: base_url.into(),
-            _http_client: http_client,
+            base_url: base_url.into(),
+            http_client,
         }
     }
 
@@ -151,14 +155,17 @@ impl IAWClient {
     ) -> Result<SignMessageData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
-        
+
         // Add IAW service authentication
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer embedded-wallet-token:{}", auth_token))
-                .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer embedded-wallet-token:{}",
+                auth_token
+            ))
+            .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
-        
+
         // Add content type
         headers.insert(
             "Content-Type",
@@ -182,8 +189,9 @@ impl IAWClient {
         });
 
         // Make the request to IAW service
-        let url = format!("{}/api/v1/enclave-wallet/sign-message", self._base_url);
-        let response = self._http_client
+        let url = format!("{}/api/v1/enclave-wallet/sign-message", self.base_url);
+        let response = self
+            .http_client
             .post(&url)
             .headers(headers)
             .json(&payload)
@@ -194,13 +202,16 @@ impl IAWClient {
             return Err(IAWError::ApiError(format!(
                 "Failed to sign message - {} {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown error")
+                response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown error")
             )));
         }
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-        
+
         // Extract just the signature as requested
         let signature = signed_response
             .get("signature")
@@ -222,14 +233,17 @@ impl IAWClient {
     ) -> Result<SignTypedDataData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
-        
+
         // Add IAW service authentication
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer embedded-wallet-token:{}", auth_token))
-                .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer embedded-wallet-token:{}",
+                auth_token
+            ))
+            .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
-        
+
         // Add content type
         headers.insert(
             "Content-Type",
@@ -240,8 +254,9 @@ impl IAWClient {
         let payload = serde_json::json!(typed_data);
 
         // Make the request to IAW service
-        let url = format!("{}/api/v1/enclave-wallet/sign-typed-data", self._base_url);
-        let response = self._http_client
+        let url = format!("{}/api/v1/enclave-wallet/sign-typed-data", self.base_url);
+        let response = self
+            .http_client
             .post(&url)
             .headers(headers)
             .json(&payload)
@@ -252,13 +267,16 @@ impl IAWClient {
             return Err(IAWError::ApiError(format!(
                 "Failed to sign typed data - {} {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown error")
+                response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown error")
             )));
         }
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-        
+
         // Extract just the signature as requested
         let signature = signed_response
             .get("signature")
@@ -279,14 +297,17 @@ impl IAWClient {
     ) -> Result<SignTransactionData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
-        
+
         // Add IAW service authentication
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer embedded-wallet-token:{}", auth_token))
-                .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer embedded-wallet-token:{}",
+                auth_token
+            ))
+            .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
-        
+
         // Add content type
         headers.insert(
             "Content-Type",
@@ -299,8 +320,9 @@ impl IAWClient {
         });
 
         // Make the request to IAW service
-        let url = format!("{}/api/v1/enclave-wallet/sign-transaction", self._base_url);
-        let response = self._http_client
+        let url = format!("{}/api/v1/enclave-wallet/sign-transaction", self.base_url);
+        let response = self
+            .http_client
             .post(&url)
             .headers(headers)
             .json(&payload)
@@ -311,13 +333,16 @@ impl IAWClient {
             return Err(IAWError::ApiError(format!(
                 "Failed to sign transaction - {} {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown error")
+                response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown error")
             )));
         }
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-        
+
         // Extract just the signature as requested
         let signature = signed_response
             .get("signature")
@@ -339,14 +364,17 @@ impl IAWClient {
     ) -> Result<SignAuthorizationData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
-        
+
         // Add IAW service authentication
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer embedded-wallet-token:{}", auth_token))
-                .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer embedded-wallet-token:{}",
+                auth_token
+            ))
+            .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
-        
+
         // Add content type
         headers.insert(
             "Content-Type",
@@ -361,8 +389,9 @@ impl IAWClient {
         });
 
         // Make the request to IAW service
-        let url = format!("{}/api/v1/enclave-wallet/sign-authorization", self._base_url);
-        let response = self._http_client
+        let url = format!("{}/api/v1/enclave-wallet/sign-authorization", self.base_url);
+        let response = self
+            .http_client
             .post(&url)
             .headers(headers)
             .json(&payload)
@@ -373,18 +402,24 @@ impl IAWClient {
             return Err(IAWError::ApiError(format!(
                 "Failed to sign authorization - {} {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown error")
+                response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown error")
             )));
         }
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-        
+
         // Extract the signed authorization from the response
         let signed_authorization: SignedAuthorization = serde_json::from_value(
-            signed_response.get("signedAuthorization")
-                .ok_or_else(|| IAWError::ApiError("No signedAuthorization in response".to_string()))?
-                .clone()
+            signed_response
+                .get("signedAuthorization")
+                .ok_or_else(|| {
+                    IAWError::ApiError("No signedAuthorization in response".to_string())
+                })?
+                .clone(),
         )?;
 
         Ok(SignAuthorizationData {
@@ -404,26 +439,25 @@ impl IAWClient {
     ) -> Result<SignUserOpData, IAWError> {
         // Compute the userop hash based on version
         let hash = match &userop {
-            VersionedUserOp::V0_6(op) => {
-                compute_user_op_v06_hash(op, entrypoint, chain_id)?
-            }
-            VersionedUserOp::V0_7(op) => {
-                compute_user_op_v07_hash(op, entrypoint, chain_id)?
-            }
+            VersionedUserOp::V0_6(op) => compute_user_op_v06_hash(op, entrypoint, chain_id)?,
+            VersionedUserOp::V0_7(op) => compute_user_op_v07_hash(op, entrypoint, chain_id)?,
         };
-        
+
         let userop_hash = format!("0x{}", hex::encode(hash.as_slice()));
         tracing::info!("Computed userop hash: {}", userop_hash);
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
-        
+
         // Add IAW service authentication
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer embedded-wallet-token:{}", auth_token))
-                .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
+            reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer embedded-wallet-token:{}",
+                auth_token
+            ))
+            .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
-        
+
         // Add content type
         headers.insert(
             "Content-Type",
@@ -436,13 +470,14 @@ impl IAWClient {
                 "message": userop_hash,
                 "isRaw": true,
                 "chainId": chain_id,
-                "originalMessage": serde_json::to_string(&userop).unwrap(),
+                "originalMessage": serde_json::to_string(&userop).map_err(|e| IAWError::SerializationError { message: e.to_string() })?,
             }
         });
 
         // Make the request to IAW service with explicit timeout
-        let url = format!("{}/api/v1/enclave-wallet/sign-message", self._base_url);
-        let response = self._http_client
+        let url = format!("{}/api/v1/enclave-wallet/sign-message", self.base_url);
+        let response = self
+            .http_client
             .post(&url)
             .headers(headers)
             .json(&payload)
@@ -453,13 +488,16 @@ impl IAWClient {
             return Err(IAWError::ApiError(format!(
                 "Failed to sign userop - {} {}",
                 response.status(),
-                response.status().canonical_reason().unwrap_or("Unknown error")
+                response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown error")
             )));
         }
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-        
+
         // Extract just the signature as requested
         let signature = signed_response
             .get("signature")
