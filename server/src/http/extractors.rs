@@ -92,10 +92,11 @@ where
     type Rejection = ApiEngineError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Check for IAW credentials first (x-wallet-token)
+        // Check for IAW credentials first (x-wallet-access-token)
+        // TODO: this will be deprecated in the future, we should use x-vault-access-token instead for all wallets
         if let Some(wallet_token) = parts
             .headers
-            .get("x-wallet-token")
+            .get("x-wallet-access-token")
             .and_then(|v| v.to_str().ok())
         {
             // Extract ThirdwebAuth for billing purposes

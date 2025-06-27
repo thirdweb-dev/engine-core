@@ -459,11 +459,6 @@ impl IAWClient {
 
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
-
-        tracing::warn!(
-            signed_response = serde_json::to_string(&signed_response).unwrap(),
-            "Signed response"
-        );
         
         // Extract just the signature as requested
         let signature = signed_response
