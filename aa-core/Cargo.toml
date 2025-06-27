@@ -7,6 +7,7 @@ edition = "2024"
 alloy = { version = "1.0.8", features = ["serde"] }
 tokio = "1.44.2"
 engine-core = { path = "../core" }
+thirdweb-core = { path = "../thirdweb-core" }
 vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
 vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
 serde = "1.0.219"

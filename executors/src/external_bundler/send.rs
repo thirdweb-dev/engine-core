@@ -16,8 +16,9 @@ use engine_core::{
     error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
     execution_options::{WebhookOptions, aa::Erc4337ExecutionOptions},
     transaction::InnerTransaction,
-    userop::{UserOpSigner, UserOpVersion},
+    userop::{UserOpSigner},
 };
+use types_core::UserOpVersion;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::{

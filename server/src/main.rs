@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let signer = Arc::new(UserOpSigner {
         vault_client: vault_client.clone(),
+        iaw_client: iaw_client.clone(),
     });
     let eoa_signer = Arc::new(EoaSigner::new(vault_client, iaw_client));
 

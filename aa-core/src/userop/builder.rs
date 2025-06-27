@@ -11,8 +11,9 @@ use engine_core::{
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, EngineError},
     execution_options::aa::{EntrypointAndFactoryDetails, EntrypointVersion},
-    userop::{UserOpSigner, UserOpSignerParams, UserOpVersion},
+    userop::{UserOpSigner, UserOpSignerParams},
 };
+use thirdweb_core::iaw::UserOpVersion;
 
 pub struct UserOpBuilderConfig<'a, C: Chain> {
     pub account_address: Address,

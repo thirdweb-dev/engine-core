@@ -16,6 +16,7 @@ tracing = "0.1.41"
 twmq = { version = "0.1.0", path = "../twmq" }
 engine-core = { version = "0.1.0", path = "../core" }
 engine-aa-core = { version = "0.1.0", path = "../aa-core" }
+types-core = { path = "../types-core" }
 rand = "0.9.1"
 uuid = { version = "1.17.0", features = ["v4"] }
 chrono = "0.4.41"

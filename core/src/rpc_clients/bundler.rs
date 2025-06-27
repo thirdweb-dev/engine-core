@@ -6,7 +6,7 @@ use alloy::transports::{IntoBoxTransport, TransportResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::userop::UserOpVersion;
+use types_core::UserOpVersion;
 
 // Gas buffer added for managed account factories (matches TypeScript)
 pub const MANAGED_ACCOUNT_GAS_BUFFER: U256 = U256::from_limbs([21_000, 0, 0, 0]);
