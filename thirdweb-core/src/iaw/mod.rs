@@ -30,8 +30,8 @@ pub type AuthToken = String;
 )]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IAWError {
-    #[error("API error: {0}")]
-    ApiError(String),
+    #[error("API error: {message}")]
+    ApiError { message: String },
     #[error("Serialization error: {message}")]
     SerializationError { message: String },
     #[error("Network error: {error}")]
@@ -197,14 +197,16 @@ impl IAWClient {
             .await?;
 
         if !response.status().is_success() {
-            return Err(IAWError::ApiError(format!(
-                "Failed to sign message - {} {}",
-                response.status(),
-                response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown error")
-            )));
+            return Err(IAWError::ApiError {
+                message: format!(
+                    "Failed to sign message - {} {}",
+                    response.status(),
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
+                ),
+            });
         }
 
         // Parse the response
@@ -214,7 +216,9 @@ impl IAWClient {
         let signature = signed_response
             .get("signature")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| IAWError::ApiError("No signature in response".to_string()))?;
+            .ok_or_else(|| IAWError::ApiError {
+                message: "No signature in response".to_string(),
+            })?;
 
         Ok(SignMessageData {
             signature: signature.to_string(),
@@ -262,14 +266,16 @@ impl IAWClient {
             .await?;
 
         if !response.status().is_success() {
-            return Err(IAWError::ApiError(format!(
-                "Failed to sign typed data - {} {}",
-                response.status(),
-                response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown error")
-            )));
+            return Err(IAWError::ApiError {
+                message: format!(
+                    "Failed to sign typed data - {} {}",
+                    response.status(),
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
+                ),
+            });
         }
 
         // Parse the response
@@ -279,7 +285,9 @@ impl IAWClient {
         let signature = signed_response
             .get("signature")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| IAWError::ApiError("No signature in response".to_string()))?;
+            .ok_or_else(|| IAWError::ApiError {
+                message: "No signature in response".to_string(),
+            })?;
 
         Ok(SignTypedDataData {
             signature: signature.to_string(),
@@ -328,14 +336,16 @@ impl IAWClient {
             .await?;
 
         if !response.status().is_success() {
-            return Err(IAWError::ApiError(format!(
-                "Failed to sign transaction - {} {}",
-                response.status(),
-                response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown error")
-            )));
+            return Err(IAWError::ApiError {
+                message: format!(
+                    "Failed to sign transaction - {} {}",
+                    response.status(),
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
+                ),
+            });
         }
 
         // Parse the response
@@ -345,7 +355,9 @@ impl IAWClient {
         let signature = signed_response
             .get("signature")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| IAWError::ApiError("No signature in response".to_string()))?;
+            .ok_or_else(|| IAWError::ApiError {
+                message: "No signature in response".to_string(),
+            })?;
 
         Ok(SignTransactionData {
             signature: signature.to_string(),
@@ -397,14 +409,16 @@ impl IAWClient {
             .await?;
 
         if !response.status().is_success() {
-            return Err(IAWError::ApiError(format!(
-                "Failed to sign authorization - {} {}",
-                response.status(),
-                response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown error")
-            )));
+            return Err(IAWError::ApiError {
+                message: format!(
+                    "Failed to sign authorization - {} {}",
+                    response.status(),
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
+                ),
+            });
         }
 
         // Parse the response
@@ -414,8 +428,8 @@ impl IAWClient {
         let signed_authorization: SignedAuthorization = serde_json::from_value(
             signed_response
                 .get("signedAuthorization")
-                .ok_or_else(|| {
-                    IAWError::ApiError("No signedAuthorization in response".to_string())
+                .ok_or_else(|| IAWError::ApiError {
+                    message: "No signedAuthorization in response".to_string(),
                 })?
                 .clone(),
         )?;
@@ -483,14 +497,16 @@ impl IAWClient {
             .await?;
 
         if !response.status().is_success() {
-            return Err(IAWError::ApiError(format!(
-                "Failed to sign userop - {} {}",
-                response.status(),
-                response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("Unknown error")
-            )));
+            return Err(IAWError::ApiError {
+                message: format!(
+                    "Failed to sign userop - {} {}",
+                    response.status(),
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
+                ),
+            });
         }
 
         // Parse the response
@@ -500,7 +516,9 @@ impl IAWClient {
         let signature = signed_response
             .get("signature")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| IAWError::ApiError("No signature in response".to_string()))?;
+            .ok_or_else(|| IAWError::ApiError {
+                message: "No signature in response".to_string(),
+            })?;
 
         Ok(SignUserOpData {
             signature: signature.to_string(),

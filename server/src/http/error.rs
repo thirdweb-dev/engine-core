@@ -68,7 +68,7 @@ impl ApiEngineError {
             },
             EngineError::VaultError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             EngineError::IawError { error } => match error {
-                thirdweb_core::iaw::IAWError::ApiError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                thirdweb_core::iaw::IAWError::ApiError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
                 thirdweb_core::iaw::IAWError::SerializationError { .. } => StatusCode::BAD_REQUEST,
                 thirdweb_core::iaw::IAWError::NetworkError { .. } => StatusCode::BAD_REQUEST,
                 thirdweb_core::iaw::IAWError::AuthError(_) => StatusCode::UNAUTHORIZED,

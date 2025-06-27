@@ -99,46 +99,43 @@ where
             .get("x-wallet-access-token")
             .and_then(|v| v.to_str().ok())
         {
-            // Extract ThirdwebAuth for billing purposes
-            let thirdweb_auth = if let Some(secret_key) = parts
+            // Try client ID and service key combination
+            let client_id = parts
                 .headers
-                .get("x-thirdweb-secret-key")
+                .get("x-thirdweb-client-id")
                 .and_then(|v| v.to_str().ok())
-            {
-                ThirdwebAuth::SecretKey(secret_key.to_string())
-            } else {
-                // Try client ID and service key combination
-                let client_id = parts
-                    .headers
-                    .get("x-thirdweb-client-id")
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| {
-                        ApiEngineError(EngineError::ValidationError {
-                            message: "Missing x-thirdweb-client-id header when using IAW".to_string(),
-                        })
-                    })?;
+                .ok_or_else(|| {
+                    ApiEngineError(EngineError::ValidationError {
+                        message:
+                            "Missing x-thirdweb-client-id header when using x-wallet-access-token"
+                                .to_string(),
+                    })
+                })?;
 
-                let service_key = parts
-                    .headers
-                    .get("x-thirdweb-service-key")
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| {
-                        ApiEngineError(EngineError::ValidationError {
-                            message: "Missing x-thirdweb-service-key header when using IAW".to_string(),
-                        })
-                    })?;
+            let service_key = parts
+                .headers
+                .get("x-thirdweb-service-key")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| {
+                    ApiEngineError(EngineError::ValidationError {
+                        message:
+                            "Missing x-thirdweb-service-key header when using x-wallet-access-token"
+                                .to_string(),
+                    })
+                })?;
 
-                ThirdwebAuth::ClientIdServiceKey(thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
+            let thirdweb_auth = ThirdwebAuth::ClientIdServiceKey(
+                thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
                     client_id: client_id.to_string(),
                     service_key: service_key.to_string(),
-                })
-            };
+                },
+            );
 
             return Ok(SigningCredentialsExtractor(SigningCredential::Iaw {
                 auth_token: wallet_token.to_string(),
                 thirdweb_auth,
             }));
-        }
+        };
 
         // Fall back to Vault credentials
         let vault_access_token = parts
