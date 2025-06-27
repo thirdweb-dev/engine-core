@@ -51,6 +51,7 @@ pub struct ThirdwebUrls {
     pub vault: String,
     pub paymaster: String,
     pub abi_service: String,
+    pub iaw_service: String,
 }
 
 impl Default for ServerConfig {

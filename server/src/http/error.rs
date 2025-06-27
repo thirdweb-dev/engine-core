@@ -67,6 +67,17 @@ impl ApiEngineError {
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
             EngineError::VaultError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            EngineError::IawError { error } => match error {
+                thirdweb_core::iaw::IAWError::ApiError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                thirdweb_core::iaw::IAWError::SerializationError { .. } => StatusCode::BAD_REQUEST,
+                thirdweb_core::iaw::IAWError::NetworkError { .. } => StatusCode::BAD_REQUEST,
+                thirdweb_core::iaw::IAWError::AuthError(_) => StatusCode::UNAUTHORIZED,
+                thirdweb_core::iaw::IAWError::ThirdwebError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                thirdweb_core::iaw::IAWError::UnexpectedError(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+                thirdweb_core::iaw::IAWError::UserOpError(_) => StatusCode::BAD_REQUEST,
+            },
             EngineError::BundlerError { .. } => StatusCode::BAD_REQUEST,
             EngineError::PaymasterError { .. } => StatusCode::BAD_REQUEST,
             EngineError::ValidationError { .. } => StatusCode::BAD_REQUEST,

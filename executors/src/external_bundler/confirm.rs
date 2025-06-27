@@ -202,6 +202,7 @@ where
         tracing::info!(
             transaction_id = %job_data.transaction_id,
             user_op_hash = ?job_data.user_op_hash,
+            transaction_hash = ?receipt.receipt.transaction_hash,
             success = %receipt.success,
             "User operation confirmed on-chain"
         );

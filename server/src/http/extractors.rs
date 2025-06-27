@@ -92,13 +92,62 @@ where
     type Rejection = ApiEngineError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Check for IAW credentials first (x-wallet-access-token)
+        // TODO: this will be deprecated in the future, we should use x-vault-access-token instead for all wallets
+        if let Some(wallet_token) = parts
+            .headers
+            .get("x-wallet-access-token")
+            .and_then(|v| v.to_str().ok())
+        {
+            // Extract ThirdwebAuth for billing purposes
+            let thirdweb_auth = if let Some(secret_key) = parts
+                .headers
+                .get("x-thirdweb-secret-key")
+                .and_then(|v| v.to_str().ok())
+            {
+                ThirdwebAuth::SecretKey(secret_key.to_string())
+            } else {
+                // Try client ID and service key combination
+                let client_id = parts
+                    .headers
+                    .get("x-thirdweb-client-id")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        ApiEngineError(EngineError::ValidationError {
+                            message: "Missing x-thirdweb-client-id header when using IAW".to_string(),
+                        })
+                    })?;
+
+                let service_key = parts
+                    .headers
+                    .get("x-thirdweb-service-key")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        ApiEngineError(EngineError::ValidationError {
+                            message: "Missing x-thirdweb-service-key header when using IAW".to_string(),
+                        })
+                    })?;
+
+                ThirdwebAuth::ClientIdServiceKey(thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
+                    client_id: client_id.to_string(),
+                    service_key: service_key.to_string(),
+                })
+            };
+
+            return Ok(SigningCredentialsExtractor(SigningCredential::Iaw {
+                auth_token: wallet_token.to_string(),
+                thirdweb_auth,
+            }));
+        }
+
+        // Fall back to Vault credentials
         let vault_access_token = parts
             .headers
             .get("x-vault-access-token")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| {
                 ApiEngineError(EngineError::ValidationError {
-                    message: "Missing x-vault-access-token header".to_string(),
+                    message: "Missing x-vault-access-token or x-wallet-token header".to_string(),
                 })
             })?;
 

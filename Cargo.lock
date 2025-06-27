@@ -86,9 +86,9 @@ dependencies = [
  "alloy-eips 0.15.8",
  "alloy-serde 0.15.8",
  "alloy-signer 0.15.8",
- "alloy-signer-aws",
- "alloy-signer-gcp",
- "alloy-signer-ledger",
+ "alloy-signer-aws 0.15.8",
+ "alloy-signer-gcp 0.15.8",
+ "alloy-signer-ledger 0.15.8",
 ]
 
 [[package]]
@@ -109,6 +109,9 @@ dependencies = [
  "alloy-rpc-types",
  "alloy-serde 1.0.8",
  "alloy-signer 1.0.8",
+ "alloy-signer-aws 1.0.9",
+ "alloy-signer-gcp 1.0.9",
+ "alloy-signer-ledger 1.0.9",
  "alloy-signer-local",
  "alloy-transport",
  "alloy-transport-http",
@@ -692,7 +695,9 @@ version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afebd60fa84d9ce793326941509d8f26ce7b383f2aabd7a42ba215c1b92ea96b"
 dependencies = [
+ "alloy-dyn-abi",
  "alloy-primitives",
+ "alloy-sol-types",
  "async-trait",
  "auto_impl",
  "either",
@@ -720,6 +725,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-signer-aws"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6be3d371299b62eac5aa459fa58e8d1c761aabdc637573ae258ab744457fcc88"
+dependencies = [
+ "alloy-consensus 1.0.8",
+ "alloy-network 1.0.8",
+ "alloy-primitives",
+ "alloy-signer 1.0.8",
+ "async-trait",
+ "aws-sdk-kms",
+ "k256",
+ "spki",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
 name = "alloy-signer-gcp"
 version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -729,6 +752,24 @@ dependencies = [
  "alloy-network 0.15.8",
  "alloy-primitives",
  "alloy-signer 0.15.8",
+ "async-trait",
+ "gcloud-sdk",
+ "k256",
+ "spki",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
+name = "alloy-signer-gcp"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df298e47bbb7d0a8e06b603046b91062c11ba70d22f8a6c9bab1c1468bd856d0"
+dependencies = [
+ "alloy-consensus 1.0.8",
+ "alloy-network 1.0.8",
+ "alloy-primitives",
+ "alloy-signer 1.0.8",
  "async-trait",
  "gcloud-sdk",
  "k256",
@@ -748,6 +789,26 @@ dependencies = [
  "alloy-network 0.15.8",
  "alloy-primitives",
  "alloy-signer 0.15.8",
+ "alloy-sol-types",
+ "async-trait",
+ "coins-ledger",
+ "futures-util",
+ "semver 1.0.26",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
+name = "alloy-signer-ledger"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b0e049299cc7e131a438a904f89a493bcea45cd92bbed3e50116a28bc27987c"
+dependencies = [
+ "alloy-consensus 1.0.8",
+ "alloy-dyn-abi",
+ "alloy-network 1.0.8",
+ "alloy-primitives",
+ "alloy-signer 1.0.8",
  "alloy-sol-types",
  "async-trait",
  "coins-ledger",
@@ -2364,6 +2425,7 @@ name = "engine-aa-core"
 version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
+ "engine-aa-types",
  "engine-core",
  "serde",
  "tokio",
@@ -2373,11 +2435,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-aa-types"
+version = "0.1.0"
+dependencies = [
+ "alloy 1.0.9",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "utoipa",
+]
+
+[[package]]
 name = "engine-core"
 version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
  "async-nats",
+ "engine-aa-types",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2400,6 +2475,7 @@ dependencies = [
  "alloy 1.0.9",
  "chrono",
  "engine-aa-core",
+ "engine-aa-types",
  "engine-core",
  "hex",
  "hmac",
@@ -5361,6 +5437,7 @@ name = "thirdweb-core"
 version = "0.1.0"
 dependencies = [
  "alloy 1.0.9",
+ "engine-aa-types",
  "moka",
  "reqwest",
  "schemars 0.8.22",

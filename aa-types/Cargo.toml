@@ -1,0 +1,12 @@
+[package]
+name = "engine-aa-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.0.8", features = ["serde"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+schemars = "0.8.22"
+utoipa = "5.4.0"

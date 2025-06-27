@@ -8,6 +8,7 @@ use alloy::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thirdweb_core::error::ThirdwebError;
+
 use thiserror::Error;
 use twmq::error::TwmqError;
 
@@ -205,6 +206,14 @@ pub enum EngineError {
     #[error("Error interaction with vault: {message}")]
     #[serde(rename_all = "camelCase")]
     VaultError { message: String },
+
+    #[schema(title = "Engine IAW Service Error")]
+    #[error("Error interaction with IAW service: {error}")]
+    #[serde(rename_all = "camelCase")]
+    IawError {
+        #[from]
+        error: thirdweb_core::iaw::IAWError,
+    },
 
     #[schema(title = "RPC Configuration Error")]
     #[error("Bad RPC configuration: {message}")]
@@ -456,3 +465,4 @@ impl From<TwmqError> for EngineError {
         }
     }
 }
+

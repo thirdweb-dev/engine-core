@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use engine_core::{signer::EoaSigner, userop::UserOpSigner};
-use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth};
+use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
     config,
@@ -38,10 +38,14 @@ async fn main() -> anyhow::Result<()> {
         rpc_base_url: config.thirdweb.urls.rpc,
     });
 
+    let iaw_client = IAWClient::new(&config.thirdweb.urls.iaw_service)?;
+    tracing::info!("IAW client initialized");
+
     let signer = Arc::new(UserOpSigner {
         vault_client: vault_client.clone(),
+        iaw_client: iaw_client.clone(),
     });
-    let eoa_signer = Arc::new(EoaSigner { vault_client });
+    let eoa_signer = Arc::new(EoaSigner::new(vault_client, iaw_client));
 
     let queue_manager =
         QueueManager::new(&config.redis, &config.queue, chains.clone(), signer.clone()).await?;
