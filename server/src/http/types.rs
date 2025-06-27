@@ -42,7 +42,7 @@ pub enum BatchResultItem<S, E = EngineError> {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct BatchResults<S, E = EngineError> {
     /// Array of results, one for each input contract call
-    pub results: Vec<BatchResultItem<S, E>>,
+    pub result: Vec<BatchResultItem<S, E>>,
 }
 
 impl<S, E> BatchResultItem<S, E> {

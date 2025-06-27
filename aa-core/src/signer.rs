@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use alloy::{
     dyn_abi::TypedData,
-    hex::FromHex,
-    primitives::{Address, B256, Bytes, hex, keccak256},
+    primitives::{Address, B256, hex, keccak256},
     sol,
     sol_types::{SolCall, SolValue, decode_revert_reason, eip712_domain},
 };
@@ -71,19 +70,8 @@ impl<C: Chain + Clone> SmartAccountSignerBuilder<C> {
 
     /// Build the signer with computed address and factory pattern detection
     pub async fn build(self) -> Result<SmartAccountSigner<C>, EngineError> {
-        // 1. Parse Account Salt
-        let salt_data = if self.options.account_salt.starts_with("0x") {
-            Bytes::from_hex(self.options.account_salt.clone()).map_err(|e| {
-                EngineError::ValidationError {
-                    message: format!("Failed to parse hex salt: {}", e),
-                }
-            })?
-        } else {
-            let hex_string = hex::encode(self.options.account_salt.clone());
-            Bytes::from_hex(hex_string).map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to encode salt as hex: {}", e),
-            })?
-        };
+        // 1. Parse Account Salt using the helper method
+        let salt_data = self.options.get_salt_data()?;
 
         // 2. Determine Smart Account
         let smart_account = match self.options.smart_account_address {
@@ -268,10 +256,6 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
 
         let contract =
             ERC1271Contract::new(self.smart_account.address, self.chain.provider().clone());
-
-        dbg!(self.options.signer_address);
-        dbg!(hash);
-        dbg!(signature);
 
         match contract
             .isValidSignature(hash, signature_bytes.into())

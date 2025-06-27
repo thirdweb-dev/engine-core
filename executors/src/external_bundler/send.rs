@@ -1,7 +1,4 @@
-use alloy::{
-    hex::FromHex,
-    primitives::{Address, Bytes, U256},
-};
+use alloy::primitives::{Address, Bytes, U256};
 use engine_aa_core::{
     account_factory::{AccountFactory, get_account_factory},
     smart_account::{DeterminedSmartAccount, SmartAccount, SmartAccountFromSalt},
@@ -54,6 +51,10 @@ pub struct ExternalBundlerSendJobData {
     pub webhook_options: Option<Vec<WebhookOptions>>,
 
     pub rpc_credentials: RpcCredentials,
+    
+    /// Pregenerated nonce for vault signed tokens
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pregenerated_nonce: Option<U256>,
 }
 
 impl HasWebhookOptions for ExternalBundlerSendJobData {
@@ -262,21 +263,12 @@ where
 
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
-        // 2. Parse Account Salt
-        let salt_data = if job_data.execution_options.account_salt.starts_with("0x") {
-            Bytes::from_hex(job_data.execution_options.account_salt.clone())
+        // 2. Parse Account Salt using the helper method
+        let salt_data = job_data.execution_options.get_salt_data()
                 .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
-                    message: format!("Failed to parse hex salt: {}", e),
+                    message: e.to_string(),
                 })
-                .map_err_fail()?
-        } else {
-            let hex_string = hex::encode(job_data.execution_options.account_salt.clone());
-            Bytes::from_hex(hex_string)
-                .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
-                    message: format!("Failed to encode salt as hex: {}", e),
-                })
-                .map_err_fail()?
-        };
+                .map_err_fail()?;
 
         // 3. Determine Smart Account
         let smart_account = match job_data.execution_options.smart_account_address {
@@ -363,15 +355,15 @@ where
 
         tracing::debug!(lock_acquired = ?needs_init_code);
 
-        // 5. Get Nonce
-        let nonce = {
+        // 5. Get Nonce - use pregenerated nonce if available, otherwise generate random
+        let nonce = job_data.pregenerated_nonce.unwrap_or_else(|| {
             use rand::Rng;
             let mut rng = rand::rng();
             let limb1: u64 = rng.random();
             let limb2: u64 = rng.random();
             let limb3: u64 = rng.random();
             U256::from_limbs([0, limb1, limb2, limb3])
-        };
+        });
 
         // 6. Prepare Init Call Data
         let init_call_data = get_account_factory(

@@ -23,7 +23,7 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, SigningCredentialsExtractor},
     server::EngineServerState,
-    types::{BatchResultItem, BatchResults, SuccessResponse},
+    types::{BatchResultItem, BatchResults},
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
@@ -98,7 +98,7 @@ pub struct SignResultData {
     tag = "Signature",
     request_body(content = SignTypedDataRequest, description = "Sign typed data request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully signed typed data", body = SuccessResponse<BatchResults<SignResultData>>, content_type = "application/json"),
+        (status = 200, description = "Successfully signed typed data", body = BatchResults<SignResultData>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -127,12 +127,7 @@ pub async fn sign_typed_data(
 
     let results: Vec<BatchResultItem<SignResultData>> = join_all(sign_futures).await;
 
-    Ok((
-        StatusCode::OK,
-        Json(SuccessResponse {
-            result: BatchResults { results },
-        }),
-    ))
+    Ok((StatusCode::OK, Json(BatchResults { result: results })))
 }
 
 // ===== HELPER FUNCTIONS =====

@@ -1,6 +1,7 @@
 use alloy::{
     dyn_abi::TypedData,
-    primitives::{Address, ChainId},
+    hex::FromHex,
+    primitives::{Address, Bytes, ChainId},
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
@@ -89,6 +90,22 @@ pub struct Erc4337SigningOptions {
     /// Chain ID for smart account operations
     #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     pub chain_id: ChainId,
+}
+
+impl Erc4337SigningOptions {
+    /// Parse account salt into Bytes, handling both hex and plain string formats
+    pub fn get_salt_data(&self) -> Result<Bytes, EngineError> {
+        if self.account_salt.starts_with("0x") {
+            Bytes::from_hex(&self.account_salt).map_err(|e| EngineError::ValidationError {
+                message: format!("Failed to parse hex salt: {}", e),
+            })
+        } else {
+            let hex_string = alloy::hex::encode(&self.account_salt);
+            Bytes::from_hex(hex_string).map_err(|e| EngineError::ValidationError {
+                message: format!("Failed to encode salt as hex: {}", e),
+            })
+        }
+    }
 }
 
 /// Configuration options for signing operations

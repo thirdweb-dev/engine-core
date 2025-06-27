@@ -51,7 +51,7 @@ pub enum DeploymentStatus {
     /// Account is currently being deployed by another process
     BeingDeployed { stale: bool, lock_id: LockId },
 
-    ///
+    /// Account is not deployed
     NotDeployed,
 }
 

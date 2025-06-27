@@ -24,7 +24,7 @@ use serde_json::Value as JsonValue;
 use thirdweb_core::auth::ThirdwebAuth;
 
 use crate::http::extractors::EngineJson;
-use crate::http::types::{BatchResultItem, BatchResults, SuccessResponse};
+use crate::http::types::{BatchResultItem, BatchResults};
 use crate::http::{
     dyn_contract::{
         ContractCall, ContractOperationResult, PreparedContractCall, dyn_sol_value_to_json,
@@ -114,7 +114,7 @@ pub struct ReadResultSuccessItem(
     tag = "Read",
     request_body(content = ReadRequest, description = "Read contract request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully read contract data", body = SuccessResponse<BatchResults<ReadResultSuccessItem>>, content_type = "application/json"),
+        (status = 200, description = "Successfully read contract data", body = BatchResults<ReadResultSuccessItem>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -193,12 +193,7 @@ pub async fn read_contract(
         &call_indices,
     );
 
-    Ok((
-        StatusCode::OK,
-        Json(SuccessResponse {
-            result: BatchResults { results },
-        }),
-    ))
+    Ok((StatusCode::OK, Json(BatchResults { result: results })))
 }
 
 // ===== HELPER FUNCTIONS =====

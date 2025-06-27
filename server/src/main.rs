@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
         vault_client: vault_client.clone(),
         iaw_client: iaw_client.clone(),
     });
-    let eoa_signer = Arc::new(EoaSigner::new(vault_client, iaw_client));
+    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
 
     let queue_manager =
         QueueManager::new(&config.redis, &config.queue, chains.clone(), signer.clone()).await?;
@@ -67,12 +67,15 @@ async fn main() -> anyhow::Result<()> {
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
         transaction_registry: queue_manager.transaction_registry.clone(),
+        vault_client: Arc::new(vault_client.clone()),
+        chains: chains.clone(),
     };
 
     let mut server = EngineServer::new(EngineServerState {
         userop_signer: signer.clone(),
         eoa_signer: eoa_signer.clone(),
         abi_service: Arc::new(abi_service),
+        vault_client: Arc::new(vault_client),
         chains,
         execution_router: Arc::new(execution_router),
         queue_manager: Arc::new(queue_manager),

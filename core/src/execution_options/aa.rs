@@ -1,8 +1,9 @@
 use crate::{
     constants::{DEFAULT_FACTORY_ADDRESS_V0_6, ENTRYPOINT_ADDRESS_V0_6},
     defs::AddressDef,
+    error::EngineError,
 };
-use alloy::primitives::Address;
+use alloy::{hex::FromHex, primitives::{Address, Bytes}};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -83,6 +84,22 @@ pub struct Erc4337ExecutionOptions {
     #[schemars(with = "Option::<AddressDef>")]
     #[schema(value_type = Option<AddressDef>)]
     pub smart_account_address: Option<Address>,
+}
+
+impl Erc4337ExecutionOptions {
+    /// Parse account salt into Bytes, handling both hex and plain string formats
+    pub fn get_salt_data(&self) -> Result<Bytes, EngineError> {
+        if self.account_salt.starts_with("0x") {
+            Bytes::from_hex(&self.account_salt).map_err(|e| EngineError::ValidationError {
+                message: format!("Failed to parse hex salt: {}", e),
+            })
+        } else {
+            let hex_string = alloy::hex::encode(&self.account_salt);
+            Bytes::from_hex(hex_string).map_err(|e| EngineError::ValidationError {
+                message: format!("Failed to encode salt as hex: {}", e),
+            })
+        }
+    }
 }
 
 pub fn default_factory_address() -> Address {

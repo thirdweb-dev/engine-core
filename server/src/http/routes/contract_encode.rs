@@ -17,7 +17,7 @@ use crate::http::{
     error::ApiEngineError,
     extractors::{EngineJson, OptionalRpcCredentialsExtractor},
     server::EngineServerState,
-    types::{BatchResultItem, BatchResults, SuccessResponse},
+    types::{BatchResultItem, BatchResults},
 };
 
 // ===== REQUEST/RESPONSE TYPES =====
@@ -89,7 +89,7 @@ impl EncodeResultSuccessItem {
     tag = "Read",
     request_body(content = EncodeRequest, description = "Encode contract request", content_type = "application/json"),
     responses(
-        (status = 200, description = "Successfully encoded contract calls", body = SuccessResponse<BatchResults<EncodeResultSuccessItem>>, content_type = "application/json"),
+        (status = 200, description = "Successfully encoded contract calls", body = BatchResults<EncodeResultSuccessItem>, content_type = "application/json"),
     ),
     params(
         ("x-thirdweb-client-id" = Option<String>, Header, description = "Thirdweb client ID, passed along with the service key"),
@@ -145,8 +145,5 @@ pub async fn encode_contract(
         })
         .collect();
 
-    Ok((
-        StatusCode::OK,
-        Json(SuccessResponse::new(BatchResults { results })),
-    ))
+    Ok((StatusCode::OK, Json(BatchResults { result: results })))
 }

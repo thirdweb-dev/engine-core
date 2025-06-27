@@ -6122,13 +6122,14 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "vault-sdk"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#0308dc7d233b5af4e83c97aba4e757766fad810d"
+source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#a9d62a85ae69d47b2f341e886d16c12611644235"
 dependencies = [
  "alloy 0.15.10",
  "chacha20poly1305",
  "chrono",
  "hex",
  "hkdf",
+ "jsonwebtoken",
  "reqwest",
  "serde",
  "serde_json",
@@ -6142,7 +6143,7 @@ dependencies = [
 [[package]]
 name = "vault-types"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#0308dc7d233b5af4e83c97aba4e757766fad810d"
+source = "git+ssh://git@github.com/thirdweb-dev/vault.git?branch=main#a9d62a85ae69d47b2f341e886d16c12611644235"
 dependencies = [
  "alloy 0.15.10",
  "bincode",
