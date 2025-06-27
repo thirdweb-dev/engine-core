@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/server
@@ -132,4 +130,4 @@ jobs:
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
