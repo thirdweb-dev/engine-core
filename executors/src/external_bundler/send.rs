@@ -17,6 +17,7 @@ use engine_core::{
     userop::UserOpSigner,
 };
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::{sync::Arc, time::Duration};
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
@@ -74,6 +75,14 @@ pub struct ExternalBundlerSendResult {
     pub deployment_lock_acquired: bool,
 }
 
+// --- Policy Error Structure ---
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymasterPolicyError {
+    pub policy_id: String,
+    pub reason: String,
+}
+
 // --- Error Types ---
 #[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
@@ -117,6 +126,12 @@ pub enum ExternalBundlerSendError {
         user_op: VersionedUserOp,
         message: String,
         inner_error: Option<EngineError>,
+    },
+
+    #[error("Policy restriction error: {reason} (Policy ID: {policy_id})")]
+    PolicyRestriction {
+        policy_id: String,
+        reason: String,
     },
 
     #[error("Invalid RPC Credentials: {message}")]
@@ -403,7 +418,7 @@ where
             .map_err(|e| {
                 let mapped_error =
                     map_build_error(&e, smart_account.address, nonce, needs_init_code);
-                if is_build_error_retryable(&e) {
+                if is_external_bundler_error_retryable(&mapped_error) {
                     mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
                 } else {
                     mapped_error.fail()
@@ -561,12 +576,53 @@ where
 }
 
 // --- Error Mapping Helpers ---
+
+/// Attempts to parse a policy error from an error message/body
+fn try_parse_policy_error(error_body: &str) -> Option<PaymasterPolicyError> {
+    // Try to parse the error body as JSON containing policy error
+    if let Ok(policy_error) = serde_json::from_str::<PaymasterPolicyError>(error_body) {
+        return Some(policy_error);
+    }
+    
+    // Also check if the error message contains policy error information
+    if error_body.contains("policyId") && error_body.contains("reason") {
+        if let Ok(policy_error) = serde_json::from_str::<PaymasterPolicyError>(error_body) {
+            return Some(policy_error);
+        }
+    }
+    
+    None
+}
+
 fn map_build_error(
     engine_error: &EngineError,
     account_address: Address,
     nonce: U256,
     had_lock: bool,
 ) -> ExternalBundlerSendError {
+    // First check if this is a paymaster policy error
+    if let EngineError::PaymasterError { kind, .. } = engine_error {
+        match kind {
+            RpcErrorKind::TransportHttpError { body, .. } => {
+                if let Some(policy_error) = try_parse_policy_error(body) {
+                    return ExternalBundlerSendError::PolicyRestriction {
+                        policy_id: policy_error.policy_id,
+                        reason: policy_error.reason,
+                    };
+                }
+            }
+            RpcErrorKind::DeserError { text, .. } => {
+                if let Some(policy_error) = try_parse_policy_error(text) {
+                    return ExternalBundlerSendError::PolicyRestriction {
+                        policy_id: policy_error.policy_id,
+                        reason: policy_error.reason,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
     let stage = match engine_error {
         EngineError::RpcError { .. } | EngineError::PaymasterError { .. } => "BUILDING".to_string(),
         EngineError::BundlerError { .. } => "BUNDLING".to_string(),
@@ -727,4 +783,42 @@ fn is_bundler_error_retryable(error_msg: &str) -> bool {
 
     // Retry everything else (network issues, 5xx errors, timeouts, etc.)
     true
+}
+
+/// Determines if an ExternalBundlerSendError should be retried
+fn is_external_bundler_error_retryable(e: &ExternalBundlerSendError) -> bool {
+    match e {
+        // Policy restrictions are never retryable
+        ExternalBundlerSendError::PolicyRestriction { .. } => false,
+        
+        // For other errors, check their inner EngineError if present
+        ExternalBundlerSendError::UserOpBuildFailed { inner_error: Some(inner), .. } => {
+            is_build_error_retryable(inner)
+        }
+        ExternalBundlerSendError::BundlerSendFailed { inner_error: Some(inner), .. } => {
+            is_build_error_retryable(inner)
+        }
+        
+        // User cancellations are not retryable
+        ExternalBundlerSendError::UserCancelled => false,
+        
+        // Account determination failures are generally not retryable (validation errors)
+        ExternalBundlerSendError::AccountDeterminationFailed { .. } => false,
+        
+        // Invalid account salt is not retryable (validation error)
+        ExternalBundlerSendError::InvalidAccountSalt { .. } => false,
+        
+        // Invalid RPC credentials are not retryable (auth error)
+        ExternalBundlerSendError::InvalidRpcCredentials { .. } => false,
+        
+        // Deployment locked and chain service errors can be retried
+        ExternalBundlerSendError::DeploymentLocked { .. } => true,
+        ExternalBundlerSendError::ChainServiceError { .. } => true,
+        
+        // Internal errors can be retried
+        ExternalBundlerSendError::InternalError { .. } => true,
+        
+        // Default to not retryable for safety
+        _ => false,
+    }
 }
