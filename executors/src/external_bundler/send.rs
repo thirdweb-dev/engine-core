@@ -78,7 +78,7 @@ pub struct ExternalBundlerSendResult {
 // --- Policy Error Structure ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct PaymasterPolicyError {
+pub struct PaymasterPolicyResponse {
     pub policy_id: String,
     pub reason: String,
 }
@@ -578,20 +578,9 @@ where
 // --- Error Mapping Helpers ---
 
 /// Attempts to parse a policy error from an error message/body
-fn try_parse_policy_error(error_body: &str) -> Option<PaymasterPolicyError> {
-    // Try to parse the error body as JSON containing policy error
-    if let Ok(policy_error) = serde_json::from_str::<PaymasterPolicyError>(error_body) {
-        return Some(policy_error);
-    }
-    
-    // Also check if the error message contains policy error information
-    if error_body.contains("policyId") && error_body.contains("reason") {
-        if let Ok(policy_error) = serde_json::from_str::<PaymasterPolicyError>(error_body) {
-            return Some(policy_error);
-        }
-    }
-    
-    None
+fn try_parse_policy_error(error_body: &str) -> Option<PaymasterPolicyResponse> {
+    // Try to parse the error body as JSON containing policy error response
+    serde_json::from_str::<PaymasterPolicyResponse>(error_body).ok()
 }
 
 fn map_build_error(
@@ -604,10 +593,10 @@ fn map_build_error(
     if let EngineError::PaymasterError { kind, .. } = engine_error {
         match kind {
             RpcErrorKind::TransportHttpError { body, .. } => {
-                if let Some(policy_error) = try_parse_policy_error(body) {
+                if let Some(policy_response) = try_parse_policy_error(body) {
                     return ExternalBundlerSendError::PolicyRestriction {
-                        policy_id: policy_error.policy_id,
-                        reason: policy_error.reason,
+                        policy_id: policy_response.policy_id,
+                        reason: policy_response.reason,
                     };
                 }
             }
