@@ -12,7 +12,7 @@ use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
-    execution_options::{aa::Erc4337ExecutionOptions, WebhookOptions},
+    execution_options::{WebhookOptions, aa::Erc4337ExecutionOptions},
     transaction::InnerTransaction,
     userop::UserOpSigner,
 };
@@ -52,7 +52,7 @@ pub struct ExternalBundlerSendJobData {
     pub webhook_options: Option<Vec<WebhookOptions>>,
 
     pub rpc_credentials: RpcCredentials,
-    
+
     /// Pregenerated nonce for vault signed tokens
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pregenerated_nonce: Option<U256>,
@@ -129,10 +129,7 @@ pub enum ExternalBundlerSendError {
     },
 
     #[error("Policy restriction error: {reason} (Policy ID: {policy_id})")]
-    PolicyRestriction {
-        policy_id: String,
-        reason: String,
-    },
+    PolicyRestriction { policy_id: String, reason: String },
 
     #[error("Invalid RPC Credentials: {message}")]
     InvalidRpcCredentials { message: String },
@@ -279,11 +276,13 @@ where
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
         // 2. Parse Account Salt using the helper method
-        let salt_data = job_data.execution_options.get_salt_data()
-                .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
-                    message: e.to_string(),
-                })
-                .map_err_fail()?;
+        let salt_data = job_data
+            .execution_options
+            .get_salt_data()
+            .map_err(|e| ExternalBundlerSendError::InvalidAccountSalt {
+                message: e.to_string(),
+            })
+            .map_err_fail()?;
 
         // 3. Determine Smart Account
         let smart_account = match job_data.execution_options.smart_account_address {
@@ -321,10 +320,28 @@ where
             .deployment_manager()
             .check_deployment_status(job_data.chain_id, &smart_account.address, is_deployed_check)
             .await
-            .map_err(|e| ExternalBundlerSendError::InternalError {
-                message: format!("Deployment manager error: {}", e),
-            })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            // we could have redis errors, or RPC errors
+            // in case of RPC errors we'd want to see if the RPC error is retryable
+            .map_err(|e| {
+                tracing::error!(error = ?e, "Error in deployment manager");
+                match &e {
+                    EngineError::RpcError { kind: k, .. } => {
+                        let mapped_error = ExternalBundlerSendError::ChainServiceError {
+                            chain_id: chain.chain_id(),
+                            message: format!("Deployment manager error: {}", e),
+                        };
+                        if is_retryable_rpc_error(k) {
+                            mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
+                        } else {
+                            mapped_error.fail()
+                        }
+                    }
+                    _ => ExternalBundlerSendError::InternalError {
+                        message: format!("Deployment manager error: {}", e),
+                    }
+                    .nack(Some(Duration::from_secs(10)), RequeuePosition::Last),
+                }
+            })?;
 
         let needs_init_code = match deployment_status {
             DeploymentStatus::Deployed => false,
@@ -615,7 +632,7 @@ fn map_build_error(
     let stage = match engine_error {
         EngineError::RpcError { .. } | EngineError::PaymasterError { .. } => "BUILDING".to_string(),
         EngineError::BundlerError { .. } => "BUNDLING".to_string(),
-        EngineError::VaultError { .. } => "Signing".to_string(),
+        EngineError::VaultError { .. } => "SIGNING".to_string(),
         _ => "UNKNOWN".to_string(),
     };
 
@@ -717,6 +734,7 @@ fn contains_revert_data(body: &str) -> bool {
 fn is_non_retryable_rpc_code(code: i64) -> bool {
     match code {
         -32000 => true, // Invalid input / execution error
+        -32001 => true, // Chain does not exist / invalid chain
         -32603 => true, // Internal error (often indicates invalid params)
         _ => false,
     }
@@ -726,46 +744,48 @@ fn is_non_retryable_rpc_code(code: i64) -> bool {
 fn is_bundler_error_retryable(error_msg: &str) -> bool {
     // Check for specific AA error codes that should not be retried
     if error_msg.contains("AA10") || // sender already constructed
-       error_msg.contains("AA13") || // initCode failed or OOG
-       error_msg.contains("AA14") || // initCode must return sender
-       error_msg.contains("AA15") || // initCode must create sender
-       error_msg.contains("AA21") || // didn't pay prefund
-       error_msg.contains("AA22") || // expired or not due
-       error_msg.contains("AA23") || // reverted (or OOG)
-       error_msg.contains("AA24") || // signature error
-       error_msg.contains("AA25") || // invalid account nonce
-       error_msg.contains("AA31") || // paymaster deposit too low
-       error_msg.contains("AA32") || // paymaster stake too low
-       error_msg.contains("AA33") || // reverted (or OOG)
-       error_msg.contains("AA34") || // signature error
-       error_msg.contains("AA40") || // over verificationGasLimit
-       error_msg.contains("AA41") || // too little verificationGas
-       error_msg.contains("AA50") || // postOp reverted
-       error_msg.contains("AA51")    // prefund below actualGasCost
+        error_msg.contains("AA13") || // initCode failed or OOG
+        error_msg.contains("AA14") || // initCode must return sender
+        error_msg.contains("AA15") || // initCode must create sender
+        error_msg.contains("AA21") || // didn't pay prefund
+        error_msg.contains("AA22") || // expired or not due
+        error_msg.contains("AA23") || // reverted (or OOG)
+        error_msg.contains("AA24") || // signature error
+        error_msg.contains("AA25") || // invalid account nonce
+        error_msg.contains("AA31") || // paymaster deposit too low
+        error_msg.contains("AA32") || // paymaster stake too low
+        error_msg.contains("AA33") || // reverted (or OOG)
+        error_msg.contains("AA34") || // signature error
+        error_msg.contains("AA40") || // over verificationGasLimit
+        error_msg.contains("AA41") || // too little verificationGas
+        error_msg.contains("AA50") || // postOp reverted
+        error_msg.contains("AA51")
+    // prefund below actualGasCost
     {
         return false;
     }
 
     // Check for revert-related messages that indicate permanent failures
-    if error_msg.contains("execution reverted") ||
-       error_msg.contains("UserOperation reverted") ||
-       error_msg.contains("reverted during simulation") ||
-       error_msg.contains("invalid signature") ||
-       error_msg.contains("signature error") ||
-       error_msg.contains("nonce too low") ||
-       error_msg.contains("nonce too high") ||
-       error_msg.contains("insufficient funds")
+    if error_msg.contains("execution reverted")
+        || error_msg.contains("UserOperation reverted")
+        || error_msg.contains("reverted during simulation")
+        || error_msg.contains("invalid signature")
+        || error_msg.contains("signature error")
+        || error_msg.contains("nonce too low")
+        || error_msg.contains("nonce too high")
+        || error_msg.contains("insufficient funds")
     {
         return false;
     }
 
     // Check for HTTP status codes that shouldn't be retried (4xx client errors)
-    if error_msg.contains("status: 400") ||
-       error_msg.contains("status: 401") ||
-       error_msg.contains("status: 403") ||
-       error_msg.contains("status: 404") ||
-       error_msg.contains("status: 422") ||
-       error_msg.contains("status: 429") // rate limit - could be retried but often permanent
+    if error_msg.contains("status: 400")
+        || error_msg.contains("status: 401")
+        || error_msg.contains("status: 403")
+        || error_msg.contains("status: 404")
+        || error_msg.contains("status: 422")
+        || error_msg.contains("status: 429")
+    // rate limit - could be retried but often permanent
     {
         return false;
     }
@@ -779,34 +799,36 @@ fn is_external_bundler_error_retryable(e: &ExternalBundlerSendError) -> bool {
     match e {
         // Policy restrictions are never retryable
         ExternalBundlerSendError::PolicyRestriction { .. } => false,
-        
+
         // For other errors, check their inner EngineError if present
-        ExternalBundlerSendError::UserOpBuildFailed { inner_error: Some(inner), .. } => {
-            is_build_error_retryable(inner)
-        }
-        ExternalBundlerSendError::BundlerSendFailed { inner_error: Some(inner), .. } => {
-            is_build_error_retryable(inner)
-        }
-        
+        ExternalBundlerSendError::UserOpBuildFailed {
+            inner_error: Some(inner),
+            ..
+        } => is_build_error_retryable(inner),
+        ExternalBundlerSendError::BundlerSendFailed {
+            inner_error: Some(inner),
+            ..
+        } => is_build_error_retryable(inner),
+
         // User cancellations are not retryable
         ExternalBundlerSendError::UserCancelled => false,
-        
+
         // Account determination failures are generally not retryable (validation errors)
         ExternalBundlerSendError::AccountDeterminationFailed { .. } => false,
-        
+
         // Invalid account salt is not retryable (validation error)
         ExternalBundlerSendError::InvalidAccountSalt { .. } => false,
-        
+
         // Invalid RPC credentials are not retryable (auth error)
         ExternalBundlerSendError::InvalidRpcCredentials { .. } => false,
-        
+
         // Deployment locked and chain service errors can be retried
         ExternalBundlerSendError::DeploymentLocked { .. } => true,
         ExternalBundlerSendError::ChainServiceError { .. } => true,
-        
+
         // Internal errors can be retried
         ExternalBundlerSendError::InternalError { .. } => true,
-        
+
         // Default to not retryable for safety
         _ => false,
     }

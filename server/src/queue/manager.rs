@@ -9,8 +9,8 @@ use engine_executors::{
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
         send::ExternalBundlerSendHandler,
     },
-    webhook::{WebhookJobHandler, WebhookRetryConfig},
     transaction_registry::TransactionRegistry,
+    webhook::{WebhookJobHandler, WebhookRetryConfig},
 };
 use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 
@@ -46,7 +46,7 @@ impl QueueManager {
     ) -> Result<Self, EngineError> {
         // Create Redis clients
         let redis_client = twmq::redis::Client::open(redis_config.url.as_str())?;
-        
+
         // Create transaction registry
         let transaction_registry = Arc::new(TransactionRegistry::new(
             redis_client.get_connection_manager().await?,
