@@ -26,13 +26,13 @@ pub enum RpcErrorKind {
     NullResp,
 
     /// Rpc server returned an unsupported feature.
-    #[error("unsupported feature: {0}")]
-    UnsupportedFeature(String),
+    #[error("unsupported feature: {message}")]
+    UnsupportedFeature { message: String },
 
     /// Returned when a local pre-processing step fails. This allows custom
     /// errors from local signers or request pre-processors.
-    #[error("local usage error: {0}")]
-    InternalError(String),
+    #[error("local usage error: {message}")]
+    InternalError { message: String },
 
     /// JSON serialization error.
     #[error("serialization error: {message}")]
@@ -327,10 +327,12 @@ fn to_engine_rpc_error_kind(err: &AlloyRpcError<TransportErrorKind>) -> RpcError
             data: err.data.as_ref().map(|data| data.to_string()),
         }),
         AlloyRpcError::NullResp => RpcErrorKind::NullResp,
-        AlloyRpcError::UnsupportedFeature(feature) => {
-            RpcErrorKind::UnsupportedFeature(feature.to_string())
-        }
-        AlloyRpcError::LocalUsageError(err) => RpcErrorKind::InternalError(err.to_string()),
+        AlloyRpcError::UnsupportedFeature(feature) => RpcErrorKind::UnsupportedFeature {
+            message: feature.to_string(),
+        },
+        AlloyRpcError::LocalUsageError(err) => RpcErrorKind::InternalError {
+            message: err.to_string(),
+        },
         AlloyRpcError::SerError(err) => RpcErrorKind::SerError {
             message: err.to_string(),
         },
@@ -465,4 +467,3 @@ impl From<TwmqError> for EngineError {
         }
     }
 }
-

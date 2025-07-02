@@ -433,6 +433,7 @@ where
             .build()
             .await
             .map_err(|e| {
+                tracing::error!(error = ?e, "Error building user operation");
                 let mapped_error =
                     map_build_error(&e, smart_account.address, nonce, needs_init_code);
                 if is_external_bundler_error_retryable(&mapped_error) {
