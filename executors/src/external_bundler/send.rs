@@ -692,10 +692,11 @@ fn is_build_error_retryable(e: &EngineError) -> bool {
 
 /// Check if an RPC error represents a client error (4xx) that shouldn't be retried
 fn is_client_error(kind: &RpcErrorKind) -> bool {
-    matches!(kind,
-        RpcErrorKind::TransportHttpError { status, .. }
-        if *status >= 400 && *status < 500
-    )
+    match kind {
+        RpcErrorKind::TransportHttpError { status, .. } if *status >= 400 && *status < 500 => true,
+        RpcErrorKind::UnsupportedFeature { .. } => true,
+        _ => false,
+    }
 }
 
 /// Determine if an RPC error from paymaster/bundler should be retried

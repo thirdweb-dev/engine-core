@@ -116,12 +116,20 @@ impl<'a, C: Chain> UserOpBuilderV0_6<'a, C> {
     }
 
     async fn build(mut self) -> Result<VersionedUserOp, EngineError> {
+        // let prices = self
+        //     .chain
+        //     .provider()
+        //     .estimate_eip1559_fees()
+        //     .await
+        //     .map_err(|err| err.to_engine_error(self.chain))?;
+
+        // TODO: modularize this so only used with thirdweb paymaster
         let prices = self
             .chain
-            .provider()
-            .estimate_eip1559_fees()
+            .paymaster_client()
+            .get_user_op_gas_fees()
             .await
-            .map_err(|err| err.to_engine_error(self.chain))?;
+            .map_err(|e| e.to_engine_error(self.chain))?;
 
         tracing::debug!("Gas prices determined");
 
@@ -222,12 +230,20 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
 
     async fn build(mut self) -> Result<VersionedUserOp, EngineError> {
         // Get gas prices, same as v0.6
+        // let prices = self
+        //     .chain
+        //     .provider()
+        //     .estimate_eip1559_fees()
+        //     .await
+        //     .map_err(|err| err.to_engine_error(self.chain))?;
+        
+        // TODO: modularize this so only used with thirdweb paymaster
         let prices = self
             .chain
-            .provider()
-            .estimate_eip1559_fees()
+            .paymaster_client()
+            .get_user_op_gas_fees()
             .await
-            .map_err(|err| err.to_engine_error(self.chain))?;
+            .map_err(|e| e.to_engine_error(self.chain))?;
 
         tracing::info!("Gas prices determined");
 
