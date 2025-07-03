@@ -182,7 +182,6 @@ where
                 message: format!("Failed to get cached nonce: {}", e),
             })
             .map_err_fail()?
-            .map(|n| n.to::<u64>())
             .unwrap_or(0);
 
         tracing::debug!(

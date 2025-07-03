@@ -21,6 +21,7 @@ use twmq::{
     job::{BorrowedJob, DelayOptions, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
+use crate::eoa::{EoaConfirmationWorker, EoaConfirmationWorkerJobData};
 use crate::{
     transaction_registry::TransactionRegistry,
     webhook::{
@@ -47,7 +48,6 @@ pub struct EoaSendJobData {
     pub webhook_options: Option<Vec<WebhookOptions>>,
 
     pub assigned_nonce: Option<u64>,
-
     pub gas_limit: Option<u64>,
 
     pub signing_credential: SigningCredential,
@@ -83,10 +83,16 @@ pub enum EoaSendError {
     ChainServiceError { chain_id: u64, message: String },
 
     #[error("Transaction simulation failed: {message}")]
-    SimulationFailed {
+    SimulationFailedWithRevert {
         message: String,
         revert_reason: Option<String>,
         revert_data: Option<Bytes>,
+    },
+
+    #[error("Transaction simulation failed: {message}")]
+    SimulationFailed {
+        message: String,
+        inner_error: EngineError,
     },
 
     #[error("Gas estimation failed: {message}")]
@@ -168,6 +174,7 @@ where
     pub transaction_registry: Arc<TransactionRegistry>,
     pub eoa_signer: Arc<EoaSigner>,
     pub max_in_flight: u32,
+    pub confirm_queue: Arc<Queue<EoaConfirmationWorker<CS>>>,
 }
 
 impl<CS> ExecutorStage for EoaSendHandler<CS>
@@ -247,13 +254,14 @@ where
         if let Some(gas_limit) = job_data.gas_limit {
             tx_request = tx_request.with_gas_limit(gas_limit);
         } else {
-            match chain.provider().estimate_gas(tx_request).await {
-                Ok(gas) => {
-                    let gas_with_buffer = gas * 110 / 100; // Add 10% buffer
+            let gas_limit_result = chain.provider().estimate_gas(tx_request.clone()).await;
+            match gas_limit_result {
+                Ok(gas_limit) => {
+                    let gas_with_buffer = gas_limit * 110 / 100; // Add 10% buffer
                     tx_request = tx_request.with_gas_limit(gas_with_buffer);
                 }
-                Err(rpc_error) => {
-                    return self.handle_simulation_error(rpc_error, &chain).await;
+                Err(e) => {
+                    return self.handle_simulation_error(e, &chain);
                 }
             }
         }
@@ -383,14 +391,9 @@ where
         let confirm_job = self
             .confirm_queue
             .clone()
-            .job(EoaConfirmationJobData {
-                transaction_id: job.job.data.transaction_id.clone(),
+            .job(EoaConfirmationWorkerJobData {
                 chain_id: job.job.data.chain_id,
-                eoa_address: job.job.data.from,
-                nonce: success_data.result.nonce_used,
-                transaction_hash: success_data.result.transaction_hash,
-                webhook_options: job.job.data.webhook_options.clone(),
-                rpc_credentials: job.job.data.rpc_credentials.clone(),
+                eoa: job.job.data.from,
             })
             .with_id(&job.job.data.transaction_id)
             .with_delay(DelayOptions {
@@ -508,21 +511,21 @@ impl<CS> EoaSendHandler<CS>
 where
     CS: ChainService + Send + Sync + 'static,
 {
-    async fn handle_simulation_error(
+    fn handle_simulation_error(
         &self,
         rpc_error: RpcError<TransportErrorKind>,
         chain: &impl Chain,
     ) -> JobResult<EoaSendResult, EoaSendError> {
         // Check if this is a revert first
         if let RpcError::ErrorResp(error_payload) = &rpc_error {
-            if error_payload.as_revert_data().is_some() {
-                return Err(EoaSendError::SimulationFailed {
+            if let Some(revert_data) = error_payload.as_revert_data() {
+                return Err(EoaSendError::SimulationFailedWithRevert {
                     message: format!(
                         "Transaction reverted during simulation: {}",
                         error_payload.message
                     ),
-                    revert_reason: Some(error_payload.message.clone()),
-                    revert_data: None,
+                    revert_reason: Some(error_payload.message.to_string()),
+                    revert_data: Some(revert_data),
                 }
                 .fail());
             }
@@ -539,16 +542,11 @@ where
                         EoaSendResult {
                             transaction_hash: B256::ZERO,
                             nonce_used: U256::ZERO,
-                            gas_limit: U256::ZERO,
-                            max_fee_per_gas: U256::ZERO,
-                            max_priority_fee_per_gas: U256::ZERO,
                             possibly_duplicate: None,
                         }
                     },
                     |reason| EoaSendError::SimulationFailed {
                         message: reason.clone(),
-                        revert_reason: None,
-                        revert_data: None,
                     },
                 )
             }

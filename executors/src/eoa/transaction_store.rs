@@ -1,4 +1,4 @@
-use alloy::consensus::Transaction;
+use alloy::consensus::{Receipt, Transaction};
 use alloy::network::AnyTransactionReceipt;
 use alloy::primitives::{Address, B256, U256};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
@@ -55,7 +55,7 @@ impl ActiveAttempt {
 pub struct ConfirmationData {
     pub transaction_hash: B256,
     pub confirmed_at: u64,
-    pub receipt: AnyTransactionReceipt,
+    pub receipt: TransactionReceipt,
 }
 
 /// Transaction store focused on transaction_id operations and nonce indexing
