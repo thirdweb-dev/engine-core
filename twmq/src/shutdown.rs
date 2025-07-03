@@ -2,25 +2,41 @@ use crate::error::TwmqError;
 use std::sync::Arc;
 
 /// Handle for a single worker that can be shut down gracefully
-pub struct WorkerHandle<H: crate::DurableExecution> {
+pub struct WorkerHandle<Q> {
     pub join_handle: tokio::task::JoinHandle<Result<(), TwmqError>>,
     pub shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    pub queue: Arc<crate::Queue<H>>,
+    pub queue: Arc<Q>,
 }
 
-impl<H: crate::DurableExecution> WorkerHandle<H> {
+pub trait QueueIdentifier {
+    fn queue_name(&self) -> &str;
+}
+
+impl<H: crate::DurableExecution> QueueIdentifier for crate::Queue<H> {
+    fn queue_name(&self) -> &str {
+        self.name()
+    }
+}
+
+impl<H: crate::DurableExecution> QueueIdentifier for crate::MultilaneQueue<H> {
+    fn queue_name(&self) -> &str {
+        self.queue_id()
+    }
+}
+
+impl<Q: QueueIdentifier> WorkerHandle<Q> {
     /// Shutdown this worker gracefully
     pub async fn shutdown(self) -> Result<(), TwmqError> {
         tracing::info!(
             "Initiating graceful shutdown of worker for queue: {}",
-            self.queue.name()
+            self.queue.queue_name()
         );
 
         // Signal shutdown to the worker
         if self.shutdown_tx.send(()).is_err() {
             tracing::warn!(
                 "Worker for queue {} was already shutting down",
-                self.queue.name()
+                self.queue.queue_name()
             );
         }
 
@@ -29,14 +45,14 @@ impl<H: crate::DurableExecution> WorkerHandle<H> {
             Ok(Ok(())) => {
                 tracing::info!(
                     "Worker for queue {} shut down gracefully",
-                    self.queue.name()
+                    self.queue.queue_name()
                 );
                 Ok(())
             }
             Ok(Err(e)) => {
                 tracing::error!(
                     "Worker for queue {} shut down with error: {:?}",
-                    self.queue.name(),
+                    self.queue.queue_name(),
                     e
                 );
                 Err(e)
@@ -44,7 +60,7 @@ impl<H: crate::DurableExecution> WorkerHandle<H> {
             Err(e) => {
                 tracing::error!(
                     "Worker task for queue {} panicked during shutdown: {:?}",
-                    self.queue.name(),
+                    self.queue.queue_name(),
                     e
                 );
                 Err(TwmqError::Runtime { message: format!("Worker panic: {}", e) })
@@ -69,7 +85,7 @@ impl ShutdownHandle {
     }
 
     /// Add a worker to be managed by this shutdown handle
-    pub fn add_worker<H: crate::DurableExecution>(&mut self, worker: WorkerHandle<H>) {
+    pub fn add_worker<Q>(&mut self, worker: WorkerHandle<Q>) {
         self.join_handles.push(worker.join_handle);
         self.shutdown_txs.push(worker.shutdown_tx);
     }
@@ -133,16 +149,16 @@ impl Default for ShutdownHandle {
 // Convenience methods to make collecting workers easier
 impl ShutdownHandle {
     /// Create a new shutdown handle with a single worker
-    pub fn with_worker<H: crate::DurableExecution>(worker: WorkerHandle<H>) -> Self {
+    pub fn with_worker<Q>(worker: WorkerHandle<Q>) -> Self {
         let mut handle = Self::new();
         handle.add_worker(worker);
         handle
     }
 
     /// Add multiple workers at once
-    pub fn add_workers<H: crate::DurableExecution>(
+    pub fn add_workers<Q>(
         &mut self,
-        workers: impl IntoIterator<Item = WorkerHandle<H>>,
+        workers: impl IntoIterator<Item = WorkerHandle<Q>>,
     ) {
         for worker in workers {
             self.add_worker(worker);
@@ -150,7 +166,7 @@ impl ShutdownHandle {
     }
 
     /// Builder-style method to add a worker
-    pub fn and_worker<H: crate::DurableExecution>(mut self, worker: WorkerHandle<H>) -> Self {
+    pub fn and_worker<Q>(mut self, worker: WorkerHandle<Q>) -> Self {
         self.add_worker(worker);
         self
     }
