@@ -1,4 +1,3 @@
-pub mod confirm;
 pub mod eoa_confirmation_worker;
 pub mod error_classifier;
 pub mod nonce_manager;
@@ -9,7 +8,8 @@ pub use confirm::{
     EoaConfirmationError, EoaConfirmationHandler, EoaConfirmationJobData, EoaConfirmationResult,
 };
 pub use eoa_confirmation_worker::{
-    EoaConfirmationWorker, EoaConfirmationWorkerError, EoaConfirmationWorkerJobData, EoaConfirmationWorkerResult,
+    EoaConfirmationWorker, EoaConfirmationWorkerError, EoaConfirmationWorkerJobData,
+    EoaConfirmationWorkerResult,
 };
 pub use error_classifier::{EoaErrorMapper, EoaExecutionError, RecoveryStrategy};
 pub use nonce_manager::{EoaHealth, NonceAssignment, NonceManager};

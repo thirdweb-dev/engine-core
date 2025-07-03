@@ -20,7 +20,7 @@ use crate::{
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
-        envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
+        envelope::{ExecutorStage, WebhookCapable},
     },
 };
 

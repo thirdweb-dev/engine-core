@@ -1,4 +1,4 @@
-use alloy::consensus::Transaction;
+use alloy::consensus::{SignableTransaction, Transaction};
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::Provider;
@@ -30,7 +30,6 @@ use crate::{
 };
 
 use super::{
-    confirm::{EoaConfirmationHandler, EoaConfirmationJobData},
     error_classifier::{EoaErrorMapper, EoaExecutionError, RecoveryStrategy},
     nonce_manager::NonceManager,
 };
@@ -73,9 +72,6 @@ impl HasTransactionMetadata for EoaSendJobData {
 pub struct EoaSendResult {
     pub transaction_hash: B256,
     pub nonce_used: u64,
-    pub gas_limit: U256,
-    pub max_fee_per_gas: U256,
-    pub max_priority_fee_per_gas: U256,
     pub possibly_duplicate: Option<bool>,
 }
 
@@ -169,8 +165,8 @@ where
     pub chain_service: Arc<CS>,
     pub nonce_manager: Arc<NonceManager>,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
-    pub confirm_queue: Arc<Queue<EoaConfirmationHandler<CS>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
+    pub eoa_signer: Arc<EoaSigner>,
     pub max_in_flight: u32,
 }
 
@@ -297,16 +293,47 @@ where
         let max_fee_per_gas = final_tx.max_fee_per_gas();
         let max_priority_fee_per_gas = final_tx.max_priority_fee_per_gas();
 
+        // 7. Sign the transaction
+        let signing_options = EoaSigningOptions {
+            from: job_data.from,
+            chain_id: Some(job_data.chain_id),
+        };
+
+        let signature = self
+            .eoa_signer
+            .sign_transaction(
+                signing_options,
+                final_tx.clone(),
+                job_data.signing_credential.clone(),
+            )
+            .await
+            .map_err(|e| EoaSendError::InternalError {
+                message: format!("Failed to sign transaction: {}", e),
+            })
+            .map_err_fail()?;
+
+        // 8. Create signed transaction envelope
+        let signed_tx = final_tx.into_signed(
+            signature
+                .parse()
+                .map_err(|e| EoaSendError::InternalError {
+                    message: format!("Failed to parse signature: {}", e),
+                })
+                .map_err_fail()?,
+        );
+
         tracing::debug!(
             nonce = %assigned_nonce,
             gas_limit = %gas_limit,
             max_fee_per_gas = %max_fee_per_gas,
             max_priority_fee_per_gas = ?max_priority_fee_per_gas,
-            "Sending transaction"
+            "Sending signed transaction"
         );
 
-        // 7. Send transaction
-        match chain.provider().send_transaction(final_tx).await {
+        let pre_computed_hash = signed_tx.hash();
+
+        // 9. Send transaction
+        match chain.provider().send_tx_envelope(signed_tx.into()).await {
             Ok(pending_tx) => {
                 let tx_hash = *pending_tx.tx_hash();
 
@@ -319,9 +346,6 @@ where
                 Ok(EoaSendResult {
                     transaction_hash: tx_hash,
                     nonce_used: assigned_nonce,
-                    gas_limit,
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
                     possibly_duplicate: None,
                 })
             }
@@ -671,7 +695,7 @@ where
     async fn handle_send_error(
         &self,
         send_error: RpcError<TransportErrorKind>,
-        nonce: U256,
+        nonce: u64,
         chain: &impl Chain,
     ) -> JobResult<EoaSendResult, EoaSendError> {
         // Try to map actionable errors, otherwise use engine error handling
