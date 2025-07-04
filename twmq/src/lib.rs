@@ -1,6 +1,7 @@
 pub mod error;
 pub mod hooks;
 pub mod job;
+pub mod multilane;
 pub mod queue;
 pub mod shutdown;
 
@@ -14,6 +15,7 @@ use job::{
     PushableJob, RequeuePosition,
 };
 pub use job::BorrowedJob;
+pub use multilane::{MultilaneQueue, MultilanePushableJob};
 use queue::QueueOptions;
 use redis::Pipeline;
 use redis::{AsyncCommands, RedisResult, aio::ConnectionManager};
@@ -447,7 +449,7 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
-    pub fn work(self: &Arc<Self>) -> WorkerHandle<H> {
+    pub fn work(self: &Arc<Self>) -> WorkerHandle<Queue<H>> {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         // Local semaphore to limit concurrency per instance
         let semaphore = Arc::new(Semaphore::new(self.options.local_concurrency));

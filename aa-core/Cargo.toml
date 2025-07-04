@@ -8,7 +8,7 @@ alloy = { version = "1.0.8", features = ["serde"] }
 tokio = "1.44.2"
 engine-aa-types = { path = "../aa-types" }
 engine-core = { path = "../core" }
-vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
-vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
+vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "pb/update-alloy" }
+vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "pb/update-alloy" }
 serde = "1.0.219"
 tracing = "0.1.41"

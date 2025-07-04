@@ -3,7 +3,6 @@ use std::sync::Arc;
 use alloy::{
     hex,
     primitives::{Address, Bytes, U256},
-    providers::Provider,
     rpc::types::{PackedUserOperation, UserOperation},
 };
 use engine_aa_types::VersionedUserOp;
@@ -236,7 +235,7 @@ impl<'a, C: Chain> UserOpBuilderV0_7<'a, C> {
         //     .estimate_eip1559_fees()
         //     .await
         //     .map_err(|err| err.to_engine_error(self.chain))?;
-        
+
         // TODO: modularize this so only used with thirdweb paymaster
         let prices = self
             .chain

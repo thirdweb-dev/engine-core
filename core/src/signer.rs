@@ -1,4 +1,5 @@
 use alloy::{
+    consensus::TypedTransaction,
     dyn_abi::TypedData,
     hex::FromHex,
     primitives::{Address, Bytes, ChainId},
@@ -176,6 +177,14 @@ pub trait AccountSigner {
         typed_data: &TypedData,
         credentials: SigningCredential,
     ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
+
+    /// Sign a transaction
+    fn sign_transaction(
+        &self,
+        options: Self::SigningOptions,
+        transaction: TypedTransaction,
+        credentials: SigningCredential,
+    ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
 }
 
 /// EOA signer implementation
@@ -188,7 +197,10 @@ pub struct EoaSigner {
 impl EoaSigner {
     /// Create a new EOA signer
     pub fn new(vault_client: VaultClient, iaw_client: IAWClient) -> Self {
-        Self { vault_client, iaw_client }
+        Self {
+            vault_client,
+            iaw_client,
+        }
     }
 }
 
@@ -221,7 +233,10 @@ impl AccountSigner for EoaSigner {
 
                 Ok(vault_result.signature)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
                 // Convert MessageFormat to IAW MessageFormat
                 let iaw_format = match format {
                     MessageFormat::Text => thirdweb_core::iaw::MessageFormat::Text,
@@ -268,7 +283,10 @@ impl AccountSigner for EoaSigner {
 
                 Ok(vault_result.signature)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
                 let iaw_result = self
                     .iaw_client
                     .sign_typed_data(
@@ -280,6 +298,43 @@ impl AccountSigner for EoaSigner {
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing typed data with EOA (IAW): {:?}", e);
+                        EngineError::from(e)
+                    })?;
+
+                Ok(iaw_result.signature)
+            }
+        }
+    }
+
+    async fn sign_transaction(
+        &self,
+        options: EoaSigningOptions,
+        transaction: TypedTransaction,
+        credentials: SigningCredential,
+    ) -> Result<String, EngineError> {
+        match credentials {
+            SigningCredential::Vault(auth_method) => {
+                let vault_result = self
+                    .vault_client
+                    .sign_transaction(auth_method.clone(), transaction, options.from)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing transaction with EOA (Vault): {:?}", e);
+                        e
+                    })?;
+
+                Ok(vault_result.signature)
+            }
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
+                let iaw_result = self
+                    .iaw_client
+                    .sign_transaction(auth_token.clone(), thirdweb_auth.clone(), transaction)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing transaction with EOA (IAW): {:?}", e);
                         EngineError::from(e)
                     })?;
 

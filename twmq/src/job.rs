@@ -56,17 +56,20 @@ pub trait ToJobResult<T, E> {
     fn map_err_fail(self) -> JobResult<T, E>;
 }
 
-impl<T, E> ToJobResult<T, E> for Result<T, E> {
+impl<T, E, ErrorType> ToJobResult<T, E> for Result<T, ErrorType>
+where
+    ErrorType: Into<E>,
+{
     fn map_err_nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E> {
         self.map_err(|e| JobError::Nack {
-            error: e,
+            error: e.into(),
             delay,
             position,
         })
     }
 
     fn map_err_fail(self) -> JobResult<T, E> {
-        self.map_err(|e| JobError::Fail(e))
+        self.map_err(|e| JobError::Fail(e.into()))
     }
 }
 
@@ -156,16 +159,16 @@ impl<T: Clone> BorrowedJob<T> {
     pub fn new(job: Job<T>, lease_token: String) -> Self {
         Self { job, lease_token }
     }
-    
+
     // Convenience methods to access job fields
     pub fn id(&self) -> &str {
         &self.job.id
     }
-    
+
     pub fn data(&self) -> &T {
         &self.job.data
     }
-    
+
     pub fn attempts(&self) -> u32 {
         self.job.attempts
     }

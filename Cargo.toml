@@ -1,3 +1,11 @@
 [workspace]
-members = ["aa-types", "aa-core", "core", "executors", "server", "thirdweb-core", "twmq"]
+members = [
+  "aa-types",
+  "aa-core",
+  "core",
+  "executors",
+  "server",
+  "thirdweb-core",
+  "twmq",
+]
 resolver = "2"
