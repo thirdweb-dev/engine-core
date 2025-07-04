@@ -383,10 +383,61 @@ async fn check_is_7702_minimal_account(
     chain: &impl Chain,
     eoa_address: Address,
 ) -> Result<bool, EngineError> {
-    // TODO: Implement actual 7702 delegation check
-    // This should check if the EOA has a delegation set to the minimal account implementation
-    // For now, returning false to always require authorization
-    Ok(false)
+    // Get the bytecode at the EOA address using eth_getCode
+    let code = chain
+        .provider()
+        .get_code_at(eoa_address)
+        .await
+        .map_err(|e| EngineError::RpcError {
+            message: format!("Failed to get code at address {}: {}", eoa_address, e),
+            kind: crate::error::RpcErrorKind::Unknown,
+        })?;
+
+    tracing::debug!(
+        eoa_address = ?eoa_address,
+        code_length = code.len(),
+        code_hex = ?alloy::hex::encode(&code),
+        "Checking EIP-7702 delegation"
+    );
+
+    // Check if code exists and starts with EIP-7702 delegation prefix "0xef0100"
+    if code.len() < 23 || !code.starts_with(&[0xef, 0x01, 0x00]) {
+        tracing::debug!(
+            eoa_address = ?eoa_address,
+            has_delegation = false,
+            reason = "Code too short or doesn't start with EIP-7702 prefix",
+            "EIP-7702 delegation check result"
+        );
+        return Ok(false);
+    }
+
+    // Extract the target address from bytes 3-23 (20 bytes for address)
+    // EIP-7702 format: 0xef0100 + 20 bytes address
+    // JS equivalent: code.slice(8, 48) extracts 40 hex chars = 20 bytes
+    // In hex string: "0xef0100" + address, so address starts at position 8
+    // In byte array: [0xef, 0x01, 0x00, address_bytes...]
+    // The address starts at byte 3 and is 20 bytes long (bytes 3-22)
+    let target_bytes = &code[3..23];
+    let target_address = Address::from_slice(target_bytes);
+
+    // Compare with the minimal account implementation address
+    let minimal_account_address: Address = MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
+        .parse()
+        .map_err(|e| EngineError::ValidationError {
+            message: format!("Invalid minimal account implementation address: {}", e),
+        })?;
+
+    let is_delegated = target_address == minimal_account_address;
+
+    tracing::debug!(
+        eoa_address = ?eoa_address,
+        target_address = ?target_address,
+        minimal_account_address = ?minimal_account_address,
+        has_delegation = is_delegated,
+        "EIP-7702 delegation check result"
+    );
+
+    Ok(is_delegated)
 }
 
 async fn sign_authorization(
