@@ -249,19 +249,26 @@ where
         // 5. Sign authorization if needed
         let authorization = if !is_minimal_account {
             let nonce = job_data.nonce.unwrap_or_default();
+            let minimal_account_address: Address = MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
+                .parse()
+                .map_err(|e| Eip7702SendError::AuthorizationError {
+                    message: format!("Invalid minimal account implementation address: {}", e),
+                })
+                .map_err_fail()?;
             
-            let auth = sign_authorization(
-                &*self.eoa_signer,
-                signing_options,
-                job_data.signing_credential.clone(),
-                job_data.chain_id,
-                nonce,
-            )
-            .await
-            .map_err(|e| Eip7702SendError::AuthorizationError {
-                message: e.to_string(),
-            })
-            .map_err_fail()?;
+            let auth = self.eoa_signer
+                .sign_authorization(
+                    signing_options.clone(),
+                    job_data.chain_id,
+                    minimal_account_address,
+                    nonce,
+                    job_data.signing_credential.clone(),
+                )
+                .await
+                .map_err(|e| Eip7702SendError::AuthorizationError {
+                    message: e.to_string(),
+                })
+                .map_err_fail()?;
 
             Some(auth)
         } else {
@@ -440,69 +447,7 @@ async fn check_is_7702_minimal_account(
     Ok(is_delegated)
 }
 
-async fn sign_authorization(
-    signer: &EoaSigner,
-    signing_options: EoaSigningOptions,
-    credentials: SigningCredential,
-    chain_id: u64,
-    nonce: U256,
-) -> Result<Authorization, EngineError> {
-    // Create authorization typed data
-    let domain = json!({
-        "chainId": chain_id,
-    });
 
-    let types = json!({
-        "Authorization": [
-            {"name": "chainId", "type": "uint256"},
-            {"name": "address", "type": "address"},
-            {"name": "nonce", "type": "uint256"}
-        ]
-    });
-
-    let message = json!({
-        "chainId": chain_id,
-        "address": MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
-        "nonce": nonce
-    });
-
-    let typed_data = TypedData {
-        domain: Some(domain),
-        types,
-        primary_type: "Authorization".to_string(),
-        message,
-    };
-
-    let signature = signer
-        .sign_typed_data(signing_options, &typed_data, credentials)
-        .await?;
-
-    // Parse signature into r, s, v components
-    let sig_bytes = Bytes::from_hex(&signature).map_err(|e| EngineError::ValidationError {
-        message: format!("Invalid signature format: {}", e),
-    })?;
-
-    if sig_bytes.len() != 65 {
-        return Err(EngineError::ValidationError {
-            message: "Invalid signature length".to_string(),
-        });
-    }
-
-    let r = FixedBytes::from_slice(&sig_bytes[0..32]);
-    let s = FixedBytes::from_slice(&sig_bytes[32..64]);
-    let v = sig_bytes[64];
-
-    let authorization = Authorization {
-        chain_id: ChainId::from(chain_id),
-        address: MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS.parse().unwrap(),
-        nonce: nonce.into(),
-        r,
-        s,
-        y_parity: v != 27,
-    };
-
-    Ok(authorization)
-}
 
 async fn call_bundler(
     chain: &impl Chain,
