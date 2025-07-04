@@ -1,1 +1,2 @@
-THIS SHOULD BE A LINTER ERROR
+pub mod send;
+pub mod confirm;
