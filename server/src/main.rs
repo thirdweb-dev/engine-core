@@ -6,7 +6,7 @@ use thirdweb_engine::{
     chains::ThirdwebChainService,
     config,
     execution_router::ExecutionRouter,
-    http::server::{EngineServer, EngineServerState},
+    http::server::{EngineServer, EngineServerState, TlsConfig},
     queue::manager::QueueManager,
 };
 use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -76,16 +76,35 @@ async fn main() -> anyhow::Result<()> {
         chains: chains.clone(),
     };
 
-    let mut server = EngineServer::new(EngineServerState {
-        userop_signer: signer.clone(),
-        eoa_signer: eoa_signer.clone(),
-        abi_service: Arc::new(abi_service),
-        vault_client: Arc::new(vault_client),
-        chains,
-        execution_router: Arc::new(execution_router),
-        queue_manager: Arc::new(queue_manager),
-    })
-    .await;
+    let mut server = if let Some(tls_config) = &config.server.tls {
+        EngineServer::new_with_tls(
+            EngineServerState {
+                userop_signer: signer.clone(),
+                eoa_signer: eoa_signer.clone(),
+                abi_service: Arc::new(abi_service),
+                vault_client: Arc::new(vault_client),
+                chains,
+                execution_router: Arc::new(execution_router),
+                queue_manager: Arc::new(queue_manager),
+            },
+            Some(TlsConfig {
+                cert_path: tls_config.cert_path.clone(),
+                key_path: tls_config.key_path.clone(),
+            }),
+        )
+        .await
+    } else {
+        EngineServer::new(EngineServerState {
+            userop_signer: signer.clone(),
+            eoa_signer: eoa_signer.clone(),
+            abi_service: Arc::new(abi_service),
+            vault_client: Arc::new(vault_client),
+            chains,
+            execution_router: Arc::new(execution_router),
+            queue_manager: Arc::new(queue_manager),
+        })
+        .await
+    };
 
     let address = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&address).await?;

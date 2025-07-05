@@ -18,6 +18,12 @@ twmq = { path = "../twmq" }
 thirdweb-core = { path = "../thirdweb-core" }
 tokio = { version = "1.44.2", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors", "trace"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+tower = { version = "0.5", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2.0"
 tracing = "0.1.41"
 anyhow = "1.0.98"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }

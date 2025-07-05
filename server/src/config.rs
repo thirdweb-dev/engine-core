@@ -36,6 +36,13 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub log_format: LogFormat,
+    pub tls: Option<TlsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsConfig {
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,6 +75,7 @@ impl Default for ServerConfig {
             port: 3000,
             host: "0.0.0.0".into(),
             log_format: LogFormat::Pretty,
+            tls: None,
         }
     }
 }
