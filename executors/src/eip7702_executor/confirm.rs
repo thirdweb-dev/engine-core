@@ -292,6 +292,12 @@ where
         self.transaction_registry
             .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
+        tracing::error!(
+            transaction_id = job.job.data.transaction_id,
+            error = ?fail_data.error,
+            "EIP-7702 confirmation job failed"
+        );
+
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,

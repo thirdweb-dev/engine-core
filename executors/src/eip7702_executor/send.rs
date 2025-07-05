@@ -278,7 +278,7 @@ where
                 })
                 .map_err_fail()?;
 
-            Some(auth.inner().clone())
+            Some(auth.clone())
         } else {
             None
         };
@@ -305,7 +305,7 @@ where
             transaction_id,
             wrapped_calls: serde_json::to_value(&wrapped_calls).unwrap(),
             signature,
-            authorization,
+            authorization: authorization.map(|f| f.inner().clone()),
         })
     }
 
@@ -379,6 +379,12 @@ where
         // Remove transaction from registry since it failed permanently
         self.transaction_registry
             .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
+
+        tracing::error!(
+            transaction_id = job.job.data.transaction_id,
+            error = ?fail_data.error,
+            "EIP-7702 send job failed"
+        );
 
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(

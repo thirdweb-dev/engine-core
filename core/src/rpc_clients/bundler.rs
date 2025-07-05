@@ -1,6 +1,6 @@
 use alloy::consensus::{Receipt, ReceiptWithBloom};
-use alloy::eips::eip7702::Authorization;
-use alloy::primitives::{Address, Bytes, TxHash, U256};
+use alloy::eips::eip7702::SignedAuthorization;
+use alloy::primitives::{Address, Bytes, U256};
 use alloy::rpc::client::RpcClient;
 use alloy::rpc::types::{Log, TransactionReceipt};
 use alloy::transports::{IntoBoxTransport, TransportResult};
@@ -60,6 +60,22 @@ pub struct UserOperationReceipt {
     pub logs: Vec<Log>,
     /// The transaction receipt of the user operation.
     pub receipt: TransactionReceipt<ReceiptWithBloom<Receipt<Log>>>,
+}
+
+/// Response from tw_execute bundler method
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwExecuteResponse {
+    /// The queue ID returned by the bundler
+    pub queue_id: String,
+}
+
+/// Response from tw_getTransactionHash bundler method
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwGetTransactionHashResponse {
+    /// The transaction hash
+    pub transaction_hash: String,
 }
 
 impl BundlerClient {
@@ -123,21 +139,22 @@ impl BundlerClient {
         eoa_address: Address,
         wrapped_calls: &Value,
         signature: &str,
-        authorization: Option<&Authorization>,
+        authorization: Option<&SignedAuthorization>,
     ) -> TransportResult<String> {
         let params = serde_json::json!([eoa_address, wrapped_calls, signature, authorization]);
 
-        let response: String = self.inner.request("tw_execute", params).await?;
+        let response: TwExecuteResponse = self.inner.request("tw_execute", params).await?;
 
-        Ok(response)
+        Ok(response.queue_id)
     }
 
     /// Get transaction hash from bundler using transaction ID  
     pub async fn tw_get_transaction_hash(&self, transaction_id: &str) -> TransportResult<String> {
         let params = serde_json::json!([transaction_id]);
 
-        let response: String = self.inner.request("tw_getTransactionHash", params).await?;
+        let response: TwGetTransactionHashResponse =
+            self.inner.request("tw_getTransactionHash", params).await?;
 
-        Ok(response)
+        Ok(response.transaction_hash)
     }
 }
