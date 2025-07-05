@@ -1,9 +1,10 @@
 use alloy::{
     consensus::{EthereumTypedTransaction, TxEip4844Variant},
     dyn_abi::TypedData,
-    eips::eip7702::{Authorization, SignedAuthorization},
+    eips::eip7702::SignedAuthorization,
     hex,
-    primitives::{Address, ChainId},
+    primitives::{Address, ChainId, U256},
+    rpc::types::Authorization,
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -106,6 +107,73 @@ pub struct SignAuthorizationData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignUserOpData {
     pub signature: String,
+}
+
+/// Response structure from the IAW sign-authorization API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SignAuthorizationApiResponse {
+    pub address: Address,
+    pub chain_id: String,
+    pub nonce: String,
+    pub r: String,
+    pub s: String,
+    pub y_parity: String,
+}
+
+impl SignAuthorizationApiResponse {
+    /// Convert the API response into a SignedAuthorization
+    fn into_signed_authorization(self) -> Result<SignedAuthorization, IAWError> {
+        // Parse the numeric fields
+        let chain_id: u64 = self
+            .chain_id
+            .parse()
+            .map_err(|e| IAWError::SerializationError {
+                message: format!("Invalid chainId: {}", e),
+            })?;
+
+        let nonce: u64 = self
+            .nonce
+            .parse()
+            .map_err(|e| IAWError::SerializationError {
+                message: format!("Invalid nonce: {}", e),
+            })?;
+
+        let r: U256 = self.r.parse().map_err(|e| IAWError::SerializationError {
+            message: format!("Invalid r value: {}", e),
+        })?;
+
+        let s: U256 = self.s.parse().map_err(|e| IAWError::SerializationError {
+            message: format!("Invalid s value: {}", e),
+        })?;
+
+        let y_parity: bool = match self.y_parity.as_str() {
+            "0" => false,
+            "1" => true,
+            _ => {
+                return Err(IAWError::SerializationError {
+                    message: format!("Invalid yParity value: {}", self.y_parity),
+                });
+            }
+        };
+
+        // Create the Authorization (from alloy::rpc::types)
+        let authorization = Authorization {
+            chain_id: U256::from(chain_id),
+            address: self.address,
+            nonce,
+        };
+
+        // Create the SignedAuthorization using the correct constructor
+        let signed_authorization = SignedAuthorization::new_unchecked(
+            authorization,
+            if y_parity { 1u8 } else { 0u8 },
+            r,
+            s,
+        );
+
+        Ok(signed_authorization)
+    }
 }
 
 /// Client for interacting with the IAW (In-App Wallet) service
@@ -424,15 +492,14 @@ impl IAWClient {
         // Parse the response
         let signed_response: serde_json::Value = response.json().await?;
 
-        // Extract the signed authorization from the response
-        let signed_authorization: SignedAuthorization = serde_json::from_value(
-            signed_response
-                .get("signedAuthorization")
-                .ok_or_else(|| IAWError::ApiError {
-                    message: "No signedAuthorization in response".to_string(),
-                })?
-                .clone(),
-        )?;
+        // Parse the API response into our custom type
+        let api_response: SignAuthorizationApiResponse = serde_json::from_value(signed_response)
+            .map_err(|e| IAWError::SerializationError {
+                message: format!("Failed to parse sign authorization response: {}", e),
+            })?;
+
+        // Convert to SignedAuthorization
+        let signed_authorization = api_response.into_signed_authorization()?;
 
         Ok(SignAuthorizationData {
             signed_authorization,

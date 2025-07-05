@@ -8,11 +8,15 @@ use engine_core::{
     error::EngineError,
     execution_options::{
         BaseExecutionOptions, QueuedTransaction, SendTransactionRequest, SpecificExecutionOptions,
-        WebhookOptions, aa::Erc4337ExecutionOptions,
+        WebhookOptions, aa::Erc4337ExecutionOptions, eip7702::Eip7702ExecutionOptions,
     },
     transaction::InnerTransaction,
 };
 use engine_executors::{
+    eip7702_executor::{
+        confirm::Eip7702ConfirmationHandler,
+        send::{Eip7702SendHandler, Eip7702SendJobData},
+    },
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
@@ -34,6 +38,8 @@ pub struct ExecutionRouter {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
+    pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
     pub chains: Arc<ThirdwebChainService>,
@@ -219,6 +225,31 @@ impl ExecutionRouter {
                 Ok(vec![queued_transaction])
             }
 
+            SpecificExecutionOptions::EIP7702(ref eip7702_execution_options) => {
+                self.execute_eip7702(
+                    &execution_request.execution_options.base,
+                    eip7702_execution_options,
+                    &execution_request.webhook_options,
+                    &execution_request.params,
+                    rpc_credentials,
+                    signing_credential,
+                )
+                .await?;
+
+                let queued_transaction = QueuedTransaction {
+                    id: execution_request
+                        .execution_options
+                        .base
+                        .idempotency_key
+                        .clone(),
+                    batch_index: 0,
+                    execution_params: execution_request.execution_options,
+                    transaction_params: execution_request.params,
+                };
+
+                Ok(vec![queued_transaction])
+            }
+
             SpecificExecutionOptions::Auto(_auto_execution_options) => {
                 todo!()
             }
@@ -268,6 +299,51 @@ impl ExecutionRouter {
         tracing::debug!(
             transaction_id = %base_execution_options.idempotency_key,
             queue = "external_bundler_send",
+            "Job queued successfully"
+        );
+
+        Ok(())
+    }
+
+    async fn execute_eip7702(
+        &self,
+        base_execution_options: &BaseExecutionOptions,
+        eip7702_execution_options: &Eip7702ExecutionOptions,
+        webhook_options: &Option<Vec<WebhookOptions>>,
+        transactions: &[InnerTransaction],
+        rpc_credentials: RpcCredentials,
+        signing_credential: SigningCredential,
+    ) -> Result<(), TwmqError> {
+        let job_data = Eip7702SendJobData {
+            transaction_id: base_execution_options.idempotency_key.clone(),
+            chain_id: base_execution_options.chain_id,
+            transactions: transactions.to_vec(),
+            eoa_address: eip7702_execution_options.from,
+            signing_credential,
+            webhook_options: webhook_options.clone(),
+            rpc_credentials,
+            nonce: None, // Let the executor handle nonce generation
+        };
+
+        // Register transaction in registry first
+        self.transaction_registry
+            .set_transaction_queue(&base_execution_options.idempotency_key, "eip7702_send")
+            .await
+            .map_err(|e| TwmqError::Runtime {
+                message: format!("Failed to register transaction: {}", e),
+            })?;
+
+        // Create job with transaction ID as the job ID for idempotency
+        self.eip7702_send_queue
+            .clone()
+            .job(job_data)
+            .with_id(&base_execution_options.idempotency_key)
+            .push()
+            .await?;
+
+        tracing::debug!(
+            transaction_id = %base_execution_options.idempotency_key,
+            queue = "eip7702_send",
             "Job queued successfully"
         );
 
