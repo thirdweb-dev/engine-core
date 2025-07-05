@@ -1,25 +1,27 @@
 use alloy::{
-    dyn_abi::{DynSolType, DynSolValue},
-    primitives::{Address, Bytes, U256, ChainId, FixedBytes},
-    rpc::types::Authorization,
     dyn_abi::TypedData,
+    eips::eip7702::Authorization,
+    primitives::{Address, Bytes, ChainId, FixedBytes, U256},
+    providers::Provider,
+    sol_types::eip712_domain,
 };
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
-    error::EngineError,
+    error::{EngineError, RpcErrorKind},
     execution_options::WebhookOptions,
     signer::{AccountSigner, EoaSigner, EoaSigningOptions},
     transaction::InnerTransaction,
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+use serde_json::{Value, json};
+use std::sync::Arc;
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{BorrowedJob, DelayOptions, JobResult, RequeuePosition, ToJobError, ToJobResult},
+    job::{BorrowedJob, JobResult, ToJobResult},
 };
 
 use crate::{
@@ -55,12 +57,8 @@ impl HasWebhookOptions for Eip7702SendJobData {
 }
 
 impl HasTransactionMetadata for Eip7702SendJobData {
-    fn transaction_id(&self) -> &str {
-        &self.transaction_id
-    }
-
-    fn chain_id(&self) -> u64 {
-        self.chain_id
+    fn transaction_id(&self) -> String {
+        self.transaction_id.clone()
     }
 }
 
@@ -210,11 +208,16 @@ where
                 .iter()
                 .map(|tx| Call {
                     target: tx.to.unwrap_or_default(),
-                    value: tx.value.unwrap_or_default(),
-                    data: tx.data.clone().unwrap_or_default(),
+                    value: tx.value,
+                    data: tx.data.clone(),
                 })
                 .collect(),
-            uid: FixedBytes::random(),
+            uid: {
+                let mut rng = rand::rng();
+                let mut bytes = [0u8; 32];
+                rng.fill(&mut bytes);
+                FixedBytes::from(bytes)
+            },
         };
 
         // 3. Sign typed data for wrapped calls
@@ -231,7 +234,11 @@ where
 
         let signature = self
             .eoa_signer
-            .sign_typed_data(signing_options.clone(), &typed_data, job_data.signing_credential.clone())
+            .sign_typed_data(
+                signing_options.clone(),
+                &typed_data,
+                job_data.signing_credential.clone(),
+            )
             .await
             .map_err(|e| Eip7702SendError::SigningError {
                 message: e.to_string(),
@@ -255,8 +262,9 @@ where
                     message: format!("Invalid minimal account implementation address: {}", e),
                 })
                 .map_err_fail()?;
-            
-            let auth = self.eoa_signer
+
+            let auth = self
+                .eoa_signer
                 .sign_authorization(
                     signing_options.clone(),
                     job_data.chain_id,
@@ -270,24 +278,25 @@ where
                 })
                 .map_err_fail()?;
 
-            Some(auth)
+            Some(auth.inner().clone())
         } else {
             None
         };
 
         // 6. Call bundler
-        let transaction_id = call_bundler(
-            &chain,
-            job_data.eoa_address,
-            &wrapped_calls,
-            &signature,
-            authorization.as_ref(),
-        )
-        .await
-        .map_err(|e| Eip7702SendError::BundlerCallError {
-            message: e.to_string(),
-        })
-        .map_err_fail()?;
+        let transaction_id = chain
+            .bundler_client()
+            .tw_execute(
+                job_data.eoa_address,
+                &serde_json::to_value(&wrapped_calls).unwrap(),
+                &signature,
+                authorization.as_ref(),
+            )
+            .await
+            .map_err(|e| Eip7702SendError::BundlerCallError {
+                message: e.to_string(),
+            })
+            .map_err_fail()?;
 
         tracing::debug!(transaction_id = ?transaction_id, "EIP-7702 transaction sent to bundler");
 
@@ -307,16 +316,20 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Send confirmation job
-        let confirmation_job = Eip7702ConfirmationJobData {
-            transaction_id: job.job.data.transaction_id.clone(),
-            chain_id: job.job.data.chain_id,
-            bundler_transaction_id: success_data.result.transaction_id.clone(),
-            eoa_address: success_data.result.eoa_address,
-            rpc_credentials: job.job.data.rpc_credentials.clone(),
-            webhook_options: job.job.data.webhook_options.clone(),
-        };
+        let confirmation_job = self
+            .confirm_queue
+            .clone()
+            .job(Eip7702ConfirmationJobData {
+                transaction_id: job.job.data.transaction_id.clone(),
+                chain_id: job.job.data.chain_id,
+                bundler_transaction_id: success_data.result.transaction_id.clone(),
+                eoa_address: success_data.result.eoa_address,
+                rpc_credentials: job.job.data.rpc_credentials.clone(),
+                webhook_options: job.job.data.webhook_options.clone(),
+            })
+            .with_id(job.job.transaction_id());
 
-        if let Err(e) = self.confirm_queue.enqueue(confirmation_job, tx).await {
+        if let Err(e) = tx.queue_job(confirmation_job) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,
                 error = ?e,
@@ -325,7 +338,13 @@ where
         }
 
         // Send webhook
-        self.send_webhook_on_success(job, success_data, tx).await;
+        if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
+            tracing::error!(
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
+                "Failed to queue success webhook"
+            );
+        }
     }
 
     async fn on_nack(
@@ -334,7 +353,13 @@ where
         nack_data: NackHookData<'_, Eip7702SendError>,
         tx: &mut TransactionContext<'_>,
     ) {
-        self.send_webhook_on_nack(job, nack_data, tx).await;
+        if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
+            tracing::error!(
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
+                "Failed to queue nack webhook"
+            );
+        }
     }
 
     async fn on_fail(
@@ -343,7 +368,13 @@ where
         fail_data: FailHookData<'_, Eip7702SendError>,
         tx: &mut TransactionContext<'_>,
     ) {
-        self.send_webhook_on_fail(job, fail_data, tx).await;
+        if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
+            tracing::error!(
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
+                "Failed to queue fail webhook"
+            );
+        }
     }
 }
 
@@ -354,14 +385,14 @@ fn create_wrapped_calls_typed_data(
     verifying_contract: Address,
     wrapped_calls: &WrappedCalls,
 ) -> TypedData {
-    let domain = json!({
-        "chainId": chain_id,
-        "name": "MinimalAccount",
-        "verifyingContract": verifying_contract,
-        "version": "1"
-    });
+    let domain = eip712_domain! {
+        name: "MinimalAccount",
+        version: "1",
+        chain_id: chain_id,
+        verifying_contract: verifying_contract,
+    };
 
-    let types = json!({
+    let types_json = json!({
         "Call": [
             {"name": "target", "type": "address"},
             {"name": "value", "type": "uint256"},
@@ -378,9 +409,13 @@ fn create_wrapped_calls_typed_data(
         "uid": wrapped_calls.uid
     });
 
+    // Parse the JSON into Eip712Types and create resolver
+    let eip712_types: alloy::dyn_abi::eip712::Eip712Types =
+        serde_json::from_value(types_json).expect("Failed to parse EIP712 types");
+
     TypedData {
-        domain: Some(domain),
-        types,
+        domain,
+        resolver: eip712_types.into(),
         primary_type: "WrappedCalls".to_string(),
         message,
     }
@@ -396,8 +431,12 @@ async fn check_is_7702_minimal_account(
         .get_code_at(eoa_address)
         .await
         .map_err(|e| EngineError::RpcError {
+            chain_id: chain.chain_id(),
+            rpc_url: chain.rpc_url().to_string(),
             message: format!("Failed to get code at address {}: {}", eoa_address, e),
-            kind: crate::error::RpcErrorKind::Unknown,
+            kind: RpcErrorKind::InternalError {
+                message: e.to_string(),
+            },
         })?;
 
     tracing::debug!(
@@ -428,11 +467,12 @@ async fn check_is_7702_minimal_account(
     let target_address = Address::from_slice(target_bytes);
 
     // Compare with the minimal account implementation address
-    let minimal_account_address: Address = MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
-        .parse()
-        .map_err(|e| EngineError::ValidationError {
-            message: format!("Invalid minimal account implementation address: {}", e),
-        })?;
+    let minimal_account_address: Address =
+        MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
+            .parse()
+            .map_err(|e| EngineError::ValidationError {
+                message: format!("Invalid minimal account implementation address: {}", e),
+            })?;
 
     let is_delegated = target_address == minimal_account_address;
 
@@ -445,48 +485,4 @@ async fn check_is_7702_minimal_account(
     );
 
     Ok(is_delegated)
-}
-
-
-
-async fn call_bundler(
-    chain: &impl Chain,
-    eoa_address: Address,
-    wrapped_calls: &WrappedCalls,
-    signature: &str,
-    authorization: Option<&Authorization>,
-) -> Result<String, EngineError> {
-    let bundler_client = chain.bundler_client();
-    
-    let params = json!([
-        eoa_address,
-        wrapped_calls,
-        signature,
-        authorization
-    ]);
-
-    let request = json!({
-        "jsonrpc": "2.0",
-        "method": "tw_execute",
-        "params": params,
-        "id": 1
-    });
-
-    let response: Value = bundler_client
-        .inner
-        .request("tw_execute", params)
-        .await
-        .map_err(|e| EngineError::RpcError {
-            message: format!("Bundler call failed: {}", e),
-            kind: crate::error::RpcErrorKind::Unknown,
-        })?;
-
-    let transaction_id = response
-        .as_str()
-        .ok_or_else(|| EngineError::RpcError {
-            message: "Invalid response from bundler: expected transaction ID string".to_string(),
-            kind: crate::error::RpcErrorKind::Unknown,
-        })?;
-
-    Ok(transaction_id.to_string())
 }

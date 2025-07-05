@@ -1,9 +1,11 @@
 use alloy::consensus::{Receipt, ReceiptWithBloom};
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::eips::eip7702::Authorization;
+use alloy::primitives::{Address, Bytes, TxHash, U256};
 use alloy::rpc::client::RpcClient;
 use alloy::rpc::types::{Log, TransactionReceipt};
 use alloy::transports::{IntoBoxTransport, TransportResult};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::userop::VersionedUserOp;
@@ -113,5 +115,29 @@ impl BundlerClient {
             .await?;
 
         Ok(result)
+    }
+
+    /// Execute an EIP-7702 transaction via the bundler
+    pub async fn tw_execute(
+        &self,
+        eoa_address: Address,
+        wrapped_calls: &Value,
+        signature: &str,
+        authorization: Option<&Authorization>,
+    ) -> TransportResult<String> {
+        let params = serde_json::json!([eoa_address, wrapped_calls, signature, authorization]);
+
+        let response: String = self.inner.request("tw_execute", params).await?;
+
+        Ok(response)
+    }
+
+    /// Get transaction hash from bundler using transaction ID  
+    pub async fn tw_get_transaction_hash(&self, transaction_id: &str) -> TransportResult<String> {
+        let params = serde_json::json!([transaction_id]);
+
+        let response: String = self.inner.request("tw_getTransactionHash", params).await?;
+
+        Ok(response)
     }
 }

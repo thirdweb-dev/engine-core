@@ -1,17 +1,16 @@
-use alloy::primitives::{Address, TxHash, Bytes};
+use alloy::primitives::{Address, TxHash};
+use alloy::providers::Provider;
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
-    error::EngineError,
     execution_options::WebhookOptions,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{BorrowedJob, DelayOptions, JobResult, RequeuePosition, ToJobError, ToJobResult},
+    job::{BorrowedJob, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
 use crate::{
@@ -41,12 +40,8 @@ impl HasWebhookOptions for Eip7702ConfirmationJobData {
 }
 
 impl HasTransactionMetadata for Eip7702ConfirmationJobData {
-    fn transaction_id(&self) -> &str {
-        &self.transaction_id
-    }
-
-    fn chain_id(&self) -> u64 {
-        self.chain_id
+    fn transaction_id(&self) -> String {
+        self.transaction_id.clone()
     }
 }
 
@@ -170,23 +165,30 @@ where
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
         // 2. Get transaction hash from bundler
-        let transaction_hash = get_transaction_hash_from_bundler(&chain, &job_data.bundler_transaction_id)
+        let transaction_hash_str = chain
+            .bundler_client()
+            .tw_get_transaction_hash(&job_data.bundler_transaction_id)
             .await
             .map_err(|e| {
-                match e {
-                    EngineError::RpcError { message, .. } if message.contains("not found") || message.contains("pending") => {
-                        // Transaction not ready yet, nack and retry
-                        Eip7702ConfirmationError::TransactionHashError {
-                            message: format!("Transaction not ready: {}", message),
-                        }
-                        .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)
+                // Check if it's a "not found" or "pending" error
+                let error_msg = e.to_string();
+                if error_msg.contains("not found") || error_msg.contains("pending") {
+                    // Transaction not ready yet, nack and retry
+                    Eip7702ConfirmationError::TransactionHashError {
+                        message: format!("Transaction not ready: {}", error_msg),
                     }
-                    _ => Eip7702ConfirmationError::TransactionHashError {
-                        message: e.to_string(),
-                    }
-                    .fail()
+                    .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)
+                } else {
+                    Eip7702ConfirmationError::TransactionHashError { message: error_msg }.fail()
                 }
             })?;
+
+        let transaction_hash = transaction_hash_str.parse::<TxHash>().map_err(|e| {
+            Eip7702ConfirmationError::TransactionHashError {
+                message: format!("Invalid transaction hash format: {}", e),
+            }
+            .fail()
+        })?;
 
         tracing::debug!(
             transaction_hash = ?transaction_hash,
@@ -239,7 +241,7 @@ where
             transaction_hash,
             eoa_address: job_data.eoa_address,
             block_number: receipt.block_number,
-            gas_used: receipt.gas_used,
+            gas_used: Some(receipt.gas_used),
             status: success,
         })
     }
@@ -250,28 +252,34 @@ where
         success_data: SuccessHookData<'_, Eip7702ConfirmationResult>,
         tx: &mut TransactionContext<'_>,
     ) {
-        // Update transaction registry
-        if let Err(e) = self
-            .transaction_registry
-            .update_transaction_status(
-                &job.job.data.transaction_id,
-                crate::transaction_registry::TransactionStatus::Confirmed {
-                    transaction_hash: success_data.result.transaction_hash,
-                    block_number: success_data.result.block_number,
-                    gas_used: success_data.result.gas_used,
-                },
-            )
-            .await
-        {
+        // TODO: Update transaction registry when TransactionStatus enum is implemented
+        // if let Err(e) = self
+        //     .transaction_registry
+        //     .update_transaction_status(
+        //         &job.job.data.transaction_id,
+        //         crate::transaction_registry::TransactionStatus::Confirmed {
+        //             transaction_hash: success_data.result.transaction_hash,
+        //             block_number: success_data.result.block_number,
+        //             gas_used: success_data.result.gas_used,
+        //         },
+        //     )
+        //     .await
+        // {
+        //     tracing::error!(
+        //         transaction_id = job.job.data.transaction_id,
+        //         error = ?e,
+        //         "Failed to update transaction registry"
+        //     );
+        // }
+
+        // Send webhook
+        if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,
                 error = ?e,
-                "Failed to update transaction registry"
+                "Failed to queue success webhook"
             );
         }
-
-        // Send webhook
-        self.send_webhook_on_success(job, success_data, tx).await;
     }
 
     async fn on_nack(
@@ -280,7 +288,13 @@ where
         nack_data: NackHookData<'_, Eip7702ConfirmationError>,
         tx: &mut TransactionContext<'_>,
     ) {
-        self.send_webhook_on_nack(job, nack_data, tx).await;
+        if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
+            tracing::error!(
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
+                "Failed to queue nack webhook"
+            );
+        }
     }
 
     async fn on_fail(
@@ -289,58 +303,32 @@ where
         fail_data: FailHookData<'_, Eip7702ConfirmationError>,
         tx: &mut TransactionContext<'_>,
     ) {
-        // Update transaction registry
-        if let Err(e) = self
-            .transaction_registry
-            .update_transaction_status(
-                &job.job.data.transaction_id,
-                crate::transaction_registry::TransactionStatus::Failed {
-                    reason: fail_data.error.to_string(),
-                },
-            )
-            .await
-        {
+        // TODO: Update transaction registry when TransactionStatus enum is implemented
+        // if let Err(e) = self
+        //     .transaction_registry
+        //     .update_transaction_status(
+        //         &job.job.data.transaction_id,
+        //         crate::transaction_registry::TransactionStatus::Failed {
+        //             reason: fail_data.error.to_string(),
+        //         },
+        //     )
+        //     .await
+        // {
+        //     tracing::error!(
+        //         transaction_id = job.job.data.transaction_id,
+        //         error = ?e,
+        //         "Failed to update transaction registry"
+        //     );
+        // }
+
+        if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,
                 error = ?e,
-                "Failed to update transaction registry"
+                "Failed to queue fail webhook"
             );
         }
-
-        self.send_webhook_on_fail(job, fail_data, tx).await;
     }
 }
 
 // --- Helper Functions ---
-
-async fn get_transaction_hash_from_bundler(
-    chain: &impl Chain,
-    bundler_transaction_id: &str,
-) -> Result<TxHash, EngineError> {
-    let bundler_client = chain.bundler_client();
-    
-    let params = json!([bundler_transaction_id]);
-
-    let response: Value = bundler_client
-        .inner
-        .request("tw_getTransactionHash", params)
-        .await
-        .map_err(|e| EngineError::RpcError {
-            message: format!("Failed to get transaction hash from bundler: {}", e),
-            kind: crate::error::RpcErrorKind::Unknown,
-        })?;
-
-    let transaction_hash_str = response
-        .as_str()
-        .ok_or_else(|| EngineError::RpcError {
-            message: "Invalid response from bundler: expected transaction hash string".to_string(),
-            kind: crate::error::RpcErrorKind::Unknown,
-        })?;
-
-    let transaction_hash = transaction_hash_str.parse::<TxHash>()
-        .map_err(|e| EngineError::ValidationError {
-            message: format!("Invalid transaction hash format: {}", e),
-        })?;
-
-    Ok(transaction_hash)
-}
