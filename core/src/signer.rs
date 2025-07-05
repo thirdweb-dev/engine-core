@@ -1,11 +1,11 @@
 use alloy::{
     dyn_abi::TypedData,
+    eips::eip7702::SignedAuthorization,
     hex::FromHex,
-    primitives::{Address, Bytes, ChainId, U256, FixedBytes},
+    primitives::{Address, Bytes, ChainId, U256},
     rpc::types::Authorization,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
 use thirdweb_core::iaw::IAWClient;
 use vault_sdk::VaultClient;
@@ -187,7 +187,7 @@ pub trait AccountSigner {
         address: Address,
         nonce: alloy::primitives::U256,
         credentials: SigningCredential,
-    ) -> impl std::future::Future<Output = Result<alloy::rpc::types::Authorization, EngineError>> + Send;
+    ) -> impl std::future::Future<Output = Result<SignedAuthorization, EngineError>> + Send;
 }
 
 /// EOA signer implementation
@@ -200,7 +200,10 @@ pub struct EoaSigner {
 impl EoaSigner {
     /// Create a new EOA signer
     pub fn new(vault_client: VaultClient, iaw_client: IAWClient) -> Self {
-        Self { vault_client, iaw_client }
+        Self {
+            vault_client,
+            iaw_client,
+        }
     }
 }
 
@@ -233,7 +236,10 @@ impl AccountSigner for EoaSigner {
 
                 Ok(vault_result.signature)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
                 // Convert MessageFormat to IAW MessageFormat
                 let iaw_format = match format {
                     MessageFormat::Text => thirdweb_core::iaw::MessageFormat::Text,
@@ -280,7 +286,10 @@ impl AccountSigner for EoaSigner {
 
                 Ok(vault_result.signature)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
                 let iaw_result = self
                     .iaw_client
                     .sign_typed_data(
@@ -307,44 +316,43 @@ impl AccountSigner for EoaSigner {
         address: Address,
         nonce: U256,
         credentials: SigningCredential,
-    ) -> Result<Authorization, EngineError> {
+    ) -> Result<SignedAuthorization, EngineError> {
+        // Create the Authorization struct that both clients expect
+        let authorization = Authorization {
+            chain_id: U256::from(chain_id),
+            address,
+            nonce: nonce.to::<u64>(),
+        };
+
         match credentials {
             SigningCredential::Vault(auth_method) => {
                 let vault_result = self
                     .vault_client
-                    .sign_authorization(
-                        auth_method,
-                        options.from,
-                        ChainId::from(chain_id),
-                        address,
-                        nonce,
-                    )
+                    .sign_authorization(auth_method, options.from, authorization)
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing authorization with EOA (Vault): {:?}", e);
                         e
                     })?;
 
-                Ok(vault_result)
+                // Return the signed authorization as Authorization
+                Ok(vault_result.signed_authorization)
             }
-            SigningCredential::Iaw { auth_token, thirdweb_auth } => {
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
                 let iaw_result = self
                     .iaw_client
-                    .sign_authorization(
-                        auth_token,
-                        thirdweb_auth,
-                        options.from,
-                        ChainId::from(chain_id),
-                        address,
-                        nonce,
-                    )
+                    .sign_authorization(auth_token, thirdweb_auth, options.from, authorization)
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing authorization with EOA (IAW): {:?}", e);
                         EngineError::from(e)
                     })?;
 
-                Ok(iaw_result)
+                // Return the signed authorization as Authorization
+                Ok(iaw_result.signed_authorization)
             }
         }
     }
