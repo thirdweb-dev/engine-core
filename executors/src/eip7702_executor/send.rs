@@ -288,7 +288,11 @@ where
             .bundler_client()
             .tw_execute(
                 job_data.eoa_address,
-                &serde_json::to_value(&wrapped_calls).unwrap(),
+                &serde_json::to_value(&wrapped_calls)
+                    .map_err(|e| Eip7702SendError::InternalError {
+                        message: format!("Failed to serialize wrapped calls: {}", e),
+                    })
+                    .map_err_fail()?,
                 &signature,
                 authorization.as_ref(),
             )
@@ -303,7 +307,11 @@ where
         Ok(Eip7702SendResult {
             eoa_address: job_data.eoa_address,
             transaction_id,
-            wrapped_calls: serde_json::to_value(&wrapped_calls).unwrap(),
+            wrapped_calls: serde_json::to_value(&wrapped_calls)
+                .map_err(|e| Eip7702SendError::InternalError {
+                    message: format!("Failed to serialize wrapped calls: {}", e),
+                })
+                .map_err_fail()?,
             signature,
             authorization: authorization.map(|f| f.inner().clone()),
         })

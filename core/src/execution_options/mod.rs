@@ -122,7 +122,7 @@ pub struct QueuedTransactionsResponse {
 pub enum ExecutorType {
     #[serde(rename = "ERC4337")]
     Erc4337,
-    #[serde(rename = "ERC7702")]
+    #[serde(rename = "EIP7702")]
     Eip7702,
 }
 
