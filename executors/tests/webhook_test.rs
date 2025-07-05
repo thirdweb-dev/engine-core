@@ -1,17 +1,19 @@
+mod fixtures;
+use fixtures::*;
+
 use std::sync::Arc;
 use std::time::Duration;
-use reqwest::StatusCode;
 use serde_json::json;
-use twmq::job::{Job, JobError, JobResult};
-use twmq::job::BorrowedJob;
+use twmq::job::{Job, JobError, JobResult, BorrowedJob};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use wiremock::matchers::{method, path, header, body_string_contains};
+use wiremock::matchers::{method, path, header};
 use engine_executors::webhook::{
     WebhookJobHandler, WebhookJobPayload, WebhookJobOutput, WebhookError, WebhookRetryConfig,
 };
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webhook_job_handler_new() {
+    setup_tracing();
     let retry_config = WebhookRetryConfig::default();
     let handler = WebhookJobHandler {
         http_client: reqwest::Client::new(),
@@ -24,8 +26,9 @@ async fn test_webhook_job_handler_new() {
     assert_eq!(handler.retry_config.backoff_factor, 2.0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webhook_job_handler_custom_config() {
+    setup_tracing();
     let retry_config = WebhookRetryConfig {
         max_attempts: 3,
         initial_delay_ms: 500,
@@ -44,8 +47,9 @@ async fn test_webhook_job_handler_custom_config() {
     assert_eq!(handler.retry_config.backoff_factor, 1.5);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_successful_webhook_post() {
+    setup_tracing();
     let mock_server = MockServer::start().await;
     
     Mock::given(method("POST"))

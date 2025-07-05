@@ -1,0 +1,83 @@
+name: executors Coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "executors/**"
+      - "aa-types/**"
+      - "core/**"
+      - "aa-core/**"
+      - "twmq/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "executors/**"
+      - "aa-types/**"
+      - "core/**"
+      - "aa-core/**"
+      - "twmq/**"
+  workflow_dispatch: # Allow manual triggering for testing (optional)
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Give GitHub Actions access to @thirdweb-dev/vault
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd #@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.VAULT_REPO_DEPLOY_KEY }}
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #checkout@v4
+
+      - name: Install CI dependencies
+        uses: taiki-e/install-action@ab3728c7ba6948b9b429627f4d55a68842b27f18
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tarpaulin-executors-${{ hashFiles('**/Cargo.lock') }}
+
+        # Run coverage with tarpaulin
+      - name: Run coverage
+        run: cargo tarpaulin -p engine-executors --skip-clean --out Xml --out Html --output-dir coverage --exclude-files "aa-core/*" --exclude-files "core/*" --exclude-files "server/*" --exclude-files "thirdweb-core/*" --exclude-files "twmq/*"
+
+      # Archive coverage reports as artifacts
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @4.6.2
+        with:
+          name: executors-code-coverage-report
+          path: coverage/
+
+      - name: Code Coverage Summary Report
+        uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # @v1.3.0
+        with:
+          filename: coverage/cobertura.xml
+          format: markdown
+          output: both
+
+      - name: Add Coverage Summary to Job Summary
+        # This step reads the generated markdown file and appends it to the
+        # special GITHUB_STEP_SUMMARY file, which populates the job summary page.
+        run: cat code-coverage-results.md >> $GITHUB_STEP_SUMMARY

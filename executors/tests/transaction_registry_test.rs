@@ -1,11 +1,16 @@
-use redis::Commands;
+mod fixtures;
+use fixtures::*;
+
+use redis::AsyncCommands;
 use testcontainers::clients::Cli;
 use testcontainers_modules::redis::Redis;
 use twmq::redis::aio::ConnectionManager;
 use engine_executors::transaction_registry::{TransactionRegistry, TransactionRegistryError};
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_transaction_registry_new() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
@@ -23,15 +28,20 @@ async fn test_transaction_registry_new() {
     assert_eq!(registry_no_namespace.registry_key(), "tx_registry");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_set_and_get_transaction_queue() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
     
     let client = twmq::redis::Client::open(redis_url).unwrap();
     let conn_manager = ConnectionManager::new(client).await.unwrap();
-    let registry = TransactionRegistry::new(conn_manager, Some("test".to_string()));
+    let registry = TransactionRegistry::new(conn_manager.clone(), Some("test".to_string()));
+    
+    // Cleanup before test
+    cleanup_redis_keys(&conn_manager, "test").await;
     
     let tx_id = "test_tx_123";
     let queue_name = "test_queue";
@@ -48,15 +58,20 @@ async fn test_set_and_get_transaction_queue() {
     assert_eq!(result, None);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_remove_transaction() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
     
     let client = twmq::redis::Client::open(redis_url).unwrap();
     let conn_manager = ConnectionManager::new(client).await.unwrap();
-    let registry = TransactionRegistry::new(conn_manager, Some("test".to_string()));
+    let registry = TransactionRegistry::new(conn_manager.clone(), Some("test".to_string()));
+    
+    // Cleanup before test
+    cleanup_redis_keys(&conn_manager, "test").await;
     
     let tx_id = "test_tx_456";
     let queue_name = "test_queue";
@@ -76,8 +91,10 @@ async fn test_remove_transaction() {
     assert_eq!(result, None);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_pipeline_operations() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
@@ -85,6 +102,9 @@ async fn test_pipeline_operations() {
     let client = twmq::redis::Client::open(redis_url).unwrap();
     let conn_manager = ConnectionManager::new(client).await.unwrap();
     let registry = TransactionRegistry::new(conn_manager.clone(), Some("test".to_string()));
+    
+    // Cleanup before test
+    cleanup_redis_keys(&conn_manager, "test").await;
     
     let tx_id = "test_tx_789";
     let queue_name = "test_queue";
@@ -115,15 +135,20 @@ async fn test_pipeline_operations() {
     assert_eq!(result, None);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_multiple_transactions() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
     
     let client = twmq::redis::Client::open(redis_url).unwrap();
     let conn_manager = ConnectionManager::new(client).await.unwrap();
-    let registry = TransactionRegistry::new(conn_manager, Some("test".to_string()));
+    let registry = TransactionRegistry::new(conn_manager.clone(), Some("test".to_string()));
+    
+    // Cleanup before test
+    cleanup_redis_keys(&conn_manager, "test").await;
     
     let transactions = vec![
         ("tx_1", "queue_1"),
@@ -151,8 +176,10 @@ async fn test_multiple_transactions() {
     assert_eq!(registry.get_transaction_queue("tx_3").await.unwrap(), Some("queue_3".to_string()));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_error_handling() {
+    setup_tracing();
+    
     // Test with invalid Redis connection
     let client = twmq::redis::Client::open("redis://invalid:6379/").unwrap();
     let conn_manager = ConnectionManager::new(client).await;
@@ -161,8 +188,10 @@ async fn test_error_handling() {
     assert!(conn_manager.is_err());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_namespace_isolation() {
+    setup_tracing();
+    
     let docker = Cli::default();
     let redis_container = docker.run(Redis::default());
     let redis_url = format!("redis://127.0.0.1:{}/", redis_container.get_host_port_ipv4(6379));
@@ -171,7 +200,11 @@ async fn test_namespace_isolation() {
     let conn_manager = ConnectionManager::new(client).await.unwrap();
     
     let registry1 = TransactionRegistry::new(conn_manager.clone(), Some("namespace1".to_string()));
-    let registry2 = TransactionRegistry::new(conn_manager, Some("namespace2".to_string()));
+    let registry2 = TransactionRegistry::new(conn_manager.clone(), Some("namespace2".to_string()));
+    
+    // Cleanup before test
+    cleanup_redis_keys(&conn_manager, "namespace1").await;
+    cleanup_redis_keys(&conn_manager, "namespace2").await;
     
     let tx_id = "shared_tx_id";
     let queue_name1 = "queue_1";
