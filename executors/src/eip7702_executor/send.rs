@@ -315,6 +315,13 @@ where
         success_data: SuccessHookData<'_, Eip7702SendResult>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Update transaction registry: move from send queue to confirm queue
+        self.transaction_registry.add_set_command(
+            tx.pipeline(),
+            &job.job.data.transaction_id,
+            "eip7702_confirm",
+        );
+
         // Send confirmation job
         let confirmation_job = self
             .confirm_queue
@@ -353,6 +360,7 @@ where
         nack_data: NackHookData<'_, Eip7702SendError>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Don't modify transaction registry on NACK - job will be retried
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,
@@ -368,6 +376,10 @@ where
         fail_data: FailHookData<'_, Eip7702SendError>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Remove transaction from registry since it failed permanently
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
+
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,

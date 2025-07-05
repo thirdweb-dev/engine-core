@@ -252,25 +252,9 @@ where
         success_data: SuccessHookData<'_, Eip7702ConfirmationResult>,
         tx: &mut TransactionContext<'_>,
     ) {
-        // TODO: Update transaction registry when TransactionStatus enum is implemented
-        // if let Err(e) = self
-        //     .transaction_registry
-        //     .update_transaction_status(
-        //         &job.job.data.transaction_id,
-        //         crate::transaction_registry::TransactionStatus::Confirmed {
-        //             transaction_hash: success_data.result.transaction_hash,
-        //             block_number: success_data.result.block_number,
-        //             gas_used: success_data.result.gas_used,
-        //         },
-        //     )
-        //     .await
-        // {
-        //     tracing::error!(
-        //         transaction_id = job.job.data.transaction_id,
-        //         error = ?e,
-        //         "Failed to update transaction registry"
-        //     );
-        // }
+        // Remove transaction from registry since confirmation is complete
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         // Send webhook
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
@@ -288,6 +272,7 @@ where
         nack_data: NackHookData<'_, Eip7702ConfirmationError>,
         tx: &mut TransactionContext<'_>,
     ) {
+        // Don't modify transaction registry on NACK - job will be retried
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
                 transaction_id = job.job.data.transaction_id,
@@ -303,23 +288,9 @@ where
         fail_data: FailHookData<'_, Eip7702ConfirmationError>,
         tx: &mut TransactionContext<'_>,
     ) {
-        // TODO: Update transaction registry when TransactionStatus enum is implemented
-        // if let Err(e) = self
-        //     .transaction_registry
-        //     .update_transaction_status(
-        //         &job.job.data.transaction_id,
-        //         crate::transaction_registry::TransactionStatus::Failed {
-        //             reason: fail_data.error.to_string(),
-        //         },
-        //     )
-        //     .await
-        // {
-        //     tracing::error!(
-        //         transaction_id = job.job.data.transaction_id,
-        //         error = ?e,
-        //         "Failed to update transaction registry"
-        //     );
-        // }
+        // Remove transaction from registry since it failed permanently
+        self.transaction_registry
+            .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
