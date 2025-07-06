@@ -2,12 +2,218 @@ use alloy::consensus::{Signed, TypedTransaction};
 use alloy::eips::eip7702::SignedAuthorization;
 use alloy::network::AnyTransactionReceipt;
 use alloy::primitives::{Address, B256, Bytes, U256};
+use chrono;
 use engine_core::chain::RpcCredentials;
 use engine_core::credentials::SigningCredential;
 use engine_core::execution_options::WebhookOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
+
+pub trait SafeRedisTransaction: Send + Sync {
+    fn name(&self) -> &str;
+    fn operation(&self, pipeline: &mut Pipeline);
+    fn validation(
+        &self,
+        conn: &mut ConnectionManager,
+    ) -> impl Future<Output = Result<(), TransactionStoreError>> + Send;
+    fn watch_keys(&self) -> Vec<String>;
+}
+
+struct MovePendingToBorrowedWithRecycledNonce {
+    recycled_key: String,
+    pending_key: String,
+    transaction_id: String,
+    borrowed_key: String,
+    nonce: u64,
+    prepared_tx_json: String,
+}
+
+impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonce {
+    fn name(&self) -> &str {
+        "pending->borrowed with recycled nonce"
+    }
+
+    fn operation(&self, pipeline: &mut Pipeline) {
+        // Remove nonce from recycled set (we know it exists)
+        pipeline.zrem(&self.recycled_key, self.nonce);
+        // Remove transaction from pending (we know it exists)
+        pipeline.lrem(&self.pending_key, 0, &self.transaction_id);
+        // Store borrowed transaction
+        pipeline.hset(&self.borrowed_key, self.nonce.to_string(), &self.prepared_tx_json);
+    }
+
+    fn watch_keys(&self) -> Vec<String> {
+        vec![self.recycled_key.clone(), self.pending_key.clone()]
+    }
+
+    async fn validation(&self, conn: &mut ConnectionManager) -> Result<(), TransactionStoreError> {
+        // Check if nonce exists in recycled set
+        let nonce_score: Option<f64> = conn.zscore(&self.recycled_key, self.nonce).await?;
+        if nonce_score.is_none() {
+            return Err(TransactionStoreError::NonceNotInRecycledSet { nonce: self.nonce });
+        }
+
+        // Check if transaction exists in pending
+        let pending_transactions: Vec<String> = conn.lrange(&self.pending_key, 0, -1).await?;
+        if !pending_transactions.contains(&self.transaction_id) {
+            return Err(TransactionStoreError::TransactionNotInPendingQueue {
+                transaction_id: self.transaction_id.clone(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+struct MovePendingToBorrowedWithNewNonce {
+    optimistic_key: String,
+    pending_key: String,
+    nonce: u64,
+    prepared_tx_json: String,
+    transaction_id: String,
+    borrowed_key: String,
+    eoa: Address,
+    chain_id: u64,
+}
+
+impl SafeRedisTransaction for MovePendingToBorrowedWithNewNonce {
+    fn name(&self) -> &str {
+        "pending->borrowed with new nonce"
+    }
+
+    fn operation(&self, pipeline: &mut Pipeline) {
+        // Increment optimistic nonce
+        pipeline.incr(&self.optimistic_key, 1);
+        // Remove transaction from pending
+        pipeline.lrem(&self.pending_key, 0, &self.transaction_id);
+        // Store borrowed transaction
+        pipeline.hset(&self.borrowed_key, self.nonce.to_string(), &self.prepared_tx_json);
+    }
+
+    fn watch_keys(&self) -> Vec<String> {
+        vec![self.optimistic_key.clone(), self.pending_key.clone()]
+    }
+
+    async fn validation(&self, conn: &mut ConnectionManager) -> Result<(), TransactionStoreError> {
+        // Check current optimistic nonce
+        let current_optimistic: Option<u64> = conn.get(&self.optimistic_key).await?;
+        let current_nonce = match current_optimistic {
+            Some(nonce) => nonce,
+            None => return Err(TransactionStoreError::NonceSyncRequired { 
+                eoa: self.eoa, 
+                chain_id: self.chain_id 
+            }),
+        };
+
+        if current_nonce != self.nonce {
+            return Err(TransactionStoreError::OptimisticNonceChanged {
+                expected: self.nonce,
+                actual: current_nonce,
+            });
+        }
+
+        // Check if transaction exists in pending
+        let pending_transactions: Vec<String> = conn.lrange(&self.pending_key, 0, -1).await?;
+        if !pending_transactions.contains(&self.transaction_id) {
+            return Err(TransactionStoreError::TransactionNotInPendingQueue {
+                transaction_id: self.transaction_id.clone(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+struct MoveBorrowedToSubmitted {
+    nonce: u64,
+    hash: String,
+    transaction_id: String,
+    borrowed_key: String,
+    submitted_key: String,
+    hash_to_id_key: String,
+}
+
+impl SafeRedisTransaction for MoveBorrowedToSubmitted {
+    fn name(&self) -> &str {
+        "borrowed->submitted"
+    }
+
+    fn operation(&self, pipeline: &mut Pipeline) {
+        // Remove from borrowed (we know it exists)
+        pipeline.hdel(&self.borrowed_key, self.nonce.to_string());
+        
+        // Add to submitted  
+        pipeline.zadd(&self.submitted_key, self.nonce, &self.hash);
+        
+        // Map hash to transaction ID
+        pipeline.set(&self.hash_to_id_key, &self.transaction_id);
+    }
+
+    fn watch_keys(&self) -> Vec<String> {
+        vec![self.borrowed_key.clone()]
+    }
+    
+    async fn validation(&self, conn: &mut ConnectionManager) -> Result<(), TransactionStoreError> {
+        // Validate that borrowed transaction actually exists
+        let borrowed_tx: Option<String> = conn
+            .hget(&self.borrowed_key, self.nonce.to_string())
+            .await?;
+        if borrowed_tx.is_none() {
+            return Err(TransactionStoreError::TransactionNotInBorrowedState {
+                transaction_id: self.transaction_id.clone(),
+                nonce: self.nonce,
+            });
+        }
+        Ok(())
+    }
+}
+
+struct MoveBorrowedToRecycled {
+    nonce: u64,
+    transaction_id: String,
+    borrowed_key: String,
+    recycled_key: String,
+    pending_key: String,
+}
+
+impl SafeRedisTransaction for MoveBorrowedToRecycled {
+    fn name(&self) -> &str {
+        "borrowed->recycled"
+    }
+
+    fn operation(&self, pipeline: &mut Pipeline) {
+        let now = chrono::Utc::now().timestamp_millis();
+        
+        // Remove from borrowed (we know it exists)
+        pipeline.hdel(&self.borrowed_key, self.nonce.to_string());
+        
+        // Add nonce to recycled set (with timestamp as score)
+        pipeline.zadd(&self.recycled_key, now, self.nonce);
+        
+        // Add transaction back to pending
+        pipeline.lpush(&self.pending_key, &self.transaction_id);
+    }
+
+    fn watch_keys(&self) -> Vec<String> {
+        vec![self.borrowed_key.clone()]
+    }
+
+    async fn validation(&self, conn: &mut ConnectionManager) -> Result<(), TransactionStoreError> {
+        // Validate that borrowed transaction actually exists
+        let borrowed_tx: Option<String> = conn
+            .hget(&self.borrowed_key, self.nonce.to_string())
+            .await?;
+        if borrowed_tx.is_none() {
+            return Err(TransactionStoreError::TransactionNotInBorrowedState {
+                transaction_id: self.transaction_id.clone(),
+                nonce: self.nonce,
+            });
+        }
+        Ok(())
+    }
+}
 
 /// The actual user request data
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -330,20 +536,13 @@ impl EoaExecutorStore {
     ///     }
     /// ).await
     /// ```
-    async fn execute_with_watch_and_retry<F, V>(
+    async fn execute_with_watch_and_retry(
         &self,
         eoa: Address,
         chain_id: u64,
         worker_id: &str,
-        watch_keys: &[String],
-        operation_name: &str,
-        validation: V,
-        operation: F,
-    ) -> Result<(), TransactionStoreError>
-    where
-        V: AsyncFn(&mut ConnectionManager) -> Result<(), TransactionStoreError>,
-        F: Fn(&mut Pipeline),
-    {
+        safe_tx: &impl SafeRedisTransaction,
+    ) -> Result<(), TransactionStoreError> {
         let lock_key = self.eoa_lock_key_name(eoa, chain_id);
         let mut conn = self.redis.clone();
         let mut retry_count = 0;
@@ -353,7 +552,10 @@ impl EoaExecutorStore {
                 return Err(TransactionStoreError::InternalError {
                     message: format!(
                         "Exceeded max retries ({}) for {} on {}:{}",
-                        MAX_RETRIES, operation_name, eoa, chain_id
+                        MAX_RETRIES,
+                        safe_tx.name(),
+                        eoa,
+                        chain_id
                     ),
                 });
             }
@@ -367,7 +569,7 @@ impl EoaExecutorStore {
                     delay_ms = delay_ms,
                     eoa = %eoa,
                     chain_id = chain_id,
-                    operation = operation_name,
+                    operation = safe_tx.name(),
                     "Retrying atomic operation"
                 );
             }
@@ -375,7 +577,7 @@ impl EoaExecutorStore {
             // WATCH all specified keys including lock
             let mut watch_cmd = twmq::redis::cmd("WATCH");
             watch_cmd.arg(&lock_key);
-            for key in watch_keys {
+            for key in safe_tx.watch_keys() {
                 watch_cmd.arg(key);
             }
             let _: () = watch_cmd.query_async(&mut conn).await?;
@@ -392,12 +594,12 @@ impl EoaExecutorStore {
             }
 
             // Execute validation
-            match validation(&mut conn).await {
+            match safe_tx.validation(&mut conn).await {
                 Ok(()) => {
                     // Build and execute pipeline
                     let mut pipeline = twmq::redis::pipe();
                     pipeline.atomic();
-                    operation(&mut pipeline);
+                    safe_tx.operation(&mut pipeline);
 
                     match pipeline
                         .query_async::<Vec<twmq::redis::Value>>(&mut conn)
@@ -440,51 +642,17 @@ impl EoaExecutorStore {
         nonce: u64,
         prepared_tx: &BorrowedTransactionData,
     ) -> Result<(), TransactionStoreError> {
-        let recycled_key = self.recycled_nonces_set_name(eoa, chain_id);
-        let borrowed_key = self.borrowed_transactions_hashmap_name(eoa, chain_id);
-        let pending_key = self.pending_transactions_list_name(eoa, chain_id);
-        let prepared_tx_json = serde_json::to_string(prepared_tx)?;
-        let transaction_id = transaction_id.to_string();
+        let safe_tx = MovePendingToBorrowedWithRecycledNonce {
+            recycled_key: self.recycled_nonces_set_name(eoa, chain_id),
+            pending_key: self.pending_transactions_list_name(eoa, chain_id),
+            transaction_id: transaction_id.to_string(),
+            borrowed_key: self.borrowed_transactions_hashmap_name(eoa, chain_id),
+            nonce,
+            prepared_tx_json: serde_json::to_string(prepared_tx)?,
+        };
 
-        let recyled_key_for_validation = recycled_key.clone();
-        let pending_key_for_validation = pending_key.clone();
-        let transaction_id_for_validation = transaction_id.clone();
-        let borrowed_key_for_validation = borrowed_key.clone();
-
-        self.execute_with_watch_and_retry(
-            eoa,
-            chain_id,
-            worker_id,
-            &[recycled_key.clone(), pending_key.clone()],
-            "pending->borrowed with recycled nonce",
-            async move |conn: &mut ConnectionManager| {
-                // Validation phase - check preconditions
-                let nonce_score: Option<f64> = conn.zscore(recycled_key.clone(), nonce).await?;
-                if nonce_score.is_none() {
-                    return Err(TransactionStoreError::NonceNotInRecycledSet { nonce });
-                }
-
-                let pending_transactions: Vec<String> =
-                    conn.lrange(pending_key.clone(), 0, -1).await?;
-                if !pending_transactions.contains(&transaction_id.clone()) {
-                    return Err(TransactionStoreError::TransactionNotInPendingQueue {
-                        transaction_id: transaction_id.clone(),
-                    });
-                }
-
-                Ok(())
-            },
-            |pipeline: &mut Pipeline| {
-                pipeline.zrem(recyled_key_for_validation, nonce);
-                pipeline.lrem(pending_key_for_validation, 0, transaction_id_for_validation);
-                pipeline.hset(
-                    borrowed_key_for_validation,
-                    nonce.to_string(),
-                    &prepared_tx_json,
-                );
-            },
-        )
-        .await?;
+        self.execute_with_watch_and_retry(eoa, chain_id, worker_id, &safe_tx)
+            .await?;
 
         Ok(())
     }
@@ -509,44 +677,15 @@ impl EoaExecutorStore {
             eoa,
             chain_id,
             worker_id,
-            &[optimistic_key.clone(), pending_key.clone()],
-            "pending->borrowed with new nonce",
-            async move |conn: &mut ConnectionManager| {
-                // Check current optimistic nonce
-                let current_optimistic: Option<u64> = conn.get(optimistic_key.clone()).await?;
-                let current_nonce = match current_optimistic {
-                    Some(nonce) => nonce,
-                    None => return Err(TransactionStoreError::NonceSyncRequired { eoa, chain_id }),
-                };
-
-                if current_nonce != expected_nonce {
-                    return Err(TransactionStoreError::OptimisticNonceChanged {
-                        expected: expected_nonce,
-                        actual: current_nonce,
-                    });
-                }
-
-                // Check if transaction exists in pending
-                let pending_transactions: Vec<String> = conn.lrange(&pending_key, 0, -1).await?;
-                if !pending_transactions.contains(&transaction_id.clone()) {
-                    return Err(TransactionStoreError::TransactionNotInPendingQueue {
-                        transaction_id: transaction_id.clone(),
-                    });
-                }
-
-                Ok(())
-            },
-            move |pipeline| {
-                // Increment optimistic nonce
-                pipeline.incr(optimistic_key.clone(), 1);
-                // Remove transaction from pending
-                pipeline.lrem(pending_key.clone(), 0, transaction_id.clone());
-                // Store borrowed transaction
-                pipeline.hset(
-                    borrowed_key.clone(),
-                    expected_nonce.to_string(),
-                    &prepared_tx_json,
-                );
+            &MovePendingToBorrowedWithNewNonce {
+                nonce: expected_nonce,
+                prepared_tx_json,
+                transaction_id,
+                borrowed_key,
+                optimistic_key,
+                pending_key,
+                eoa,
+                chain_id,
             },
         )
         .await
@@ -763,7 +902,7 @@ impl EoaExecutorStore {
         let borrowed_map: HashMap<String, String> = conn.hgetall(&borrowed_key).await?;
         let mut result = Vec::new();
 
-        for (nonce_str, transaction_json) in borrowed_map {
+        for (_nonce_str, transaction_json) in borrowed_map {
             let borrowed_data: BorrowedTransactionData = serde_json::from_str(&transaction_json)?;
             result.push(borrowed_data);
         }
@@ -792,30 +931,13 @@ impl EoaExecutorStore {
             eoa,
             chain_id,
             worker_id,
-            &[borrowed_key.clone()],
-            "borrowed->submitted",
-            async |conn: &mut ConnectionManager| {
-                // Validate that borrowed transaction actually exists
-                let borrowed_tx: Option<String> =
-                    conn.hget(&borrowed_key, nonce.to_string()).await?;
-                if borrowed_tx.is_none() {
-                    return Err(TransactionStoreError::TransactionNotInBorrowedState {
-                        transaction_id: transaction_id.clone(),
-                        nonce,
-                    });
-                }
-
-                Ok(())
-            },
-            |pipeline| {
-                // Remove from borrowed (we know it exists)
-                pipeline.hdel(&borrowed_key, nonce.to_string());
-
-                // Add to submitted
-                pipeline.zadd(&submitted_key, &hash, nonce);
-
-                // Map hash to transaction ID
-                pipeline.set(&hash_to_id_key, &transaction_id);
+            &MoveBorrowedToSubmitted {
+                nonce,
+                hash: hash.to_string(),
+                transaction_id,
+                borrowed_key,
+                submitted_key,
+                hash_to_id_key,
             },
         )
         .await
@@ -840,32 +962,12 @@ impl EoaExecutorStore {
             eoa,
             chain_id,
             worker_id,
-            &[borrowed_key.clone()],
-            "borrowed->recycled",
-            async |conn: &mut ConnectionManager| {
-                // Validate that borrowed transaction actually exists
-                let borrowed_tx: Option<String> =
-                    conn.hget(&borrowed_key, nonce.to_string()).await?;
-                if borrowed_tx.is_none() {
-                    return Err(TransactionStoreError::TransactionNotInBorrowedState {
-                        transaction_id: transaction_id.clone(),
-                        nonce,
-                    });
-                }
-
-                Ok(())
-            },
-            |pipeline| {
-                let now = chrono::Utc::now().timestamp_millis();
-
-                // Remove from borrowed (we know it exists)
-                pipeline.hdel(&borrowed_key, nonce.to_string());
-
-                // Add nonce to recycled set (with timestamp as score)
-                pipeline.zadd(&recycled_key, nonce, now);
-
-                // Add transaction back to pending
-                pipeline.lpush(&pending_key, &transaction_id);
+            &MoveBorrowedToRecycled {
+                nonce,
+                transaction_id,
+                borrowed_key,
+                recycled_key,
+                pending_key,
             },
         )
         .await
@@ -1103,8 +1205,13 @@ impl EoaExecutorStore {
         let last_tx_count_key = self.last_transaction_count_key_name(eoa, chain_id);
         let mut conn = self.redis.clone();
 
-        let optimistic_nonce: Option<u64> = conn.get(&optimistic_key).await?;
-        let last_tx_count: Option<u64> = conn.get(&last_tx_count_key).await?;
+        // Read both values atomically to avoid race conditions
+        let (optimistic_nonce, last_tx_count): (Option<u64>, Option<u64>) = 
+            twmq::redis::pipe()
+                .get(&optimistic_key)
+                .get(&last_tx_count_key)
+                .query_async(&mut conn)
+                .await?;
 
         let optimistic = match optimistic_nonce {
             Some(nonce) => nonce,
@@ -1154,7 +1261,7 @@ impl EoaExecutorStore {
         let borrowed_data = BorrowedTransactionData {
             transaction_id: transaction_id.to_string(),
             signed_transaction: signed_tx.clone(),
-            hash: signed_tx.hash().clone(),
+            hash: *signed_tx.hash(),
             borrowed_at: chrono::Utc::now().timestamp_millis() as u64,
         };
 
@@ -1324,7 +1431,7 @@ impl EoaExecutorStore {
             let tx_data_key = self.transaction_data_key_name(transaction_id);
 
             // Add new hash to submitted (keeping old ones)
-            pipeline.zadd(&submitted_key, new_hash, nonce);
+            pipeline.zadd(&submitted_key, nonce, new_hash);
 
             // Map new hash to transaction ID
             pipeline.set(&hash_to_id_key, transaction_id);

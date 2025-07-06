@@ -1,12 +1,13 @@
 use alloy::consensus::{SignableTransaction, Signed, Transaction, TypedTransaction};
 use alloy::network::{TransactionBuilder, TransactionBuilder7702};
-use alloy::primitives::{Address, B256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest as AlloyTransactionRequest;
 use alloy::transports::{RpcError, TransportErrorKind};
 use engine_core::signer::AccountSigner;
 use engine_core::{
-    chain::{Chain, ChainService},
+    chain::{Chain, ChainService, RpcCredentials},
+    credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, RpcErrorKind},
     signer::{EoaSigner, EoaSigningOptions},
 };
@@ -22,7 +23,7 @@ use twmq::{
 };
 
 use crate::eoa::store::{
-    BorrowedTransactionData, EoaExecutorStore, EoaHealth, ScopedEoaExecutorStore, TransactionData,
+    BorrowedTransactionData, EoaExecutorStore, EoaHealth, EoaTransactionRequest, ScopedEoaExecutorStore, TransactionData,
     TransactionStoreError,
 };
 
@@ -287,7 +288,28 @@ where
         scoped: &ScopedEoaExecutorStore<'_>,
         chain: &impl Chain,
     ) -> Result<u32, EoaExecutorWorkerError> {
-        let borrowed_transactions = scoped.peek_borrowed_transactions().await?;
+        let mut borrowed_transactions = scoped.peek_borrowed_transactions().await?;
+        
+        // Sort borrowed transactions by nonce to ensure proper ordering
+        borrowed_transactions.sort_by_key(|tx| tx.signed_transaction.nonce());
+        
+        // Check for stale borrowed transactions (older than 5 minutes)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        for borrowed in &borrowed_transactions {
+            if now - borrowed.borrowed_at > 300 { // 5 minutes
+                tracing::warn!(
+                    transaction_id = %borrowed.transaction_id,
+                    nonce = borrowed.signed_transaction.nonce(),
+                    age_seconds = now - borrowed.borrowed_at,
+                    "Found stale borrowed transaction - possible worker crash or system issue"
+                );
+            }
+        }
+        
         let mut recovered_count = 0;
 
         for borrowed in borrowed_transactions {
@@ -809,11 +831,12 @@ where
         _chain: &impl Chain,
         nonce: u64,
     ) -> Result<bool, EoaExecutorWorkerError> {
-        // For now, just log that we would send a no-op
-        // TODO: Implement proper no-op transaction if needed
-        tracing::info!(
+        // TODO: Implement proper no-op transaction for recycled nonces
+        // This requires handling signing credentials and creating atomic operations
+        // for consuming recycled nonces without pending transactions
+        tracing::warn!(
             nonce = nonce,
-            "Would send no-op transaction (not implemented)"
+            "No-op transaction not implemented - recycled nonce will remain unconsumed"
         );
         Ok(false)
     }
