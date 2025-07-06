@@ -10,12 +10,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use error::TwmqError;
 use hooks::TransactionContext;
+pub use job::BorrowedJob;
 use job::{
     DelayOptions, Job, JobError, JobErrorRecord, JobErrorType, JobOptions, JobResult, JobStatus,
     PushableJob, RequeuePosition,
 };
-pub use job::BorrowedJob;
-pub use multilane::{MultilaneQueue, MultilanePushableJob};
+pub use multilane::{MultilanePushableJob, MultilaneQueue};
 use queue::QueueOptions;
 use redis::Pipeline;
 use redis::{AsyncCommands, RedisResult, aio::ConnectionManager};
@@ -74,7 +74,7 @@ pub trait DurableExecution: Sized + Send + Sync + 'static {
         _job: &BorrowedJob<Self::JobData>,
         _d: SuccessHookData<Self::Output>,
         _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send + Sync {
+    ) -> impl Future<Output = ()> + Send {
         std::future::ready(())
     }
 
@@ -83,7 +83,7 @@ pub trait DurableExecution: Sized + Send + Sync + 'static {
         _job: &BorrowedJob<Self::JobData>,
         _d: NackHookData<Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send + Sync {
+    ) -> impl Future<Output = ()> + Send {
         std::future::ready(())
     }
 
@@ -92,7 +92,7 @@ pub trait DurableExecution: Sized + Send + Sync + 'static {
         _job: &BorrowedJob<Self::JobData>,
         _d: FailHookData<Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send + Sync {
+    ) -> impl Future<Output = ()> + Send {
         std::future::ready(())
     }
 
@@ -110,7 +110,7 @@ pub trait DurableExecution: Sized + Send + Sync + 'static {
         _job: &Job<Option<Self::JobData>>,
         _d: QueueInternalErrorHookData<'_>,
         _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send + Sync {
+    ) -> impl Future<Output = ()> + Send {
         std::future::ready(())
     }
 }
@@ -442,10 +442,12 @@ impl<H: DurableExecution> Queue<H> {
                     );
                 }
                 Ok(CancelResult::CancelledImmediately)
-            },
+            }
             "cancellation_pending" => Ok(CancelResult::CancellationPending),
             "not_found" => Ok(CancelResult::NotFound),
-            _ => Err(TwmqError::Runtime { message: format!("Unexpected cancel result: {}", result) }),
+            _ => Err(TwmqError::Runtime {
+                message: format!("Unexpected cancel result: {}", result),
+            }),
         }
     }
 
@@ -537,8 +539,8 @@ impl<H: DurableExecution> Queue<H> {
                 .await
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    TwmqError::Runtime { message: format!("Failed to acquire permits during shutdown: {}", e) }
+                .map_err(|e| TwmqError::Runtime {
+                    message: format!("Failed to acquire permits during shutdown: {}", e),
                 })?;
 
             tracing::info!(
@@ -720,7 +722,11 @@ impl<H: DurableExecution> Queue<H> {
             .unwrap()
             .as_secs();
 
-        let results_from_lua: (Vec<(String, String, String, String, String, String)>, Vec<String>, Vec<String>) = script
+        let results_from_lua: (
+            Vec<(String, String, String, String, String, String)>,
+            Vec<String>,
+            Vec<String>,
+        ) = script
             .key(self.name())
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
@@ -736,7 +742,7 @@ impl<H: DurableExecution> Queue<H> {
             .await?;
 
         let (job_results, cancelled_jobs, timed_out_jobs) = results_from_lua;
-        
+
         // Log individual lease timeouts and cancellations
         for job_id in &timed_out_jobs {
             tracing::warn!(job_id = %job_id, "Job lease expired, moved back to pending");
@@ -746,8 +752,14 @@ impl<H: DurableExecution> Queue<H> {
         }
 
         let mut jobs = Vec::new();
-        for (job_id_str, job_data_t_json, attempts_str, created_at_str, processed_at_str, lease_token) in
-            job_results
+        for (
+            job_id_str,
+            job_data_t_json,
+            attempts_str,
+            created_at_str,
+            processed_at_str,
+            lease_token,
+        ) in job_results
         {
             match serde_json::from_str::<H::JobData>(&job_data_t_json) {
                 Ok(data_t) => {
@@ -794,7 +806,7 @@ impl<H: DurableExecution> Queue<H> {
                         };
 
                         let twmq_error: TwmqError = e.into();
-                        
+
                         // Complete job using queue error method with lease token
                         if let Err(e) = queue_clone
                             .complete_job_queue_error(&job, &lease_token, &twmq_error.into())
@@ -835,37 +847,37 @@ impl<H: DurableExecution> Queue<H> {
             Some(job) => {
                 // Create cancellation error using the trait
                 let cancellation_error = H::ErrorData::user_cancelled();
-                
-                // Create transaction pipeline for atomicity  
+
+                // Create transaction pipeline for atomicity
                 let mut pipeline = redis::pipe();
                 pipeline.atomic();
-                
+
                 // Create transaction context with mutable access to pipeline
-                let mut tx_context = TransactionContext::new(
-                    &mut pipeline,
-                    self.name().to_string(),
-                );
-                
+                let mut tx_context =
+                    TransactionContext::new(&mut pipeline, self.name().to_string());
+
                 let fail_hook_data = FailHookData {
                     error: &cancellation_error,
                 };
-                
+
                 // Create a BorrowedJob with a dummy lease token since cancelled jobs don't have active leases
                 let borrowed_job = BorrowedJob::new(job, "cancelled".to_string());
-                
+
                 // Call fail hook for user cancellation
-                self.handler.on_fail(&borrowed_job, fail_hook_data, &mut tx_context).await;
-                
+                self.handler
+                    .on_fail(&borrowed_job, fail_hook_data, &mut tx_context)
+                    .await;
+
                 // Execute the pipeline (just hook commands, job already moved to failed)
                 pipeline.query_async::<()>(&mut self.redis.clone()).await?;
-                
+
                 tracing::info!(
                     job_id = %job_id,
                     "Successfully processed job cancellation hooks"
                 );
-                
+
                 Ok(())
-            },
+            }
             None => {
                 tracing::warn!(
                     job_id = %job_id,
@@ -892,7 +904,7 @@ impl<H: DurableExecution> Queue<H> {
         // Delete the lease key to consume it
         pipeline.del(&lease_key);
 
-        // Add job completion operations  
+        // Add job completion operations
         pipeline
             .hdel(self.active_hash_name(), &job.job.id)
             .lpush(self.success_list_name(), &job.job.id)
@@ -1111,21 +1123,31 @@ impl<H: DurableExecution> Queue<H> {
         match &result {
             Ok(output) => {
                 let success_hook_data = SuccessHookData { result: output };
-                self.handler.on_success(job, success_hook_data, &mut tx_context).await;
+                self.handler
+                    .on_success(job, success_hook_data, &mut tx_context)
+                    .await;
                 self.add_success_operations(job, output, &mut hook_pipeline)?;
             }
-            Err(JobError::Nack { error, delay, position }) => {
+            Err(JobError::Nack {
+                error,
+                delay,
+                position,
+            }) => {
                 let nack_hook_data = NackHookData {
                     error,
                     delay: *delay,
                     position: *position,
                 };
-                self.handler.on_nack(job, nack_hook_data, &mut tx_context).await;
+                self.handler
+                    .on_nack(job, nack_hook_data, &mut tx_context)
+                    .await;
                 self.add_nack_operations(job, error, *delay, *position, &mut hook_pipeline)?;
             }
             Err(JobError::Fail(error)) => {
                 let fail_hook_data = FailHookData { error };
-                self.handler.on_fail(job, fail_hook_data, &mut tx_context).await;
+                self.handler
+                    .on_fail(job, fail_hook_data, &mut tx_context)
+                    .await;
                 self.add_fail_operations(job, error, &mut hook_pipeline)?;
             }
         }
@@ -1145,9 +1167,7 @@ impl<H: DurableExecution> Queue<H> {
             // Check if lease exists - if not, job was cancelled or timed out
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
-                redis::cmd("UNWATCH")
-                    .query_async::<()>(&mut conn)
-                    .await?;
+                redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
                 tracing::warn!(job_id = %job.job.id, "Lease no longer exists, job was cancelled or timed out");
                 return Ok(());
             }
@@ -1157,7 +1177,10 @@ impl<H: DurableExecution> Queue<H> {
             atomic_pipeline.atomic();
 
             // Execute atomically with WATCH/MULTI/EXEC
-            match atomic_pipeline.query_async::<Vec<redis::Value>>(&mut conn).await {
+            match atomic_pipeline
+                .query_async::<Vec<redis::Value>>(&mut conn)
+                .await
+            {
                 Ok(_) => {
                     // Success! Now run post-completion methods
                     match &result {
@@ -1190,9 +1213,13 @@ impl<H: DurableExecution> Queue<H> {
         let mut hook_pipeline = redis::pipe();
         let mut tx_context = TransactionContext::new(&mut hook_pipeline, self.name().to_string());
 
-        let twmq_error = TwmqError::Runtime { message: "Job processing failed with user error".to_string() };
+        let twmq_error = TwmqError::Runtime {
+            message: "Job processing failed with user error".to_string(),
+        };
         let queue_error_hook_data = QueueInternalErrorHookData { error: &twmq_error };
-        self.handler.on_queue_error(job, queue_error_hook_data, &mut tx_context).await;
+        self.handler
+            .on_queue_error(job, queue_error_hook_data, &mut tx_context)
+            .await;
 
         // Add fail operations to pipeline
         let now = SystemTime::now()
@@ -1235,9 +1262,7 @@ impl<H: DurableExecution> Queue<H> {
             // Check if lease exists - if not, job was cancelled or timed out
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
-                redis::cmd("UNWATCH")
-                    .query_async::<()>(&mut conn)
-                    .await?;
+                redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
                 tracing::warn!(job_id = %job.id, "Lease no longer exists, job was cancelled or timed out");
                 return Ok(());
             }
@@ -1247,7 +1272,10 @@ impl<H: DurableExecution> Queue<H> {
             atomic_pipeline.atomic();
 
             // Execute atomically with WATCH/MULTI/EXEC
-            match atomic_pipeline.query_async::<Vec<redis::Value>>(&mut conn).await {
+            match atomic_pipeline
+                .query_async::<Vec<redis::Value>>(&mut conn)
+                .await
+            {
                 Ok(_) => {
                     // Success! Run post-completion
                     self.post_fail_completion().await?;

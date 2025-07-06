@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0.9", features = [
+alloy = { workspace = true, features = [
   "json-abi",
   "consensus",
   "dyn-abi",

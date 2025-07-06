@@ -1,4 +1,4 @@
-use alloy::consensus::{Signed, TypedTransaction};
+use alloy::consensus::{Signed, Transaction, TypedTransaction};
 use alloy::eips::eip7702::SignedAuthorization;
 use alloy::network::AnyTransactionReceipt;
 use alloy::primitives::{Address, B256, Bytes, U256};
@@ -41,7 +41,11 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonce {
         // Remove transaction from pending (we know it exists)
         pipeline.lrem(&self.pending_key, 0, &self.transaction_id);
         // Store borrowed transaction
-        pipeline.hset(&self.borrowed_key, self.nonce.to_string(), &self.prepared_tx_json);
+        pipeline.hset(
+            &self.borrowed_key,
+            self.nonce.to_string(),
+            &self.prepared_tx_json,
+        );
     }
 
     fn watch_keys(&self) -> Vec<String> {
@@ -89,7 +93,11 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithNewNonce {
         // Remove transaction from pending
         pipeline.lrem(&self.pending_key, 0, &self.transaction_id);
         // Store borrowed transaction
-        pipeline.hset(&self.borrowed_key, self.nonce.to_string(), &self.prepared_tx_json);
+        pipeline.hset(
+            &self.borrowed_key,
+            self.nonce.to_string(),
+            &self.prepared_tx_json,
+        );
     }
 
     fn watch_keys(&self) -> Vec<String> {
@@ -101,10 +109,12 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithNewNonce {
         let current_optimistic: Option<u64> = conn.get(&self.optimistic_key).await?;
         let current_nonce = match current_optimistic {
             Some(nonce) => nonce,
-            None => return Err(TransactionStoreError::NonceSyncRequired { 
-                eoa: self.eoa, 
-                chain_id: self.chain_id 
-            }),
+            None => {
+                return Err(TransactionStoreError::NonceSyncRequired {
+                    eoa: self.eoa,
+                    chain_id: self.chain_id,
+                });
+            }
         };
 
         if current_nonce != self.nonce {
@@ -143,18 +153,19 @@ impl SafeRedisTransaction for MoveBorrowedToSubmitted {
     fn operation(&self, pipeline: &mut Pipeline) {
         // Remove from borrowed (we know it exists)
         pipeline.hdel(&self.borrowed_key, self.nonce.to_string());
-        
-        // Add to submitted  
-        pipeline.zadd(&self.submitted_key, self.nonce, &self.hash);
-        
-        // Map hash to transaction ID
+
+        // Add to submitted with hash:id format
+        let hash_id_value = format!("{}:{}", self.hash, self.transaction_id);
+        pipeline.zadd(&self.submitted_key, &hash_id_value, self.nonce);
+
+        // Still maintain hash-to-ID mapping for backward compatibility and external lookups
         pipeline.set(&self.hash_to_id_key, &self.transaction_id);
     }
 
     fn watch_keys(&self) -> Vec<String> {
         vec![self.borrowed_key.clone()]
     }
-    
+
     async fn validation(&self, conn: &mut ConnectionManager) -> Result<(), TransactionStoreError> {
         // Validate that borrowed transaction actually exists
         let borrowed_tx: Option<String> = conn
@@ -184,14 +195,12 @@ impl SafeRedisTransaction for MoveBorrowedToRecycled {
     }
 
     fn operation(&self, pipeline: &mut Pipeline) {
-        let now = chrono::Utc::now().timestamp_millis();
-        
         // Remove from borrowed (we know it exists)
         pipeline.hdel(&self.borrowed_key, self.nonce.to_string());
-        
+
         // Add nonce to recycled set (with timestamp as score)
-        pipeline.zadd(&self.recycled_key, now, self.nonce);
-        
+        pipeline.zadd(&self.recycled_key, self.nonce, self.nonce);
+
         // Add transaction back to pending
         pipeline.lpush(&self.pending_key, &self.transaction_id);
     }
@@ -272,7 +281,7 @@ pub struct EoaSendLegacyJobData {
 pub struct TransactionAttempt {
     pub transaction_id: String,
     pub details: Signed<TypedTransaction>,
-    pub sent_at: chrono::DateTime<chrono::Utc>,
+    pub sent_at: u64, // Unix timestamp in milliseconds
     pub attempt_number: u32,
 }
 
@@ -303,10 +312,27 @@ impl EoaExecutorStore {
     }
 
     /// Name of the key for the transaction data
+    ///
+    /// Transaction data is stored as a Redis HSET with the following fields:
+    /// - "user_request": JSON string containing EoaTransactionRequest
+    /// - "receipt": JSON string containing AnyTransactionReceipt (optional)
+    /// - "status": String status ("confirmed", "failed", etc.)
+    /// - "completed_at": String Unix timestamp (optional)
     fn transaction_data_key_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
             Some(ns) => format!("{ns}:eoa_executor:tx_data:{transaction_id}"),
             None => format!("eoa_tx_data:{transaction_id}"),
+        }
+    }
+
+    /// Name of the list for transaction attempts
+    ///
+    /// Attempts are stored as a separate Redis LIST where each element is a JSON blob
+    /// of a TransactionAttempt. This allows efficient append operations.
+    fn transaction_attempts_list_name(&self, transaction_id: &str) -> String {
+        match &self.namespace {
+            Some(ns) => format!("{ns}:eoa_executor:tx_attempts:{transaction_id}"),
+            None => format!("eoa_executor:tx_attempts:{transaction_id}"),
         }
     }
 
@@ -318,7 +344,7 @@ impl EoaExecutorStore {
         }
     }
 
-    /// Name of the zset for submitted transactions. nonce -> hash
+    /// Name of the zset for submitted transactions. nonce -> hash:id
     /// Same transaction might appear multiple times in the zset with different nonces/gas prices (and thus different hashes)
     fn submitted_transactions_zset_name(&self, eoa: Address, chain_id: u64) -> String {
         match &self.namespace {
@@ -335,7 +361,7 @@ impl EoaExecutorStore {
         }
     }
 
-    /// Name of the hashmap that maps transaction id to borrowed transactions
+    /// Name of the hashmap that maps `transaction_id` -> `BorrowedTransactionData`
     ///
     /// This is used for crash recovery. Before submitting a transaction, we atomically move from pending to this borrowed hashmap.
     ///
@@ -410,16 +436,19 @@ impl EoaExecutorStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EoaHealth {
     pub balance: U256,
+    /// Update the balance threshold when we see out of funds errors
+    pub balance_threshold: U256,
     pub balance_fetched_at: u64,
-    pub last_confirmation_at: Option<u64>,
-    pub nonce_resets: Vec<u64>, // Last 5 reset timestamps
+    pub last_confirmation_at: u64,
+    pub last_nonce_movement_at: u64, // Track when nonce last moved for gas bump detection
+    pub nonce_resets: Vec<u64>,      // Last 5 reset timestamps
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BorrowedTransactionData {
     pub transaction_id: String,
     pub signed_transaction: Signed<TypedTransaction>,
-    pub hash: B256,
+    pub hash: String,
     pub borrowed_at: u64,
 }
 
@@ -499,6 +528,54 @@ impl EoaExecutorStore {
         Ok(())
     }
 
+    /// Release EOA lock following the spec's finally pattern
+    pub async fn release_eoa_lock(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        worker_id: &str,
+    ) -> Result<(), TransactionStoreError> {
+        // Use existing utility method that handles all the atomic lock checking
+        match self
+            .with_lock_check(eoa, chain_id, worker_id, |pipeline| {
+                let lock_key = self.eoa_lock_key_name(eoa, chain_id);
+                pipeline.del(&lock_key);
+            })
+            .await
+        {
+            Ok(()) => {
+                tracing::debug!(
+                    eoa = %eoa,
+                    chain_id = %chain_id,
+                    worker_id = %worker_id,
+                    "Successfully released EOA lock"
+                );
+                Ok(())
+            }
+            Err(TransactionStoreError::LockLost { .. }) => {
+                // Lock was already taken over, which is fine for release
+                tracing::debug!(
+                    eoa = %eoa,
+                    chain_id = %chain_id,
+                    worker_id = %worker_id,
+                    "Lock already released or taken over by another worker"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // Other errors shouldn't fail the worker, just log
+                tracing::warn!(
+                    eoa = %eoa,
+                    chain_id = %chain_id,
+                    worker_id = %worker_id,
+                    error = %e,
+                    "Failed to release EOA lock"
+                );
+                Ok(())
+            }
+        }
+    }
+
     /// Helper to execute atomic operations with proper retry logic and watch handling
     ///
     /// This helper centralizes all the boilerplate for WATCH/MULTI/EXEC operations:
@@ -507,35 +584,35 @@ impl EoaExecutorStore {
     /// - WATCH key management
     /// - Error handling and UNWATCH cleanup
     ///
+    /// ## Usage:
+    /// Implement the `SafeRedisTransaction` trait for your operation, then call this method.
+    /// The trait separates validation (async) from pipeline operations (sync) for clean patterns.
+    ///
+    /// ## Example:
+    /// ```rust
+    /// let safe_tx = MovePendingToBorrowedWithNewNonce {
+    ///     nonce: expected_nonce,
+    ///     prepared_tx_json,
+    ///     transaction_id,
+    ///     borrowed_key,
+    ///     optimistic_key,
+    ///     pending_key,
+    ///     eoa,
+    ///     chain_id,
+    /// };
+    ///
+    /// self.execute_with_watch_and_retry(eoa, chain_id, worker_id, &safe_tx).await?;
+    /// ```
+    ///
     /// ## When to use this helper:
-    /// - Simple validation that doesn't need to pass data to pipeline phase
-    /// - Operations that can cleanly separate validation from pipeline commands
-    /// - Cases where reducing boilerplate is more important than complex data flow
+    /// - Operations that implement `SafeRedisTransaction` trait
+    /// - Need atomic WATCH/MULTI/EXEC with retry logic
+    /// - Want centralized lock checking and error handling
     ///
     /// ## When NOT to use this helper:
-    /// - Complex validation that needs to pass computed data to pipeline
-    /// - Operations requiring custom retry logic
-    /// - Cases where validation and pipeline phases are tightly coupled
-    ///
-    /// ## Example usage:
-    /// ```
-    /// self.execute_with_watch_and_retry(
-    ///     eoa, chain_id, worker_id,
-    ///     &[key1, key2], // Keys to WATCH
-    ///     "operation name",
-    ///     async |conn| { // Validation phase
-    ///         let data = conn.get("key").await?;
-    ///         if !is_valid(data) {
-    ///             return Err(SomeError);
-    ///         }
-    ///         Ok(())
-    ///     },
-    ///     |pipeline| { // Pipeline phase  
-    ///         pipeline.set("key", "value");
-    ///         pipeline.incr("counter", 1);
-    ///     }
-    /// ).await
-    /// ```
+    /// - Simple operations that can use `with_lock_check` instead
+    /// - Operations that don't need WATCH on multiple keys
+    /// - Read-only operations that don't modify state
     async fn execute_with_watch_and_retry(
         &self,
         eoa: Address,
@@ -894,7 +971,6 @@ impl EoaExecutorStore {
         &self,
         eoa: Address,
         chain_id: u64,
-        worker_id: &str,
     ) -> Result<Vec<BorrowedTransactionData>, TransactionStoreError> {
         let borrowed_key = self.borrowed_transactions_hashmap_name(eoa, chain_id);
         let mut conn = self.redis.clone();
@@ -974,12 +1050,13 @@ impl EoaExecutorStore {
     }
 
     /// Get all hashes below a certain nonce from submitted transactions
+    /// Returns (nonce, hash, transaction_id) tuples
     pub async fn get_hashes_below_nonce(
         &self,
         eoa: Address,
         chain_id: u64,
         below_nonce: u64,
-    ) -> Result<Vec<(u64, String)>, TransactionStoreError> {
+    ) -> Result<Vec<(u64, String, String)>, TransactionStoreError> {
         let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
         let mut conn = self.redis.clone();
 
@@ -988,10 +1065,57 @@ impl EoaExecutorStore {
             .zrangebyscore_withscores(&submitted_key, 0, below_nonce - 1)
             .await?;
 
-        Ok(results
-            .into_iter()
-            .map(|(hash, nonce)| (nonce, hash))
-            .collect())
+        let mut parsed_results = Vec::new();
+        for (hash_id_value, nonce) in results {
+            // Parse hash:id format
+            if let Some((hash, transaction_id)) = hash_id_value.split_once(':') {
+                parsed_results.push((nonce, hash.to_string(), transaction_id.to_string()));
+            } else {
+                // Fallback for old format (just hash) - look up transaction ID
+                if let Some(transaction_id) =
+                    self.get_transaction_id_for_hash(&hash_id_value).await?
+                {
+                    parsed_results.push((nonce, hash_id_value, transaction_id));
+                }
+            }
+        }
+
+        Ok(parsed_results)
+    }
+
+    /// Get all transaction IDs for a specific nonce
+    pub async fn get_transaction_ids_for_nonce(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        nonce: u64,
+    ) -> Result<Vec<String>, TransactionStoreError> {
+        let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
+        let mut conn = self.redis.clone();
+
+        // Get all members with the exact nonce
+        let members: Vec<String> = conn
+            .zrangebyscore(&submitted_key, nonce, nonce)
+            .await
+            .map_err(|e| TransactionStoreError::RedisError {
+                message: format!("Failed to get transaction IDs for nonce {}: {}", nonce, e),
+            })?;
+
+        let mut transaction_ids = Vec::new();
+        for value in members {
+            // Parse the value as hash:id format, with fallback to old format
+            if let Some((_, transaction_id)) = value.split_once(':') {
+                // New format: hash:id
+                transaction_ids.push(transaction_id.to_string());
+            } else {
+                // Old format: just hash - look up transaction ID
+                if let Some(transaction_id) = self.get_transaction_id_for_hash(&value).await? {
+                    transaction_ids.push(transaction_id);
+                }
+            }
+        }
+
+        Ok(transaction_ids)
     }
 
     /// Remove all hashes for a transaction and requeue it
@@ -1046,13 +1170,21 @@ impl EoaExecutorStore {
             }
 
             // Find all hashes for this transaction that actually exist in submitted
-            let all_hashes: Vec<String> = conn.zrange(&submitted_key, 0, -1).await?;
+            let all_hash_id_values: Vec<String> = conn.zrange(&submitted_key, 0, -1).await?;
             let mut transaction_hashes = Vec::new();
 
-            for hash in all_hashes {
-                if let Some(tx_id) = self.get_transaction_id_for_hash(&hash).await? {
+            for hash_id_value in all_hash_id_values {
+                // Parse hash:id format
+                if let Some((hash, tx_id)) = hash_id_value.split_once(':') {
                     if tx_id == transaction_id {
-                        transaction_hashes.push(hash);
+                        transaction_hashes.push(hash.to_string());
+                    }
+                } else {
+                    // Fallback for old format (just hash) - look up transaction ID
+                    if let Some(tx_id) = self.get_transaction_id_for_hash(&hash_id_value).await? {
+                        if tx_id == transaction_id {
+                            transaction_hashes.push(hash_id_value);
+                        }
                     }
                 }
             }
@@ -1068,9 +1200,13 @@ impl EoaExecutorStore {
             let mut pipeline = twmq::redis::pipe();
             pipeline.atomic();
 
-            // Remove all hashes for this transaction (we know they exist)
+            // Remove all hash:id values for this transaction (we know they exist)
             for hash in &transaction_hashes {
-                pipeline.zrem(&submitted_key, hash);
+                // Remove the hash:id value from the zset
+                let hash_id_value = format!("{}:{}", hash, transaction_id);
+                pipeline.zrem(&submitted_key, &hash_id_value);
+
+                // Also remove the separate hash-to-ID mapping for backward compatibility
                 let hash_to_id_key = self.transaction_hash_to_id_key_name(hash);
                 pipeline.del(&hash_to_id_key);
             }
@@ -1127,10 +1263,10 @@ impl EoaExecutorStore {
         worker_id: &str,
         health: &EoaHealth,
     ) -> Result<(), TransactionStoreError> {
+        let health_json = serde_json::to_string(health)?;
         self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
             let health_key = self.eoa_health_key_name(eoa, chain_id);
-            let health_json = serde_json::to_string(health).unwrap();
-            pipeline.set(&health_key, health_json);
+            pipeline.set(&health_key, &health_json);
         })
         .await
     }
@@ -1159,23 +1295,8 @@ impl EoaExecutorStore {
         let recycled_key = self.recycled_nonces_set_name(eoa, chain_id);
         let mut conn = self.redis.clone();
 
-        // Get all nonces ordered by score (timestamp)
         let nonces: Vec<u64> = conn.zrange(&recycled_key, 0, -1).await?;
         Ok(nonces)
-    }
-
-    /// Nuke all recycled nonces
-    pub async fn nuke_recycled_nonces(
-        &self,
-        eoa: Address,
-        chain_id: u64,
-        worker_id: &str,
-    ) -> Result<(), TransactionStoreError> {
-        self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
-            let recycled_key = self.recycled_nonces_set_name(eoa, chain_id);
-            pipeline.del(&recycled_key);
-        })
-        .await
     }
 
     /// Peek at pending transactions without removing them (safe for planning)
@@ -1206,12 +1327,11 @@ impl EoaExecutorStore {
         let mut conn = self.redis.clone();
 
         // Read both values atomically to avoid race conditions
-        let (optimistic_nonce, last_tx_count): (Option<u64>, Option<u64>) = 
-            twmq::redis::pipe()
-                .get(&optimistic_key)
-                .get(&last_tx_count_key)
-                .query_async(&mut conn)
-                .await?;
+        let (optimistic_nonce, last_tx_count): (Option<u64>, Option<u64>) = twmq::redis::pipe()
+            .get(&optimistic_key)
+            .get(&last_tx_count_key)
+            .query_async(&mut conn)
+            .await?;
 
         let optimistic = match optimistic_nonce {
             Some(nonce) => nonce,
@@ -1241,79 +1361,6 @@ impl EoaExecutorStore {
         match current {
             Some(nonce) => Ok(nonce),
             None => Err(TransactionStoreError::NonceSyncRequired { eoa, chain_id }),
-        }
-    }
-
-    /// Complete safe transaction processing flow combining all atomic operations
-    /// Returns (success, used_recycled_nonce, actual_nonce)
-    ///
-    /// On specific failures (nonce not available, transaction not in pending),
-    /// returns success=false. On other errors, propagates the error.
-    pub async fn process_transaction_atomically(
-        &self,
-        eoa: Address,
-        chain_id: u64,
-        worker_id: &str,
-        transaction_id: &str,
-        signed_tx: &Signed<TypedTransaction>,
-    ) -> Result<(bool, bool, Option<u64>), TransactionStoreError> {
-        // Prepare borrowed transaction data
-        let borrowed_data = BorrowedTransactionData {
-            transaction_id: transaction_id.to_string(),
-            signed_transaction: signed_tx.clone(),
-            hash: *signed_tx.hash(),
-            borrowed_at: chrono::Utc::now().timestamp_millis() as u64,
-        };
-
-        // Try recycled nonces first
-        let recycled_nonces = self.peek_recycled_nonces(eoa, chain_id).await?;
-        if let Some(&nonce) = recycled_nonces.first() {
-            match self
-                .atomic_move_pending_to_borrowed_with_recycled_nonce(
-                    eoa,
-                    chain_id,
-                    worker_id,
-                    transaction_id,
-                    nonce,
-                    &borrowed_data,
-                )
-                .await
-            {
-                Ok(()) => return Ok((true, true, Some(nonce))), // Success with recycled nonce
-                Err(TransactionStoreError::NonceNotInRecycledSet { .. }) => {
-                    // Nonce was consumed by another worker, try new nonce
-                }
-                Err(TransactionStoreError::TransactionNotInPendingQueue { .. }) => {
-                    // Transaction was processed by another worker
-                    return Ok((false, false, None));
-                }
-                Err(e) => return Err(e), // Other errors propagate
-            }
-        }
-
-        // Try new nonce
-        let expected_nonce = self.get_optimistic_nonce(eoa, chain_id).await?;
-        match self
-            .atomic_move_pending_to_borrowed_with_new_nonce(
-                eoa,
-                chain_id,
-                worker_id,
-                transaction_id,
-                expected_nonce,
-                &borrowed_data,
-            )
-            .await
-        {
-            Ok(()) => Ok((true, false, Some(expected_nonce))), // Success with new nonce
-            Err(TransactionStoreError::OptimisticNonceChanged { .. }) => {
-                // Nonce changed while we were processing, try again
-                Ok((false, false, None))
-            }
-            Err(TransactionStoreError::TransactionNotInPendingQueue { .. }) => {
-                // Transaction was processed by another worker
-                Ok((false, false, None))
-            }
-            Err(e) => Err(e), // Other errors propagate
         }
     }
 
@@ -1366,13 +1413,13 @@ impl EoaExecutorStore {
             .get("receipt")
             .and_then(|receipt_str| serde_json::from_str(receipt_str).ok());
 
-        // Extract attempts if present (could be multiple attempt_N fields)
+        // Extract attempts from separate list
+        let attempts_key = self.transaction_attempts_list_name(transaction_id);
+        let attempts_json_list: Vec<String> = conn.lrange(&attempts_key, 0, -1).await?;
         let mut attempts = Vec::new();
-        for (key, value) in &hash_data {
-            if key.starts_with("attempt_") {
-                if let Ok(attempt) = serde_json::from_str::<TransactionAttempt>(value) {
-                    attempts.push(attempt);
-                }
+        for attempt_json in attempts_json_list {
+            if let Ok(attempt) = serde_json::from_str::<TransactionAttempt>(&attempt_json) {
+                attempts.push(attempt);
             }
         }
 
@@ -1398,16 +1445,17 @@ impl EoaExecutorStore {
             let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
             let hash_to_id_key = self.transaction_hash_to_id_key_name(hash);
             let tx_data_key = self.transaction_data_key_name(transaction_id);
-            let now = chrono::Utc::now();
+            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
-            // Remove this hash from submitted
-            pipeline.zrem(&submitted_key, hash);
+            // Remove this hash:id from submitted
+            let hash_id_value = format!("{}:{}", hash, transaction_id);
+            pipeline.zrem(&submitted_key, &hash_id_value);
 
             // Remove hash mapping
             pipeline.del(&hash_to_id_key);
 
             // Update transaction data with success
-            pipeline.hset(&tx_data_key, "completed_at", now.timestamp());
+            pipeline.hset(&tx_data_key, "completed_at", now);
             pipeline.hset(&tx_data_key, "receipt", receipt);
             pipeline.hset(&tx_data_key, "status", "confirmed");
         })
@@ -1420,36 +1468,115 @@ impl EoaExecutorStore {
         eoa: Address,
         chain_id: u64,
         worker_id: &str,
-        nonce: u64,
-        new_hash: &str,
         transaction_id: &str,
-        attempt_number: u32,
+        signed_transaction: Signed<TypedTransaction>,
     ) -> Result<(), TransactionStoreError> {
+        let new_hash = signed_transaction.hash().to_string();
+        let nonce = signed_transaction.nonce();
+
+        // Create new attempt
+        let new_attempt = TransactionAttempt {
+            transaction_id: transaction_id.to_string(),
+            details: signed_transaction,
+            sent_at: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            attempt_number: 0, // Will be set correctly when reading all attempts
+        };
+
+        // Serialize the new attempt
+        let attempt_json = serde_json::to_string(&new_attempt)?;
+
+        // Get key names
+        let attempts_list_key = self.transaction_attempts_list_name(transaction_id);
+        let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
+        let hash_to_id_key = self.transaction_hash_to_id_key_name(&new_hash);
+        let hash_id_value = format!("{}:{}", new_hash, transaction_id);
+
+        // Now perform the atomic update
         self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
-            let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
-            let hash_to_id_key = self.transaction_hash_to_id_key_name(new_hash);
-            let tx_data_key = self.transaction_data_key_name(transaction_id);
+            // Add new hash:id to submitted (keeping old ones)
+            pipeline.zadd(&submitted_key, &hash_id_value, nonce);
 
-            // Add new hash to submitted (keeping old ones)
-            pipeline.zadd(&submitted_key, nonce, new_hash);
-
-            // Map new hash to transaction ID
+            // Still maintain separate hash-to-ID mapping for backward compatibility
             pipeline.set(&hash_to_id_key, transaction_id);
 
-            // Record gas bump attempt
-            let now = chrono::Utc::now();
-            let attempt_json = serde_json::json!({
-                "attempt_number": attempt_number,
-                "hash": new_hash,
-                "gas_bumped_at": now.timestamp(),
-                "nonce": nonce,
-                "type": "gas_bump"
-            });
-            pipeline.hset(
-                &tx_data_key,
-                format!("attempt_{}", attempt_number),
-                attempt_json.to_string(),
-            );
+            // Simply push the new attempt to the attempts list
+            pipeline.lpush(&attempts_list_key, &attempt_json);
+        })
+        .await
+    }
+
+    /// Efficiently batch fail and requeue multiple transactions
+    /// This avoids hash-to-ID lookups since we already have both pieces of information
+    pub async fn batch_fail_and_requeue_transactions(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        worker_id: &str,
+        failures: Vec<crate::eoa::worker::TransactionFailure>,
+    ) -> Result<(), TransactionStoreError> {
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
+            let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
+            let pending_key = self.pending_transactions_list_name(eoa, chain_id);
+
+            // Remove all hash:id values from submitted
+            for failure in &failures {
+                let hash_id_value = format!("{}:{}", failure.hash, failure.transaction_id);
+                pipeline.zrem(&submitted_key, &hash_id_value);
+
+                // Remove separate hash-to-ID mapping
+                let hash_to_id_key = self.transaction_hash_to_id_key_name(&failure.hash);
+                pipeline.del(&hash_to_id_key);
+            }
+
+            // Add unique transaction IDs back to pending (avoid duplicates)
+            let mut unique_tx_ids = std::collections::HashSet::new();
+            for failure in &failures {
+                unique_tx_ids.insert(&failure.transaction_id);
+            }
+
+            for transaction_id in unique_tx_ids {
+                pipeline.lpush(&pending_key, transaction_id);
+            }
+        })
+        .await
+    }
+
+    /// Efficiently batch succeed multiple transactions
+    /// This avoids hash-to-ID lookups since we already have both pieces of information
+    pub async fn batch_succeed_transactions(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        worker_id: &str,
+        successes: Vec<crate::eoa::worker::TransactionSuccess>,
+    ) -> Result<(), TransactionStoreError> {
+        if successes.is_empty() {
+            return Ok(());
+        }
+
+        self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
+            let submitted_key = self.submitted_transactions_zset_name(eoa, chain_id);
+            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+            for success in &successes {
+                // Remove hash:id from submitted
+                let hash_id_value = format!("{}:{}", success.hash, success.transaction_id);
+                pipeline.zrem(&submitted_key, &hash_id_value);
+
+                // Remove separate hash-to-ID mapping
+                let hash_to_id_key = self.transaction_hash_to_id_key_name(&success.hash);
+                pipeline.del(&hash_to_id_key);
+
+                // Update transaction data with success (following existing Redis hash pattern)
+                let tx_data_key = self.transaction_data_key_name(&success.transaction_id);
+                pipeline.hset(&tx_data_key, "completed_at", now);
+                pipeline.hset(&tx_data_key, "receipt", &success.receipt_data);
+                pipeline.hset(&tx_data_key, "status", "confirmed");
+            }
         })
         .await
     }
@@ -1494,16 +1621,102 @@ impl EoaExecutorStore {
             None => Err(TransactionStoreError::NonceSyncRequired { eoa, chain_id }),
         }
     }
+
+    /// Synchronize nonces with the chain
+    ///
+    /// Part of standard nonce management flow, called in the confirm stage when chain nonce advances, and we need to update our cached nonce
+    pub async fn synchronize_nonces_with_chain(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        worker_id: &str,
+        current_chain_tx_count: u64,
+    ) -> Result<(), TransactionStoreError> {
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+        // First, read current health data
+        let current_health = self.check_eoa_health(eoa, chain_id).await?;
+
+        // Prepare health update if health data exists
+        let health_update = if let Some(mut health) = current_health {
+            health.last_nonce_movement_at = now;
+            health.last_confirmation_at = now;
+            Some(serde_json::to_string(&health)?)
+        } else {
+            None
+        };
+
+        self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
+            let tx_count_key = self.last_transaction_count_key_name(eoa, chain_id);
+
+            // Update cached transaction count
+            pipeline.set(&tx_count_key, current_chain_tx_count);
+
+            // Update health data only if it exists
+            if let Some(ref health_json) = health_update {
+                let health_key = self.eoa_health_key_name(eoa, chain_id);
+                pipeline.set(&health_key, health_json);
+            }
+        })
+        .await
+    }
+
+    /// Reset nonces to specified value
+    ///
+    /// This is called when we have too many recycled nonces and detect something wrong
+    /// We want to start fresh, with the chain nonce as the new optimistic nonce
+    pub async fn reset_nonces(
+        &self,
+        eoa: Address,
+        chain_id: u64,
+        worker_id: &str,
+        current_chain_tx_count: u64,
+    ) -> Result<(), TransactionStoreError> {
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+        let current_health = self.check_eoa_health(eoa, chain_id).await?;
+
+        // Prepare health update if health data exists
+        let health_update = if let Some(mut health) = current_health {
+            health.nonce_resets.push(now);
+            Some(serde_json::to_string(&health)?)
+        } else {
+            None
+        };
+
+        self.with_lock_check(eoa, chain_id, worker_id, |pipeline| {
+            let optimistic_key = self.optimistic_transaction_count_key_name(eoa, chain_id);
+            let cached_nonce_key = self.last_transaction_count_key_name(eoa, chain_id);
+            let recycled_key = self.recycled_nonces_set_name(eoa, chain_id);
+
+            // Update health data only if it exists
+            if let Some(ref health_json) = health_update {
+                let health_key = self.eoa_health_key_name(eoa, chain_id);
+                pipeline.set(&health_key, health_json);
+            }
+
+            // Reset the optimistic nonce
+            pipeline.set(&optimistic_key, current_chain_tx_count);
+
+            // Reset the cached nonce
+            pipeline.set(&cached_nonce_key, current_chain_tx_count);
+
+            // Reset the recycled nonces
+            pipeline.del(recycled_key);
+        })
+        .await
+    }
 }
 
 // Additional error types
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
 pub enum TransactionStoreError {
-    #[error("Redis error: {0}")]
-    RedisError(#[from] twmq::redis::RedisError),
+    #[error("Redis error: {message}")]
+    RedisError { message: String },
 
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    #[error("Serialization error: {message}")]
+    DeserError { message: String, text: String },
 
     #[error("Transaction not found: {transaction_id}")]
     TransactionNotFound { transaction_id: String },
@@ -1545,6 +1758,23 @@ pub enum TransactionStoreError {
     NonceSyncRequired { eoa: Address, chain_id: u64 },
 }
 
+impl From<twmq::redis::RedisError> for TransactionStoreError {
+    fn from(error: twmq::redis::RedisError) -> Self {
+        TransactionStoreError::RedisError {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for TransactionStoreError {
+    fn from(error: serde_json::Error) -> Self {
+        TransactionStoreError::DeserError {
+            message: error.to_string(),
+            text: error.to_string(),
+        }
+    }
+}
+
 const MAX_RETRIES: u32 = 10;
 const RETRY_BASE_DELAY_MS: u64 = 10;
 
@@ -1572,26 +1802,28 @@ pub struct ScopedEoaExecutorStore<'a> {
 impl<'a> ScopedEoaExecutorStore<'a> {
     /// Build a scoped transaction store for a specific EOA, chain, and worker
     ///
-    /// This validates that the worker currently owns the lock for the given EOA/chain.
-    /// If the lock is not owned, returns a LockLost error.
+    /// This acquires the lock for the given EOA/chain.
+    /// If the lock is not acquired, returns a LockLost error.
+    #[tracing::instrument(skip_all, fields(eoa = %eoa, chain_id = chain_id, worker_id = %worker_id))]
     pub async fn build(
         store: &'a EoaExecutorStore,
         eoa: Address,
         chain_id: u64,
         worker_id: String,
     ) -> Result<Self, TransactionStoreError> {
-        let lock_key = store.eoa_lock_key_name(eoa, chain_id);
-        let mut conn = store.redis.clone();
-
-        // Verify the worker owns the lock
-        let current_owner: Option<String> = conn.get(&lock_key).await?;
-        if current_owner.as_deref() != Some(&worker_id) {
-            return Err(TransactionStoreError::LockLost {
-                eoa,
-                chain_id,
-                worker_id,
-            });
-        }
+        // 1. ACQUIRE LOCK AGGRESSIVELY
+        tracing::info!("Acquiring EOA lock aggressively");
+        store
+            .acquire_eoa_lock_aggressively(eoa, chain_id, &worker_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to acquire EOA lock: {}", e);
+                TransactionStoreError::LockLost {
+                    eoa,
+                    chain_id,
+                    worker_id: worker_id.clone(),
+                }
+            })?;
 
         Ok(Self {
             store,
@@ -1661,7 +1893,7 @@ impl<'a> ScopedEoaExecutorStore<'a> {
         &self,
     ) -> Result<Vec<BorrowedTransactionData>, TransactionStoreError> {
         self.store
-            .peek_borrowed_transactions(self.eoa, self.chain_id, &self.worker_id)
+            .peek_borrowed_transactions(self.eoa, self.chain_id)
             .await
     }
 
@@ -1702,12 +1934,23 @@ impl<'a> ScopedEoaExecutorStore<'a> {
     }
 
     /// Get all hashes below a certain nonce from submitted transactions
+    /// Returns (nonce, hash, transaction_id) tuples
     pub async fn get_hashes_below_nonce(
         &self,
         below_nonce: u64,
-    ) -> Result<Vec<(u64, String)>, TransactionStoreError> {
+    ) -> Result<Vec<(u64, String, String)>, TransactionStoreError> {
         self.store
             .get_hashes_below_nonce(self.eoa, self.chain_id, below_nonce)
+            .await
+    }
+
+    /// Get all transaction IDs for a specific nonce
+    pub async fn get_transaction_ids_for_nonce(
+        &self,
+        nonce: u64,
+    ) -> Result<Vec<String>, TransactionStoreError> {
+        self.store
+            .get_transaction_ids_for_nonce(self.eoa, self.chain_id, nonce)
             .await
     }
 
@@ -1718,6 +1961,26 @@ impl<'a> ScopedEoaExecutorStore<'a> {
     ) -> Result<(), TransactionStoreError> {
         self.store
             .fail_and_requeue_transaction(self.eoa, self.chain_id, &self.worker_id, transaction_id)
+            .await
+    }
+
+    /// Efficiently batch fail and requeue multiple transactions
+    pub async fn batch_fail_and_requeue_transactions(
+        &self,
+        failures: Vec<crate::eoa::worker::TransactionFailure>,
+    ) -> Result<(), TransactionStoreError> {
+        self.store
+            .batch_fail_and_requeue_transactions(self.eoa, self.chain_id, &self.worker_id, failures)
+            .await
+    }
+
+    /// Efficiently batch succeed multiple transactions
+    pub async fn batch_succeed_transactions(
+        &self,
+        successes: Vec<crate::eoa::worker::TransactionSuccess>,
+    ) -> Result<(), TransactionStoreError> {
+        self.store
+            .batch_succeed_transactions(self.eoa, self.chain_id, &self.worker_id, successes)
             .await
     }
 
@@ -1760,13 +2023,6 @@ impl<'a> ScopedEoaExecutorStore<'a> {
             .await
     }
 
-    /// Nuke all recycled nonces
-    pub async fn nuke_recycled_nonces(&self) -> Result<(), TransactionStoreError> {
-        self.store
-            .nuke_recycled_nonces(self.eoa, self.chain_id, &self.worker_id)
-            .await
-    }
-
     /// Peek at pending transactions without removing them
     pub async fn peek_pending_transactions(
         &self,
@@ -1794,23 +2050,6 @@ impl<'a> ScopedEoaExecutorStore<'a> {
             .await
     }
 
-    /// Complete safe transaction processing flow combining all atomic operations
-    pub async fn process_transaction_atomically(
-        &self,
-        transaction_id: &str,
-        signed_tx: &Signed<TypedTransaction>,
-    ) -> Result<(bool, bool, Option<u64>), TransactionStoreError> {
-        self.store
-            .process_transaction_atomically(
-                self.eoa,
-                self.chain_id,
-                &self.worker_id,
-                transaction_id,
-                signed_tx,
-            )
-            .await
-    }
-
     /// Mark transaction as successful and remove from submitted
     pub async fn succeed_transaction(
         &self,
@@ -1833,21 +2072,32 @@ impl<'a> ScopedEoaExecutorStore<'a> {
     /// Add a gas bump attempt (new hash) to submitted transactions
     pub async fn add_gas_bump_attempt(
         &self,
-        nonce: u64,
-        new_hash: &str,
         transaction_id: &str,
-        attempt_number: u32,
+        signed_transaction: Signed<TypedTransaction>,
     ) -> Result<(), TransactionStoreError> {
         self.store
             .add_gas_bump_attempt(
                 self.eoa,
                 self.chain_id,
                 &self.worker_id,
-                nonce,
-                new_hash,
                 transaction_id,
-                attempt_number,
+                signed_transaction,
             )
+            .await
+    }
+
+    pub async fn synchronize_nonces_with_chain(
+        &self,
+        nonce: u64,
+    ) -> Result<(), TransactionStoreError> {
+        self.store
+            .synchronize_nonces_with_chain(self.eoa, self.chain_id, &self.worker_id, nonce)
+            .await
+    }
+
+    pub async fn reset_nonces(&self, nonce: u64) -> Result<(), TransactionStoreError> {
+        self.store
+            .reset_nonces(self.eoa, self.chain_id, &self.worker_id, nonce)
             .await
     }
 

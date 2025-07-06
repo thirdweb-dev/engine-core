@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0.8", features = ["serde"] }
+alloy = { workspace = true, features = ["serde"] }
 axum = { version = "0.8.4", features = ["macros"] }
 config = "0.15.11"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
-vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
+vault-sdk = { workspace = true }
+vault-types = { workspace = true }
 engine-core = { path = "../core" }
 engine-aa-core = { path = "../aa-core" }
 engine-executors = { path = "../executors" }

@@ -9,3 +9,8 @@ members = [
   "twmq",
 ]
 resolver = "2"
+
+[workspace.dependencies]
+alloy = { version = "1.0.8" }
+vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "pb/update-alloy" }
+vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "pb/update-alloy" }
