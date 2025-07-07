@@ -8,6 +8,7 @@ use crate::transaction::InnerTransaction;
 pub mod aa;
 pub mod auto;
 pub mod eoa;
+pub mod eip7702;
 
 // Base execution options for all transactions
 // All specific execution options share this
@@ -40,6 +41,9 @@ pub enum SpecificExecutionOptions {
     #[serde(rename = "eoa")]
     #[schema(title = "EOA Execution Options")]
     EOA(eoa::EoaExecutionOptions),
+
+    #[schema(title = "EIP-7702 Execution Options")]
+    EIP7702(eip7702::Eip7702ExecutionOptions),
 }
 
 fn deserialize_with_default_auto<'de, D>(
@@ -125,6 +129,8 @@ pub enum ExecutorType {
     Erc4337,
     #[serde(rename = "EOA")]
     Eoa,
+    #[serde(rename = "EIP7702")]
+    Eip7702,
 }
 
 impl ExecutionOptions {
@@ -133,6 +139,7 @@ impl ExecutionOptions {
             SpecificExecutionOptions::ERC4337(_) => ExecutorType::Erc4337,
             SpecificExecutionOptions::Auto(_) => ExecutorType::Erc4337,
             SpecificExecutionOptions::EOA(_) => ExecutorType::Eoa,
+            SpecificExecutionOptions::EIP7702(_) => ExecutorType::Eip7702,
         }
     }
 

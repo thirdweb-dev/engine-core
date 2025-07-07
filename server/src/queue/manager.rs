@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
+    eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
     eoa::{EoaExecutorStore, EoaExecutorWorker},
     external_bundler::{
         confirm::UserOpConfirmationHandler,
@@ -26,6 +27,8 @@ pub struct QueueManager {
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
     pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
     pub eoa_executor_store: Arc<EoaExecutorStore>,
+    pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
+    pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
 }
 
@@ -38,6 +41,8 @@ fn get_queue_name_for_namespace(namespace: &Option<String>, name: &str) -> Strin
 
 const EXTERNAL_BUNDLER_SEND_QUEUE_NAME: &str = "external_bundler_send";
 const USEROP_CONFIRM_QUEUE_NAME: &str = "userop_confirm";
+const EIP7702_SEND_QUEUE_NAME: &str = "eip7702_send";
+const EIP7702_CONFIRM_QUEUE_NAME: &str = "eip7702_confirm";
 const WEBHOOK_QUEUE_NAME: &str = "webhook";
 const EOA_EXECUTOR_QUEUE_NAME: &str = "eoa_executor";
 
@@ -86,6 +91,12 @@ impl QueueManager {
         let mut userop_confirm_queue_opts = base_queue_opts.clone();
         userop_confirm_queue_opts.local_concurrency = queue_config.userop_confirm_workers;
 
+        let mut eip7702_send_queue_opts = base_queue_opts.clone();
+        eip7702_send_queue_opts.local_concurrency = queue_config.external_bundler_send_workers; // Reuse same config for now
+
+        let mut eip7702_confirm_queue_opts = base_queue_opts.clone();
+        eip7702_confirm_queue_opts.local_concurrency = queue_config.userop_confirm_workers; // Reuse same config for now
+
         let mut webhook_queue_opts = base_queue_opts.clone();
         webhook_queue_opts.local_concurrency = queue_config.webhook_workers;
 
@@ -112,6 +123,16 @@ impl QueueManager {
             USEROP_CONFIRM_QUEUE_NAME,
         );
 
+        let eip7702_send_queue_name = get_queue_name_for_namespace(
+            &queue_config.execution_namespace,
+            EIP7702_SEND_QUEUE_NAME,
+        );
+
+        let eip7702_confirm_queue_name = get_queue_name_for_namespace(
+            &queue_config.execution_namespace,
+            EIP7702_CONFIRM_QUEUE_NAME,
+        );
+
         let eoa_executor_queue_name = get_queue_name_for_namespace(
             &queue_config.execution_namespace,
             EOA_EXECUTOR_QUEUE_NAME,
@@ -126,7 +147,7 @@ impl QueueManager {
             .await?
             .arc();
 
-        // Create confirmation queue first (needed by send queue)
+        // Create confirmation queues first (needed by send queues)
         let confirm_handler = UserOpConfirmationHandler::new(
             chain_service.clone(),
             deployment_lock.clone(),
@@ -143,7 +164,23 @@ impl QueueManager {
             .await?
             .arc();
 
-        // Create send queue
+        // Create EIP-7702 confirmation queue
+        let eip7702_confirm_handler = Eip7702ConfirmationHandler {
+            chain_service: chain_service.clone(),
+            webhook_queue: webhook_queue.clone(),
+            transaction_registry: transaction_registry.clone(),
+        };
+
+        let eip7702_confirm_queue = Queue::builder()
+            .name(eip7702_confirm_queue_name)
+            .options(eip7702_confirm_queue_opts)
+            .handler(eip7702_confirm_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
+
+        // Create send queues
         let send_handler = ExternalBundlerSendHandler {
             chain_service: chain_service.clone(),
             userop_signer,
@@ -163,11 +200,29 @@ impl QueueManager {
             .await?
             .arc();
 
+        // Create EIP-7702 send queue
+        let eip7702_send_handler = Eip7702SendHandler {
+            chain_service: chain_service.clone(),
+            eoa_signer: eoa_signer.clone(),
+            webhook_queue: webhook_queue.clone(),
+            confirm_queue: eip7702_confirm_queue.clone(),
+            transaction_registry: transaction_registry.clone(),
+        };
+
+        let eip7702_send_queue = Queue::builder()
+            .name(eip7702_send_queue_name)
+            .options(eip7702_send_queue_opts)
+            .handler(eip7702_send_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
+
         // Create EOA executor queue
         let eoa_executor_handler = EoaExecutorWorker {
             chain_service: chain_service.clone(),
             store: eoa_executor_store.clone(),
-            eoa_signer,
+            eoa_signer: eoa_signer.clone(),
             max_inflight: 100,
             max_recycled_nonces: 50,
         };
@@ -187,6 +242,8 @@ impl QueueManager {
             userop_confirm_queue,
             eoa_executor_queue,
             eoa_executor_store,
+            eip7702_send_queue,
+            eip7702_confirm_queue,
             transaction_registry,
         })
     }
@@ -211,18 +268,30 @@ impl QueueManager {
         tracing::info!("Starting EOA executor worker");
         let eoa_executor_worker = self.eoa_executor_queue.work();
 
+        // Start EIP-7702 send workers
+        tracing::info!("Starting EIP-7702 send worker");
+        let eip7702_send_worker = self.eip7702_send_queue.work();
+
+        // Start EIP-7702 confirmation workers
+        tracing::info!("Starting EIP-7702 confirmation worker");
+        let eip7702_confirm_worker = self.eip7702_confirm_queue.work();
+
         tracing::info!(
-            "Started {} webhook workers, {} send workers, {} confirm workers, {} eoa workers",
+            "Started {} webhook workers, {} send workers, {} confirm workers, {} eoa workers, {} EIP-7702 send workers, {} EIP-7702 confirm workers",
             queue_config.webhook_workers,
             queue_config.external_bundler_send_workers,
             queue_config.userop_confirm_workers,
-            queue_config.eoa_executor_workers
+            queue_config.eoa_executor_workers,
+            queue_config.external_bundler_send_workers, // Reusing same config for now
+            queue_config.userop_confirm_workers         // Reusing same config for now
         );
 
         ShutdownHandle::with_worker(webhook_worker)
             .and_worker(external_bundler_send_worker)
             .and_worker(userop_confirm_worker)
             .and_worker(eoa_executor_worker)
+            .and_worker(eip7702_send_worker)
+            .and_worker(eip7702_confirm_worker)
     }
 
     /// Get queue statistics for monitoring
@@ -276,11 +345,29 @@ impl QueueManager {
             failed: self.eoa_executor_queue.count(JobStatus::Failed).await?,
         };
 
+        let eip7702_send_stats = QueueStatistics {
+            pending: self.eip7702_send_queue.count(JobStatus::Pending).await?,
+            active: self.eip7702_send_queue.count(JobStatus::Active).await?,
+            delayed: self.eip7702_send_queue.count(JobStatus::Delayed).await?,
+            success: self.eip7702_send_queue.count(JobStatus::Success).await?,
+            failed: self.eip7702_send_queue.count(JobStatus::Failed).await?,
+        };
+
+        let eip7702_confirm_stats = QueueStatistics {
+            pending: self.eip7702_confirm_queue.count(JobStatus::Pending).await?,
+            active: self.eip7702_confirm_queue.count(JobStatus::Active).await?,
+            delayed: self.eip7702_confirm_queue.count(JobStatus::Delayed).await?,
+            success: self.eip7702_confirm_queue.count(JobStatus::Success).await?,
+            failed: self.eip7702_confirm_queue.count(JobStatus::Failed).await?,
+        };
+
         Ok(QueueStats {
             webhook: webhook_stats,
             external_bundler_send: send_stats,
             userop_confirm: confirm_stats,
             eoa_executor: eoa_executor_stats,
+            eip7702_send: eip7702_send_stats,
+            eip7702_confirm: eip7702_confirm_stats,
         })
     }
 }
@@ -291,6 +378,8 @@ pub struct QueueStats {
     pub external_bundler_send: QueueStatistics,
     pub userop_confirm: QueueStatistics,
     pub eoa_executor: QueueStatistics,
+    pub eip7702_send: QueueStatistics,
+    pub eip7702_confirm: QueueStatistics,
 }
 
 #[derive(Debug, serde::Serialize)]

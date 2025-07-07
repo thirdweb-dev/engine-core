@@ -1,9 +1,11 @@
 use alloy::consensus::{Receipt, ReceiptWithBloom};
+use alloy::eips::eip7702::SignedAuthorization;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::rpc::client::RpcClient;
 use alloy::rpc::types::{Log, TransactionReceipt};
 use alloy::transports::{IntoBoxTransport, TransportResult};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::userop::VersionedUserOp;
@@ -60,6 +62,22 @@ pub struct UserOperationReceipt {
     pub receipt: TransactionReceipt<ReceiptWithBloom<Receipt<Log>>>,
 }
 
+/// Response from tw_execute bundler method
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwExecuteResponse {
+    /// The queue ID returned by the bundler
+    pub queue_id: String,
+}
+
+/// Response from tw_getTransactionHash bundler method
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwGetTransactionHashResponse {
+    /// The transaction hash
+    pub transaction_hash: String,
+}
+
 impl BundlerClient {
     /// Create a new bundler client with the given transport
     pub fn new(transport: impl IntoBoxTransport) -> Self {
@@ -113,5 +131,30 @@ impl BundlerClient {
             .await?;
 
         Ok(result)
+    }
+
+    /// Execute an EIP-7702 transaction via the bundler
+    pub async fn tw_execute(
+        &self,
+        eoa_address: Address,
+        wrapped_calls: &Value,
+        signature: &str,
+        authorization: Option<&SignedAuthorization>,
+    ) -> TransportResult<String> {
+        let params = serde_json::json!([eoa_address, wrapped_calls, signature, authorization]);
+
+        let response: TwExecuteResponse = self.inner.request("tw_execute", params).await?;
+
+        Ok(response.queue_id)
+    }
+
+    /// Get transaction hash from bundler using transaction ID  
+    pub async fn tw_get_transaction_hash(&self, transaction_id: &str) -> TransportResult<String> {
+        let params = serde_json::json!([transaction_id]);
+
+        let response: TwGetTransactionHashResponse =
+            self.inner.request("tw_getTransactionHash", params).await?;
+
+        Ok(response.transaction_hash)
     }
 }
