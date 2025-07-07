@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, TxHash};
 use alloy::providers::Provider;
+use alloy::rpc::types::TransactionReceipt;
 use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
@@ -52,10 +53,8 @@ impl HasTransactionMetadata for Eip7702ConfirmationJobData {
 pub struct Eip7702ConfirmationResult {
     pub transaction_id: String,
     pub transaction_hash: TxHash,
+    pub receipt: TransactionReceipt,
     pub eoa_address: Address,
-    pub block_number: Option<u64>,
-    pub gas_used: Option<u64>,
-    pub status: bool,
 }
 
 // --- Error Types ---
@@ -84,7 +83,10 @@ pub enum Eip7702ConfirmationError {
     },
 
     #[error("Transaction failed: {message}")]
-    TransactionFailed { message: String },
+    TransactionFailed {
+        message: String,
+        receipt: TransactionReceipt,
+    },
 
     #[error("Invalid RPC Credentials: {message}")]
     InvalidRpcCredentials { message: String },
@@ -239,6 +241,7 @@ where
         if !success {
             return Err(Eip7702ConfirmationError::TransactionFailed {
                 message: "Transaction reverted".to_string(),
+                receipt,
             })
             .map_err_fail();
         }
@@ -253,10 +256,8 @@ where
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
             transaction_hash,
+            receipt,
             eoa_address: job_data.eoa_address,
-            block_number: receipt.block_number,
-            gas_used: Some(receipt.gas_used),
-            status: success,
         })
     }
 
