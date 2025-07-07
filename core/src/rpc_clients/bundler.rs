@@ -75,7 +75,7 @@ pub struct TwExecuteResponse {
 #[serde(rename_all = "camelCase")]
 pub struct TwGetTransactionHashResponse {
     /// The transaction hash
-    pub transaction_hash: String,
+    pub transaction_hash: Option<String>,
 }
 
 impl BundlerClient {
