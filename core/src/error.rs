@@ -56,8 +56,8 @@ pub enum RpcErrorKind {
     #[error("HTTP error {status}")]
     TransportHttpError { status: u16, body: String },
 
-    #[error("Other transport error: {0}")]
-    OtherTransportError(String),
+    #[error("Other transport error: {message}")]
+    OtherTransportError { message: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, utoipa::ToSchema)]
@@ -345,8 +345,12 @@ fn to_engine_rpc_error_kind(err: &AlloyRpcError<TransportErrorKind>) -> RpcError
                 status: err.status,
                 body: err.body.to_string(),
             },
-            TransportErrorKind::Custom(err) => RpcErrorKind::OtherTransportError(err.to_string()),
-            _ => RpcErrorKind::OtherTransportError(err.to_string()),
+            TransportErrorKind::Custom(err) => RpcErrorKind::OtherTransportError {
+                message: err.to_string(),
+            },
+            _ => RpcErrorKind::OtherTransportError {
+                message: err.to_string(),
+            },
         },
     }
 }

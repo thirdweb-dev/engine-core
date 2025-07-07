@@ -77,6 +77,8 @@ async fn main() -> anyhow::Result<()> {
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
+        eoa_executor_queue: queue_manager.eoa_executor_queue.clone(),
+        eoa_executor_store: queue_manager.eoa_executor_store.clone(),
         eip7702_send_queue: queue_manager.eip7702_send_queue.clone(),
         eip7702_confirm_queue: queue_manager.eip7702_confirm_queue.clone(),
         transaction_registry: queue_manager.transaction_registry.clone(),

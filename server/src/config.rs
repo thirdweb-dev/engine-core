@@ -17,6 +17,7 @@ pub struct QueueConfig {
 
     pub external_bundler_send_workers: usize,
     pub userop_confirm_workers: usize,
+    pub eoa_executor_workers: usize,
 
     pub execution_namespace: Option<String>,
 

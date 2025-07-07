@@ -9,6 +9,7 @@ use engine_core::{
     execution_options::{
         BaseExecutionOptions, QueuedTransaction, SendTransactionRequest, SpecificExecutionOptions,
         WebhookOptions, aa::Erc4337ExecutionOptions, eip7702::Eip7702ExecutionOptions,
+        eoa::EoaExecutionOptions,
     },
     transaction::InnerTransaction,
 };
@@ -17,6 +18,7 @@ use engine_executors::{
         confirm::Eip7702ConfirmationHandler,
         send::{Eip7702SendHandler, Eip7702SendJobData},
     },
+    eoa::{EoaExecutorStore, EoaExecutorWorker, EoaExecutorWorkerJobData, EoaTransactionRequest},
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
@@ -38,6 +40,8 @@ pub struct ExecutionRouter {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
+    pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
+    pub eoa_executor_store: Arc<EoaExecutorStore>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
@@ -253,6 +257,31 @@ impl ExecutionRouter {
             SpecificExecutionOptions::Auto(_auto_execution_options) => {
                 todo!()
             }
+
+            SpecificExecutionOptions::EOA(ref eoa_execution_options) => {
+                self.execute_eoa(
+                    &execution_request.execution_options.base,
+                    eoa_execution_options,
+                    &execution_request.webhook_options,
+                    &execution_request.params,
+                    rpc_credentials,
+                    signing_credential,
+                )
+                .await?;
+
+                let queued_transaction = QueuedTransaction {
+                    id: execution_request
+                        .execution_options
+                        .base
+                        .idempotency_key
+                        .clone(),
+                    batch_index: 0,
+                    execution_params: execution_request.execution_options,
+                    transaction_params: execution_request.params,
+                };
+
+                Ok(vec![queued_transaction])
+            }
         }
     }
 
@@ -345,6 +374,86 @@ impl ExecutionRouter {
             transaction_id = %base_execution_options.idempotency_key,
             queue = "eip7702_send",
             "Job queued successfully"
+        );
+
+        Ok(())
+    }
+
+    async fn execute_eoa(
+        &self,
+        base_execution_options: &BaseExecutionOptions,
+        eoa_execution_options: &EoaExecutionOptions,
+        webhook_options: &Option<Vec<WebhookOptions>>,
+        transactions: &[InnerTransaction],
+        rpc_credentials: RpcCredentials,
+        signing_credential: SigningCredential,
+    ) -> Result<(), TwmqError> {
+        if transactions.len() != 1 {
+            return Err(TwmqError::Runtime {
+                message: "EOA execution currently supports only single transactions".to_string(),
+            });
+        }
+
+        let transaction = &transactions[0];
+        let eoa_transaction_request = EoaTransactionRequest {
+            transaction_id: base_execution_options.idempotency_key.clone(),
+            chain_id: base_execution_options.chain_id,
+            from: eoa_execution_options.from,
+            to: transaction.to,
+            value: transaction.value,
+            data: transaction.data.clone(),
+            gas_limit: eoa_execution_options.gas_limit,
+            webhook_options: webhook_options.clone(),
+            signing_credential,
+            rpc_credentials,
+            transaction_type_data: eoa_execution_options.transaction_type_data.clone(),
+        };
+
+        // Add transaction to the store
+        self.eoa_executor_store
+            .add_transaction(eoa_transaction_request)
+            .await
+            .map_err(|e| TwmqError::Runtime {
+                message: format!("Failed to add transaction to EOA store: {}", e),
+            })?;
+
+        // Register transaction in registry
+        self.transaction_registry
+            .set_transaction_queue(&base_execution_options.idempotency_key, "eoa_executor")
+            .await
+            .map_err(|e| TwmqError::Runtime {
+                message: format!("Failed to register transaction: {}", e),
+            })?;
+
+        // Ensure an idempotent job exists for this EOA:chain combination
+        let eoa_job_data = EoaExecutorWorkerJobData {
+            eoa_address: eoa_execution_options.from,
+            chain_id: base_execution_options.chain_id,
+            worker_id: format!(
+                "eoa_{}_{}",
+                eoa_execution_options.from, base_execution_options.chain_id
+            ),
+        };
+
+        // Create idempotent job for this EOA:chain - only one will exist
+        let job_id = format!(
+            "eoa_{}_{}",
+            eoa_execution_options.from, base_execution_options.chain_id
+        );
+
+        self.eoa_executor_queue
+            .clone()
+            .job(eoa_job_data)
+            .with_id(&job_id)
+            .push()
+            .await?;
+
+        tracing::debug!(
+            transaction_id = %base_execution_options.idempotency_key,
+            eoa = %eoa_execution_options.from,
+            chain_id = %base_execution_options.chain_id,
+            queue = "eoa_executor",
+            "EOA transaction added to store and worker job ensured"
         );
 
         Ok(())

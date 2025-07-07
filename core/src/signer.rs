@@ -1,4 +1,5 @@
 use alloy::{
+    consensus::TypedTransaction,
     dyn_abi::TypedData,
     eips::eip7702::SignedAuthorization,
     hex::FromHex,
@@ -179,6 +180,14 @@ pub trait AccountSigner {
         credentials: SigningCredential,
     ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
 
+    /// Sign a transaction
+    fn sign_transaction(
+        &self,
+        options: Self::SigningOptions,
+        transaction: TypedTransaction,
+        credentials: SigningCredential,
+    ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
+
     /// Sign EIP-7702 authorization
     fn sign_authorization(
         &self,
@@ -309,6 +318,43 @@ impl AccountSigner for EoaSigner {
         }
     }
 
+    async fn sign_transaction(
+        &self,
+        options: EoaSigningOptions,
+        transaction: TypedTransaction,
+        credentials: SigningCredential,
+    ) -> Result<String, EngineError> {
+        match credentials {
+            SigningCredential::Vault(auth_method) => {
+                let vault_result = self
+                    .vault_client
+                    .sign_transaction(auth_method.clone(), transaction, options.from)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing transaction with EOA (Vault): {:?}", e);
+                        e
+                    })?;
+
+                Ok(vault_result.signature)
+            }
+            SigningCredential::Iaw {
+                auth_token,
+                thirdweb_auth,
+            } => {
+                let iaw_result = self
+                    .iaw_client
+                    .sign_transaction(auth_token.clone(), thirdweb_auth.clone(), transaction)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing transaction with EOA (IAW): {:?}", e);
+                        EngineError::from(e)
+                    })?;
+
+                Ok(iaw_result.signature)
+            }
+        }
+    }
+
     async fn sign_authorization(
         &self,
         options: EoaSigningOptions,
@@ -323,7 +369,6 @@ impl AccountSigner for EoaSigner {
             address,
             nonce: nonce.to::<u64>(),
         };
-
         match credentials {
             SigningCredential::Vault(auth_method) => {
                 let vault_result = self

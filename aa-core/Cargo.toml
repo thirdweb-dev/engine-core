@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0.8", features = ["serde"] }
+alloy = { workspace = true, features = ["serde"] }
 tokio = "1.44.2"
 engine-aa-types = { path = "../aa-types" }
 engine-core = { path = "../core" }
-vault-types = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
-vault-sdk = { version = "0.1.0", git = "ssh://git@github.com/thirdweb-dev/vault.git", branch = "main" }
+vault-types = { workspace = true }
+vault-sdk = { workspace = true }
 serde = "1.0.219"
 tracing = "0.1.41"

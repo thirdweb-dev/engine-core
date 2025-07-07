@@ -1,138 +1,52 @@
-pub mod error;
-pub mod hooks;
-pub mod job;
-pub mod multilane;
-pub mod queue;
-pub mod shutdown;
-
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use error::TwmqError;
-use hooks::TransactionContext;
-pub use job::BorrowedJob;
-use job::{
-    DelayOptions, Job, JobError, JobErrorRecord, JobErrorType, JobOptions, JobResult, JobStatus,
-    PushableJob, RequeuePosition,
-};
-pub use multilane::{MultilanePushableJob, MultilaneQueue};
-use queue::QueueOptions;
-use redis::Pipeline;
-use redis::{AsyncCommands, RedisResult, aio::ConnectionManager};
-use serde::{Serialize, de::DeserializeOwned};
-use shutdown::WorkerHandle;
+use redis::{AsyncCommands, Pipeline, RedisResult, aio::ConnectionManager};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
-
-pub use queue::IdempotencyMode;
-pub use redis;
 use tracing::Instrument;
 
-// Trait for error types to implement user cancellation
-pub trait UserCancellable {
-    fn user_cancelled() -> Self;
-}
+use crate::{
+    CancelResult, DurableExecution, FailHookData, NackHookData, QueueInternalErrorHookData,
+    SuccessHookData, UserCancellable,
+    error::TwmqError,
+    hooks::TransactionContext,
+    job::{
+        BorrowedJob, DelayOptions, Job, JobError, JobErrorRecord, JobErrorType, JobOptions,
+        JobResult, JobStatus, RequeuePosition,
+    },
+    queue::QueueOptions,
+    shutdown::WorkerHandle,
+};
 
-#[derive(Debug)]
-pub enum CancelResult {
-    CancelledImmediately,
-    CancellationPending,
-    NotFound,
-}
-
-pub struct SuccessHookData<'a, O> {
-    pub result: &'a O,
-}
-
-pub struct NackHookData<'a, E> {
-    pub error: &'a E,
-    pub delay: Option<Duration>,
-    pub position: RequeuePosition,
-}
-
-pub struct FailHookData<'a, E> {
-    pub error: &'a E,
-}
-
-pub struct QueueInternalErrorHookData<'a> {
-    pub error: &'a TwmqError,
-}
-
-// Main DurableExecution trait
-pub trait DurableExecution: Sized + Send + Sync + 'static {
-    type Output: Serialize + DeserializeOwned + Send + Sync;
-    type ErrorData: Serialize + DeserializeOwned + From<TwmqError> + UserCancellable + Send + Sync;
-    type JobData: Serialize + DeserializeOwned + Clone + Send + Sync + 'static;
-
-    // Required method to process a job
-    fn process(
-        &self,
-        job: &BorrowedJob<Self::JobData>,
-    ) -> impl Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send;
-
-    fn on_success(
-        &self,
-        _job: &BorrowedJob<Self::JobData>,
-        _d: SuccessHookData<Self::Output>,
-        _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
-
-    fn on_nack(
-        &self,
-        _job: &BorrowedJob<Self::JobData>,
-        _d: NackHookData<Self::ErrorData>,
-        _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
-
-    fn on_fail(
-        &self,
-        _job: &BorrowedJob<Self::JobData>,
-        _d: FailHookData<Self::ErrorData>,
-        _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
-
-    fn on_timeout(
-        &self,
-        _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send + Sync {
-        std::future::ready(())
-    }
-
-    /// Data available to the `on_queue_error` hook. The failure might have been related to deserialization of the job data.
-    /// So the job data might be `None`. This hook is called before the job is moved to the failed state.
-    fn on_queue_error(
-        &self,
-        _job: &Job<Option<Self::JobData>>,
-        _d: QueueInternalErrorHookData<'_>,
-        _tx: &mut TransactionContext<'_>,
-    ) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
-}
-
-// Main Queue struct
-pub struct Queue<H>
+/// A multilane queue that provides fair load balancing across multiple lanes
+/// while maintaining the same reliability guarantees as the single-lane queue.
+pub struct MultilaneQueue<H>
 where
     H: DurableExecution,
 {
     pub redis: ConnectionManager,
     handler: Arc<H>,
     options: QueueOptions,
-    // concurrency: usize,
-    name: String,
+    /// Unique identifier for this multilane queue instance
+    queue_id: String,
 }
 
-impl<H: DurableExecution> Queue<H> {
+/// Represents a job that can be pushed to a specific lane
+pub struct MultilanePushableJob<H>
+where
+    H: DurableExecution,
+{
+    options: JobOptions<H::JobData>,
+    queue: Arc<MultilaneQueue<H>>,
+    lane_id: String,
+}
+
+impl<H: DurableExecution> MultilaneQueue<H> {
     pub async fn new(
         redis_url: &str,
-        name: &str,
-        // concurrency: usize,
+        queue_id: &str,
         options: Option<QueueOptions>,
         handler: H,
     ) -> Result<Self, TwmqError> {
@@ -141,8 +55,7 @@ impl<H: DurableExecution> Queue<H> {
 
         let queue = Self {
             redis,
-            name: name.to_string(),
-            // concurrency,
+            queue_id: queue_id.to_string(),
             options: options.unwrap_or_default(),
             handler: Arc::new(handler),
         };
@@ -154,86 +67,100 @@ impl<H: DurableExecution> Queue<H> {
         Arc::new(self)
     }
 
-    pub fn job(self: Arc<Self>, data: H::JobData) -> PushableJob<H> {
-        PushableJob {
+    /// Create a job for a specific lane
+    pub fn job_for_lane(
+        self: Arc<Self>,
+        lane_id: &str,
+        data: H::JobData,
+    ) -> MultilanePushableJob<H> {
+        MultilanePushableJob {
             options: JobOptions::new(data),
             queue: self,
+            lane_id: lane_id.to_string(),
         }
     }
 
-    // Get queue name
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn queue_id(&self) -> &str {
+        &self.queue_id
     }
 
-    pub fn pending_list_name(&self) -> String {
-        format!("twmq:{}:pending", self.name())
+    // Redis key naming methods with proper multilane namespacing
+    pub fn lanes_zset_name(&self) -> String {
+        format!("twmq_multilane:{}:lanes", self.queue_id)
     }
 
-    pub fn active_hash_name(&self) -> String {
-        format!("twmq:{}:active", self.name)
+    pub fn lane_pending_list_name(&self, lane_id: &str) -> String {
+        format!("twmq_multilane:{}:lane:{}:pending", self.queue_id, lane_id)
     }
 
-    pub fn delayed_zset_name(&self) -> String {
-        format!("twmq:{}:delayed", self.name)
+    pub fn lane_delayed_zset_name(&self, lane_id: &str) -> String {
+        format!("twmq_multilane:{}:lane:{}:delayed", self.queue_id, lane_id)
+    }
+
+    pub fn lane_active_hash_name(&self, lane_id: &str) -> String {
+        format!("twmq_multilane:{}:lane:{}:active", self.queue_id, lane_id)
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("twmq:{}:success", self.name)
+        format!("twmq_multilane:{}:success", self.queue_id)
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("twmq:{}:failed", self.name)
+        format!("twmq_multilane:{}:failed", self.queue_id)
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:data", self.name)
+        format!("twmq_multilane:{}:jobs:data", self.queue_id)
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:meta", self.name, job_id)
+        format!("twmq_multilane:{}:job:{}:meta", self.queue_id, job_id)
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:errors", self.name, job_id)
+        format!("twmq_multilane:{}:job:{}:errors", self.queue_id, job_id)
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:result", self.name)
+        format!("twmq_multilane:{}:jobs:result", self.queue_id)
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("twmq:{}:dedup", self.name)
+        format!("twmq_multilane:{}:dedup", self.queue_id)
     }
 
     pub fn pending_cancellation_set_name(&self) -> String {
-        format!("twmq:{}:pending_cancellations", self.name)
+        format!("twmq_multilane:{}:pending_cancellations", self.queue_id)
     }
 
     pub fn lease_key_name(&self, job_id: &str, lease_token: &str) -> String {
-        format!("twmq:{}:job:{}:lease:{}", self.name, job_id, lease_token)
+        format!(
+            "twmq_multilane:{}:job:{}:lease:{}",
+            self.queue_id, job_id, lease_token
+        )
     }
 
-    pub async fn push(
+    /// Push a job to a specific lane
+    pub async fn push_to_lane(
         &self,
+        lane_id: &str,
         job_options: JobOptions<H::JobData>,
     ) -> Result<Job<H::JobData>, TwmqError> {
-        // Check for duplicates and handle job creation with deduplication
         let script = redis::Script::new(
             r#"
-            local job_id = ARGV[1]
-            local job_data = ARGV[2]
-            local now = ARGV[3]
-            local delay = ARGV[4]
-            local reentry_position = ARGV[5]  -- "first" or "last"
+            local queue_id = ARGV[1]
+            local lane_id = ARGV[2]
+            local job_id = ARGV[3]
+            local job_data = ARGV[4]
+            local now = ARGV[5]
+            local delay = ARGV[6]
+            local reentry_position = ARGV[7]  -- "first" or "last"
 
-            local queue_id = KEYS[1]
-            local delayed_zset_name = KEYS[2]
-            local pending_list_name = KEYS[3]
-
+            local lanes_zset_name = KEYS[1]
+            local lane_delayed_zset_name = KEYS[2]
+            local lane_pending_list_name = KEYS[3]
             local job_data_hash_name = KEYS[4]
             local job_meta_hash_name = KEYS[5]
-
             local dedupe_set_name = KEYS[6]
 
             -- Check if job already exists in any queue
@@ -248,19 +175,23 @@ impl<H: DurableExecution> Queue<H> {
             -- Store job metadata as a hash
             redis.call('HSET', job_meta_hash_name, 'created_at', now)
             redis.call('HSET', job_meta_hash_name, 'attempts', 0)
+            redis.call('HSET', job_meta_hash_name, 'lane_id', lane_id)
 
             -- Add to deduplication set
             redis.call('SADD', dedupe_set_name, job_id)
+
+            -- Add lane to lanes zset if not exists (score 0 means never processed)
+            redis.call('ZADD', lanes_zset_name, 'NX', 0, lane_id)
 
             -- Add to appropriate queue based on delay
             if tonumber(delay) > 0 then
                 local process_at = now + tonumber(delay)
                 -- Store position information for this delayed job
                 redis.call('HSET', job_meta_hash_name, 'reentry_position', reentry_position)
-                redis.call('ZADD', delayed_zset_name, process_at, job_id)
+                redis.call('ZADD', lane_delayed_zset_name, process_at, job_id)
             else
                 -- Non-delayed job always goes to end of pending
-                redis.call('RPUSH', pending_list_name, job_id)
+                redis.call('RPUSH', lane_pending_list_name, job_id)
             end
 
             return { 1, job_id }
@@ -292,13 +223,15 @@ impl<H: DurableExecution> Queue<H> {
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
-            .key(&self.name)
-            .key(self.delayed_zset_name())
-            .key(self.pending_list_name())
+            .key(self.lanes_zset_name())
+            .key(self.lane_delayed_zset_name(lane_id))
+            .key(self.lane_pending_list_name(lane_id))
             .key(self.job_data_hash_name())
             .key(self.job_meta_hash_name(&job.id))
             .key(self.dedupe_set_name())
-            .arg(job_options.id)
+            .arg(&self.queue_id)
+            .arg(lane_id)
+            .arg(&job_options.id)
             .arg(job_data)
             .arg(now)
             .arg(delay_secs)
@@ -306,10 +239,10 @@ impl<H: DurableExecution> Queue<H> {
             .invoke_async(&mut self.redis.clone())
             .await?;
 
-        // Return job_id whether new or existing
         Ok(job)
     }
 
+    /// Get job by ID (works across all lanes)
     pub async fn get_job(&self, job_id: &str) -> Result<Option<Job<H::JobData>>, TwmqError> {
         let mut conn = self.redis.clone();
         let job_data_t_json: Option<String> = conn.hget(self.job_data_hash_name(), job_id).await?;
@@ -318,7 +251,7 @@ impl<H: DurableExecution> Queue<H> {
             let data_t: H::JobData = serde_json::from_str(&data_json)?;
 
             // Fetch metadata
-            let meta_map: std::collections::HashMap<String, String> =
+            let meta_map: HashMap<String, String> =
                 conn.hgetall(self.job_meta_hash_name(job_id)).await?;
 
             let attempts: u32 = meta_map
@@ -328,11 +261,10 @@ impl<H: DurableExecution> Queue<H> {
             let created_at: u64 = meta_map
                 .get("created_at")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(0); // Consider a more robust default or error
+                .unwrap_or(0);
             let processed_at: Option<u64> =
                 meta_map.get("processed_at").and_then(|s| s.parse().ok());
             let finished_at: Option<u64> = meta_map.get("finished_at").and_then(|s| s.parse().ok());
-            // reentry_position is also in meta if needed for display
 
             Ok(Some(Job {
                 id: job_id.to_string(),
@@ -347,21 +279,59 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
-    pub async fn count(&self, status: JobStatus) -> Result<usize, TwmqError> {
+    /// Count jobs by status across all lanes or for a specific lane
+    pub async fn count(
+        &self,
+        status: JobStatus,
+        lane_id: Option<&str>,
+    ) -> Result<usize, TwmqError> {
         let mut conn = self.redis.clone();
 
         let count = match status {
             JobStatus::Pending => {
-                let count: usize = conn.llen(self.pending_list_name()).await?;
-                count
+                if let Some(lane) = lane_id {
+                    let count: usize = conn.llen(self.lane_pending_list_name(lane)).await?;
+                    count
+                } else {
+                    // Sum across all active lanes
+                    let lanes: Vec<String> = conn.zrange(self.lanes_zset_name(), 0, -1).await?;
+                    let mut total = 0;
+                    for lane in lanes {
+                        let count: usize = conn.llen(self.lane_pending_list_name(&lane)).await?;
+                        total += count;
+                    }
+                    total
+                }
             }
             JobStatus::Active => {
-                let count: usize = conn.hlen(self.active_hash_name()).await?;
-                count
+                if let Some(lane) = lane_id {
+                    let count: usize = conn.hlen(self.lane_active_hash_name(lane)).await?;
+                    count
+                } else {
+                    // Sum across all active lanes
+                    let lanes: Vec<String> = conn.zrange(self.lanes_zset_name(), 0, -1).await?;
+                    let mut total = 0;
+                    for lane in lanes {
+                        let count: usize = conn.hlen(self.lane_active_hash_name(&lane)).await?;
+                        total += count;
+                    }
+                    total
+                }
             }
             JobStatus::Delayed => {
-                let count: usize = conn.zcard(self.delayed_zset_name()).await?;
-                count
+                if let Some(lane) = lane_id {
+                    let count: usize = conn.zcard(self.lane_delayed_zset_name(lane)).await?;
+                    count
+                } else {
+                    // Sum across all active lanes
+                    let lanes: Vec<String> = conn.zrange(self.lanes_zset_name(), 0, -1).await?;
+                    let mut total = 0;
+                    for lane in lanes {
+                        let count: usize = conn.zcard(self.lane_delayed_zset_name(&lane)).await?;
+                        total += count;
+                    }
+                    total
+                }
             }
             JobStatus::Success => {
                 let count: usize = conn.llen(self.success_list_name()).await?;
@@ -376,36 +346,54 @@ impl<H: DurableExecution> Queue<H> {
         Ok(count)
     }
 
+    pub async fn lanes_count(&self) -> Result<usize, TwmqError> {
+        let mut conn = self.redis.clone();
+        let count: usize = conn.zcard(self.lanes_zset_name()).await?;
+        Ok(count)
+    }
+
+    /// Cancel a job by ID (works across all lanes)
     pub async fn cancel_job(&self, job_id: &str) -> Result<CancelResult, TwmqError> {
         let script = redis::Script::new(
             r#"
-            local job_id = ARGV[1]
+            local queue_id = ARGV[1]
+            local job_id = ARGV[2]
+            local now = ARGV[3]
             
-            local pending_list = KEYS[1]
-            local delayed_zset = KEYS[2]
-            local active_hash = KEYS[3]
-            local failed_list = KEYS[4]
-            local pending_cancellation_set = KEYS[5]
-            local job_meta_hash = KEYS[6]
+            local lanes_zset = KEYS[1]
+            local failed_list = KEYS[2]
+            local pending_cancellation_set = KEYS[3]
+            local job_meta_hash = KEYS[4]
+            local job_data_hash = KEYS[5]
+            
+            -- Get the lane for this job
+            local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
+            if not lane_id then
+                return "not_found"
+            end
+            
+            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
             
             -- Try to remove from pending queue
-            if redis.call('LREM', pending_list, 0, job_id) > 0 then
+            if redis.call('LREM', lane_pending_list, 0, job_id) > 0 then
                 -- Move to failed state with cancellation
                 redis.call('LPUSH', failed_list, job_id)
-                redis.call('HSET', job_meta_hash, 'finished_at', ARGV[2])
+                redis.call('HSET', job_meta_hash, 'finished_at', now)
                 return "cancelled_immediately"
             end
             
             -- Try to remove from delayed queue  
-            if redis.call('ZREM', delayed_zset, job_id) > 0 then
+            if redis.call('ZREM', lane_delayed_zset, job_id) > 0 then
                 -- Move to failed state with cancellation
                 redis.call('LPUSH', failed_list, job_id)
-                redis.call('HSET', job_meta_hash, 'finished_at', ARGV[2])
+                redis.call('HSET', job_meta_hash, 'finished_at', now)
                 return "cancelled_immediately"
             end
             
             -- Check if job is active
-            if redis.call('HEXISTS', active_hash, job_id) == 1 then
+            if redis.call('HEXISTS', lane_active_hash, job_id) == 1 then
                 -- Add to pending cancellations set
                 redis.call('SADD', pending_cancellation_set, job_id)
                 return "cancellation_pending"
@@ -421,12 +409,12 @@ impl<H: DurableExecution> Queue<H> {
             .as_secs();
 
         let result: String = script
-            .key(self.pending_list_name())
-            .key(self.delayed_zset_name())
-            .key(self.active_hash_name())
+            .key(self.lanes_zset_name())
             .key(self.failed_list_name())
             .key(self.pending_cancellation_set_name())
             .key(self.job_meta_hash_name(job_id))
+            .key(self.job_data_hash_name())
+            .arg(&self.queue_id)
             .arg(job_id)
             .arg(now)
             .invoke_async(&mut self.redis.clone())
@@ -434,7 +422,6 @@ impl<H: DurableExecution> Queue<H> {
 
         match result.as_str() {
             "cancelled_immediately" => {
-                // Process the cancellation through hook system
                 if let Err(e) = self.process_cancelled_job(job_id).await {
                     tracing::error!(
                         job_id = %job_id,
@@ -452,54 +439,54 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
-    pub fn work(self: &Arc<Self>) -> WorkerHandle<Queue<H>> {
+    /// Start the multilane worker
+    pub fn work(self: &Arc<Self>) -> WorkerHandle<MultilaneQueue<H>> {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        // Local semaphore to limit concurrency per instance
         let semaphore = Arc::new(Semaphore::new(self.options.local_concurrency));
         let handler = self.handler.clone();
         let outer_queue_clone = self.clone();
-        // Start worker
+
         let join_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(outer_queue_clone.options.polling_interval);
             let handler_clone = handler.clone();
             let always_poll = outer_queue_clone.options.always_poll;
 
-            tracing::info!("Worker started for queue: {}", outer_queue_clone.name());
+            tracing::info!(
+                "Multilane worker started for queue: {}",
+                outer_queue_clone.queue_id()
+            );
+
             loop {
                 tokio::select! {
-                    // Check for shutdown signal
                     _ = &mut shutdown_rx => {
-                        tracing::info!("Shutdown signal received for queue: {}", outer_queue_clone.name());
+                        tracing::info!("Shutdown signal received for multilane queue: {}", outer_queue_clone.queue_id());
                         break;
                     }
 
-                    // Normal polling tick
                     _ = interval.tick() => {
                         let queue_clone = outer_queue_clone.clone();
-
-                        // Check available permits for batch size
                         let available_permits = semaphore.available_permits();
+
                         if available_permits == 0 && !always_poll {
                             tracing::trace!("No permits available, waiting...");
                             continue;
                         }
 
                         tracing::trace!("Available permits: {}", available_permits);
-                        // Try to get multiple jobs - as many as we have permits
+
                         match queue_clone.pop_batch_jobs(available_permits).await {
                             Ok(jobs) => {
-                                tracing::trace!("Got {} jobs", jobs.len());
-                                for job in jobs {
+                                tracing::trace!("Got {} jobs across lanes", jobs.len());
+
+                                for (lane_id, job) in jobs {
                                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                                     let queue_clone = queue_clone.clone();
                                     let job_id = job.id().to_string();
                                     let handler_clone = handler_clone.clone();
 
                                     tokio::spawn(async move {
-                                        // Process job - note we don't pass a context here
                                         let result = handler_clone.process(&job).await;
 
-                                        // Complete job using unified method with hooks and retry logic
                                         if let Err(e) = queue_clone.complete_job(&job, result).await {
                                             tracing::error!(
                                                 "Failed to complete job {} handling: {:?}",
@@ -508,32 +495,26 @@ impl<H: DurableExecution> Queue<H> {
                                             );
                                         }
 
-                                        // Release permit when done
                                         drop(permit);
-                                    }.instrument(tracing::info_span!("twmq_worker", job_id)));
+                                    }.instrument(tracing::info_span!("twmq_multilane_worker", job_id, lane_id)));
                                 }
                             }
                             Err(e) => {
-                                // No jobs found, we hit an error
                                 tracing::error!("Failed to pop batch jobs: {:?}", e);
                                 sleep(Duration::from_millis(1000)).await;
                             }
                         };
-
                     }
                 }
             }
 
-            // Graceful shutdown: wait for all active jobs to complete
+            // Graceful shutdown
             tracing::info!(
-                "Waiting for {} active jobs to complete for queue: {}",
-                semaphore
-                    .available_permits()
-                    .saturating_sub(outer_queue_clone.options.local_concurrency),
-                outer_queue_clone.name()
+                "Waiting for {} active jobs to complete for multilane queue: {}",
+                outer_queue_clone.options.local_concurrency - semaphore.available_permits(),
+                outer_queue_clone.queue_id()
             );
 
-            // Acquire all permits to ensure no jobs are running
             let _permits: Vec<_> = (0..outer_queue_clone.options.local_concurrency)
                 .map(|_| semaphore.clone().acquire_owned())
                 .collect::<futures::future::JoinAll<_>>()
@@ -545,8 +526,8 @@ impl<H: DurableExecution> Queue<H> {
                 })?;
 
             tracing::info!(
-                "All jobs completed, worker shutdown complete for queue: {}",
-                outer_queue_clone.name()
+                "All jobs completed, multilane worker shutdown complete for queue: {}",
+                outer_queue_clone.queue_id()
             );
             Ok(())
         });
@@ -558,159 +539,205 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
-    // Improved batch job popping - gets multiple jobs at once
-    async fn pop_batch_jobs(
+    /// Pop jobs from multiple lanes in a fair round-robin manner with full atomicity
+    pub async fn pop_batch_jobs(
         self: &Arc<Self>,
         batch_size: usize,
-    ) -> RedisResult<Vec<BorrowedJob<H::JobData>>> {
-        // Lua script that does:
-        // 1. Clean up expired leases (with lease token validation)
-        // 2. Process pending cancellations
-        // 3. Process expired delayed jobs
-        // 4. Pop up to batch_size jobs from pending (with new lease tokens)
+    ) -> RedisResult<Vec<(String, BorrowedJob<H::JobData>)>> {
         let script = redis::Script::new(
             r#"
-            local now = tonumber(ARGV[1])
-            local batch_size = tonumber(ARGV[2])
-            local lease_seconds = tonumber(ARGV[3])
+            local queue_id = ARGV[1]
+            local now = tonumber(ARGV[2])
+            local batch_size = tonumber(ARGV[3])
+            local lease_seconds = tonumber(ARGV[4])
 
-            local queue_id = KEYS[1]
-            local delayed_zset_name = KEYS[2]
-            local pending_list_name = KEYS[3]
-            local active_hash_name = KEYS[4]
-            local job_data_hash_name = KEYS[5]
-            local pending_cancellation_set = KEYS[6]
-            local failed_list_name = KEYS[7]
-            local success_list_name = KEYS[8]
+            local lanes_zset_name = KEYS[1]
+            local job_data_hash_name = KEYS[2]
+            local pending_cancellation_set = KEYS[3]
+            local failed_list_name = KEYS[4]
+            local success_list_name = KEYS[5]
 
             local result_jobs = {}
             local timed_out_jobs = {}
             local cancelled_jobs = {}
-            local completed_jobs = {}
 
-            -- Step 1: Clean up expired leases by checking lease keys stored in job meta
-            -- Get all active jobs (now just contains job_id -> attempts)
-            local active_jobs = redis.call('HGETALL', active_hash_name)
-
-            -- Process in pairs (job_id, attempts)
-            for i = 1, #active_jobs, 2 do
-                local job_id = active_jobs[i]
-                local attempts = active_jobs[i + 1]
-                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
+            -- Helper function to cleanup expired leases for a specific lane
+            local function cleanup_lane_leases(lane_id)
+                local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
                 
-                -- Get the current lease token from job metadata
-                local current_lease_token = redis.call('HGET', job_meta_hash_name, 'lease_token')
+                local active_jobs = redis.call('HGETALL', lane_active_hash)
                 
-                if current_lease_token then
-                    -- Build the lease key and check if it exists (Redis auto-expires)
-                    local lease_key = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
-                    local lease_exists = redis.call('EXISTS', lease_key)
+                for i = 1, #active_jobs, 2 do
+                    local job_id = active_jobs[i]
+                    local attempts = active_jobs[i + 1]
+                    local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
                     
-                    -- If lease doesn't exist (expired), move job back to pending
-                    if lease_exists == 0 then
-                        redis.call('HINCRBY', job_meta_hash_name, 'attempts', 1)
-                        redis.call('HDEL', job_meta_hash_name, 'lease_token')
+                    local current_lease_token = redis.call('HGET', job_meta_hash, 'lease_token')
+                    
+                    if current_lease_token then
+                        local lease_key = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
+                        local lease_exists = redis.call('EXISTS', lease_key)
                         
-                        -- Move job back to pending
-                        redis.call('HDEL', active_hash_name, job_id)
-                        redis.call('LPUSH', pending_list_name, job_id)
-                        
-                        -- Add to list of timed out jobs
-                        table.insert(timed_out_jobs, job_id)
+                        if lease_exists == 0 then
+                            redis.call('HINCRBY', job_meta_hash, 'attempts', 1)
+                            redis.call('HDEL', job_meta_hash, 'lease_token')
+                            redis.call('HDEL', lane_active_hash, job_id)
+                            redis.call('LPUSH', lane_pending_list, job_id)
+                            table.insert(timed_out_jobs, {lane_id, job_id})
+                        end
+                    else
+                        redis.call('HINCRBY', job_meta_hash, 'attempts', 1)
+                        redis.call('HDEL', lane_active_hash, job_id)
+                        redis.call('LPUSH', lane_pending_list, job_id)
+                        table.insert(timed_out_jobs, {lane_id, job_id})
                     end
-                else
-                    -- No lease token in meta, something's wrong - move back to pending
-                    redis.call('HINCRBY', job_meta_hash_name, 'attempts', 1)
-                    redis.call('HDEL', active_hash_name, job_id)
-                    redis.call('LPUSH', pending_list_name, job_id)
-                    table.insert(timed_out_jobs, job_id)
                 end
             end
 
-            -- Step 2: Process pending cancellations AFTER lease cleanup
+            -- Helper function to move delayed jobs to pending for a specific lane
+            local function process_delayed_jobs(lane_id)
+                local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                
+                local delayed_jobs = redis.call('ZRANGEBYSCORE', lane_delayed_zset, 0, now)
+                for i, job_id in ipairs(delayed_jobs) do
+                    local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                    local reentry_position = redis.call('HGET', job_meta_hash, 'reentry_position') or 'last'
+
+                    redis.call('ZREM', lane_delayed_zset, job_id)
+                    redis.call('HDEL', job_meta_hash, 'reentry_position')
+
+                    if reentry_position == 'first' then
+                        redis.call('LPUSH', lane_pending_list, job_id)
+                    else
+                        redis.call('RPUSH', lane_pending_list, job_id)
+                    end
+                end
+            end
+
+            -- Helper function to pop one job from a lane
+            local function pop_job_from_lane(lane_id)
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                
+                local job_id = redis.call('RPOP', lane_pending_list)
+                if not job_id then
+                    return nil
+                end
+
+                local job_data = redis.call('HGET', job_data_hash_name, job_id)
+                if not job_data then
+                    return nil
+                end
+
+                local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                redis.call('HSET', job_meta_hash, 'processed_at', now)
+                local created_at = redis.call('HGET', job_meta_hash, 'created_at') or now
+                local attempts = redis.call('HINCRBY', job_meta_hash, 'attempts', 1)
+
+                local lease_token = now .. '_' .. job_id .. '_' .. attempts
+                local lease_key = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
+                
+                redis.call('SET', lease_key, '1')
+                redis.call('EXPIRE', lease_key, lease_seconds)
+                redis.call('HSET', job_meta_hash, 'lease_token', lease_token)
+                redis.call('HSET', lane_active_hash, job_id, attempts)
+
+                return {job_id, job_data, tostring(attempts), tostring(created_at), tostring(now), lease_token}
+            end
+
+            -- Step 1: Process pending cancellations first
             local cancel_requests = redis.call('SMEMBERS', pending_cancellation_set)
             
             for i, job_id in ipairs(cancel_requests) do
-                -- Check if job is still active
-                if redis.call('HEXISTS', active_hash_name, job_id) == 1 then
-                    -- Still processing, keep in cancellation set
-                else
-                    -- Job finished processing, check outcome
-                    if redis.call('LPOS', success_list_name, job_id) then
-                        -- Job succeeded, just remove from cancellation set
-                        table.insert(completed_jobs, job_id)
+                local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
+                
+                if lane_id then
+                    local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                    
+                    if redis.call('HEXISTS', lane_active_hash, job_id) == 1 then
+                        -- Still processing, keep in cancellation set
                     else
-                        -- Job not successful, cancel it now
-                        redis.call('LPUSH', failed_list_name, job_id)
-                        -- Add cancellation timestamp
-                        local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
-                        redis.call('HSET', job_meta_hash_name, 'finished_at', now)
-                        table.insert(cancelled_jobs, job_id)
+                        -- Job finished processing, check outcome
+                        local success_count = redis.call('LREM', success_list_name, 0, job_id)
+                        if success_count > 0 then
+                            -- Job succeeded, add it back to success list
+                            redis.call('LPUSH', success_list_name, job_id)
+                        else
+                            redis.call('LPUSH', failed_list_name, job_id)
+                            redis.call('HSET', job_meta_hash, 'finished_at', now)
+                            table.insert(cancelled_jobs, {lane_id, job_id})
+                        end
+                        redis.call('SREM', pending_cancellation_set, job_id)
                     end
-                    -- Remove from pending cancellations
-                    redis.call('SREM', pending_cancellation_set, job_id)
                 end
             end
 
-            -- Step 3: Move expired delayed jobs to pending
-            local delayed_jobs = redis.call('ZRANGEBYSCORE', delayed_zset_name, 0, now)
-            for i, job_id in ipairs(delayed_jobs) do
-                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
-                local reentry_position = redis.call('HGET', job_meta_hash_name, 'reentry_position') or 'last'
+            -- Step 2: Efficient lane processing
+            local jobs_popped = 0
+            local lanes_with_scores = redis.call('ZRANGE', lanes_zset_name, 0, -1, 'WITHSCORES')
+            local total_lanes = #lanes_with_scores / 2
 
-                -- Remove from delayed
-                redis.call('ZREM', delayed_zset_name, job_id)
-                redis.call('HDEL', job_meta_hash_name, 'reentry_position')
+            if total_lanes == 0 then
+                return {result_jobs, cancelled_jobs, timed_out_jobs}
+            end
 
-                -- Add to pending based on position
-                if reentry_position == 'first' then
-                    redis.call('LPUSH', pending_list_name, job_id)
+            local lane_index = 1
+            local empty_lanes_count = 0
+
+            while jobs_popped < batch_size and empty_lanes_count < total_lanes do
+                local lane_id = lanes_with_scores[lane_index * 2 - 1]
+                
+                -- Skip if we've already marked this lane as empty
+                if lane_id == nil then
+                    lane_index = lane_index + 1
+                    if lane_index > total_lanes then
+                        lane_index = 1
+                    end
                 else
-                    redis.call('RPUSH', pending_list_name, job_id)
-                end
-            end
-
-            -- Step 4: Pop jobs from pending and create lease keys (up to batch_size)
-            local popped_job_ids = {}
-            for i = 1, batch_size do
-                local job_id = redis.call('LPOP', pending_list_name)
-                if not job_id then
-                    break
-                end
-                table.insert(popped_job_ids, job_id)
-            end
-
-            local result_jobs = {}
-
-            -- Process popped jobs
-            for _, job_id in ipairs(popped_job_ids) do
-                -- Get job data
-                local job_data = redis.call('HGET', job_data_hash_name, job_id)
-
-                -- Only process if we have data
-                if job_data then
-                    -- Update metadata
-                    local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
-                    redis.call('HSET', job_meta_hash_name, 'processed_at', now)
-                    local created_at = redis.call('HGET', job_meta_hash_name, 'created_at') or now
-                    local attempts = redis.call('HINCRBY', job_meta_hash_name, 'attempts', 1)
-
-                    -- Generate unique lease token
-                    local lease_token = now .. '_' .. job_id .. '_' .. attempts
-
-                    -- Create separate lease key with TTL
-                    local lease_key = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
-                    redis.call('SET', lease_key, '1')
-                    redis.call('EXPIRE', lease_key, lease_seconds)
-
-                    -- Store lease token in job metadata
-                    redis.call('HSET', job_meta_hash_name, 'lease_token', lease_token)
-
-                    -- Add to active hash (just job_id -> attempts, no lease info)
-                    redis.call('HSET', active_hash_name, job_id, attempts)
-
-                    -- Add to result with job data and lease token
-                    table.insert(result_jobs, {job_id, job_data, tostring(attempts), tostring(created_at), tostring(now), lease_token})
+                    local last_score = tonumber(lanes_with_scores[lane_index * 2])
+                    
+                    -- Only cleanup if not visited this batch (score != now)
+                    if last_score ~= now then
+                        cleanup_lane_leases(lane_id)
+                        process_delayed_jobs(lane_id)
+                        redis.call('ZADD', lanes_zset_name, now, lane_id)
+                        lanes_with_scores[lane_index * 2] = tostring(now)
+                    end
+                    
+                    -- Try to pop a job from this lane
+                    local job_result = pop_job_from_lane(lane_id)
+                    
+                    if job_result then
+                        table.insert(result_jobs, {lane_id, job_result[1], job_result[2], job_result[3], job_result[4], job_result[5], job_result[6]})
+                        jobs_popped = jobs_popped + 1
+                    else
+                        -- Lane is empty, mark it and count it
+                        lanes_with_scores[lane_index * 2 - 1] = nil
+                        lanes_with_scores[lane_index * 2] = nil
+                        empty_lanes_count = empty_lanes_count + 1
+                        
+                        -- Check if lane should be removed from Redis
+                        local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                        local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                        local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                        
+                        local pending_count = redis.call('LLEN', lane_pending_list)
+                        local delayed_count = redis.call('ZCARD', lane_delayed_zset)
+                        local active_count = redis.call('HLEN', lane_active_hash)
+                        
+                        if pending_count == 0 and delayed_count == 0 and active_count == 0 then
+                            redis.call('ZREM', lanes_zset_name, lane_id)
+                        end
+                    end
+                    
+                    -- Move to next lane
+                    lane_index = lane_index + 1
+                    if lane_index > total_lanes then
+                        lane_index = 1
+                    end
                 end
             end
 
@@ -724,18 +751,16 @@ impl<H: DurableExecution> Queue<H> {
             .as_secs();
 
         let results_from_lua: (
-            Vec<(String, String, String, String, String, String)>,
-            Vec<String>,
-            Vec<String>,
+            Vec<(String, String, String, String, String, String, String)>,
+            Vec<(String, String)>,
+            Vec<(String, String)>,
         ) = script
-            .key(self.name())
-            .key(self.delayed_zset_name())
-            .key(self.pending_list_name())
-            .key(self.active_hash_name())
+            .key(self.lanes_zset_name())
             .key(self.job_data_hash_name())
             .key(self.pending_cancellation_set_name())
             .key(self.failed_list_name())
             .key(self.success_list_name())
+            .arg(&self.queue_id)
             .arg(now)
             .arg(batch_size)
             .arg(self.options.lease_duration.as_secs())
@@ -744,16 +769,17 @@ impl<H: DurableExecution> Queue<H> {
 
         let (job_results, cancelled_jobs, timed_out_jobs) = results_from_lua;
 
-        // Log individual lease timeouts and cancellations
-        for job_id in &timed_out_jobs {
-            tracing::warn!(job_id = %job_id, "Job lease expired, moved back to pending");
+        // Log lease timeouts and cancellations with lane context
+        for (lane_id, job_id) in &timed_out_jobs {
+            tracing::warn!(job_id = %job_id, lane_id = %lane_id, "Job lease expired, moved back to pending");
         }
-        for job_id in &cancelled_jobs {
-            tracing::info!(job_id = %job_id, "Job cancelled by user request");
+        for (lane_id, job_id) in &cancelled_jobs {
+            tracing::info!(job_id = %job_id, lane_id = %lane_id, "Job cancelled by user request");
         }
 
         let mut jobs = Vec::new();
         for (
+            lane_id,
             job_id_str,
             job_data_t_json,
             attempts_str,
@@ -764,9 +790,9 @@ impl<H: DurableExecution> Queue<H> {
         {
             match serde_json::from_str::<H::JobData>(&job_data_t_json) {
                 Ok(data_t) => {
-                    let attempts: u32 = attempts_str.parse().unwrap_or(1); // Default or handle error
-                    let created_at: u64 = created_at_str.parse().unwrap_or(now); // Default or handle error
-                    let processed_at: u64 = processed_at_str.parse().unwrap_or(now); // Default or handle error
+                    let attempts: u32 = attempts_str.parse().unwrap_or(1);
+                    let created_at: u64 = created_at_str.parse().unwrap_or(now);
+                    let processed_at: u64 = processed_at_str.parse().unwrap_or(now);
 
                     let job = Job {
                         id: job_id_str,
@@ -774,28 +800,28 @@ impl<H: DurableExecution> Queue<H> {
                         attempts,
                         created_at,
                         processed_at: Some(processed_at),
-                        finished_at: None, // Not finished yet
+                        finished_at: None,
                     };
 
-                    jobs.push(BorrowedJob::new(job, lease_token));
+                    jobs.push((lane_id, BorrowedJob::new(job, lease_token)));
                 }
                 Err(e) => {
-                    // Log error: failed to deserialize job data T for job_id_str
                     tracing::error!(
                         job_id = job_id_str,
+                        lane_id = lane_id,
                         error = ?e,
                         "Failed to deserialize job data. Spawning task to move job to failed state.",
                     );
 
                     let queue_clone = self.clone();
-
                     tokio::spawn(async move {
-                        // let's call the on_queue_error hook and move the job to the failed state
                         let mut pipeline = redis::pipe();
-                        pipeline.atomic(); // Use MULTI/EXEC
+                        pipeline.atomic();
 
-                        let mut _tx_context =
-                            TransactionContext::new(&mut pipeline, queue_clone.name().to_string());
+                        let mut _tx_context = TransactionContext::new(
+                            &mut pipeline,
+                            queue_clone.queue_id().to_string(),
+                        );
 
                         let job: Job<Option<H::JobData>> = Job {
                             id: job_id_str.to_string(),
@@ -808,13 +834,13 @@ impl<H: DurableExecution> Queue<H> {
 
                         let twmq_error: TwmqError = e.into();
 
-                        // Complete job using queue error method with lease token
                         if let Err(e) = queue_clone
                             .complete_job_queue_error(&job, &lease_token, &twmq_error.into())
                             .await
                         {
                             tracing::error!(
                                 job_id = job.id,
+                                lane_id = lane_id,
                                 error = ?e,
                                 "Failed to complete job fail handling successfully",
                             );
@@ -825,12 +851,13 @@ impl<H: DurableExecution> Queue<H> {
         }
 
         // Process cancelled jobs through hook system
-        for job_id in cancelled_jobs {
+        for (lane_id, job_id) in cancelled_jobs {
             let queue_clone = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = queue_clone.process_cancelled_job(&job_id).await {
                     tracing::error!(
                         job_id = %job_id,
+                        lane_id = %lane_id,
                         error = ?e,
                         "Failed to process cancelled job"
                     );
@@ -843,33 +870,25 @@ impl<H: DurableExecution> Queue<H> {
 
     /// Process a cancelled job through the hook system with user cancellation error
     async fn process_cancelled_job(&self, job_id: &str) -> Result<(), TwmqError> {
-        // Get job data for the cancelled job
         match self.get_job(job_id).await? {
             Some(job) => {
-                // Create cancellation error using the trait
                 let cancellation_error = H::ErrorData::user_cancelled();
 
-                // Create transaction pipeline for atomicity
                 let mut pipeline = redis::pipe();
                 pipeline.atomic();
 
-                // Create transaction context with mutable access to pipeline
                 let mut tx_context =
-                    TransactionContext::new(&mut pipeline, self.name().to_string());
+                    TransactionContext::new(&mut pipeline, self.queue_id().to_string());
 
                 let fail_hook_data = FailHookData {
                     error: &cancellation_error,
                 };
 
-                // Create a BorrowedJob with a dummy lease token since cancelled jobs don't have active leases
                 let borrowed_job = BorrowedJob::new(job, "cancelled".to_string());
-
-                // Call fail hook for user cancellation
                 self.handler
                     .on_fail(&borrowed_job, fail_hook_data, &mut tx_context)
                     .await;
 
-                // Execute the pipeline (just hook commands, job already moved to failed)
                 pipeline.query_async::<()>(&mut self.redis.clone()).await?;
 
                 tracing::info!(
@@ -889,6 +908,7 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
+    // Job completion methods (same as single-lane queue but with multilane naming)
     fn add_success_operations(
         &self,
         job: &BorrowedJob<H::JobData>,
@@ -902,21 +922,23 @@ impl<H: DurableExecution> Queue<H> {
 
         let lease_key = self.lease_key_name(&job.job.id, &job.lease_token);
 
-        // Delete the lease key to consume it
         pipeline.del(&lease_key);
 
-        // Add job completion operations
+        // Get lane_id from job metadata to remove from correct lane active hash
+        let job_meta_hash = self.job_meta_hash_name(&job.job.id);
+
+        // We need to get lane_id first, then remove from that lane's active hash
+        // This requires a separate Redis call before the pipeline, but ensures atomicity within the pipeline
         pipeline
-            .hdel(self.active_hash_name(), &job.job.id)
             .lpush(self.success_list_name(), &job.job.id)
-            .hset(self.job_meta_hash_name(&job.job.id), "finished_at", now)
-            .hdel(self.job_meta_hash_name(&job.job.id), "lease_token");
+            .hset(&job_meta_hash, "finished_at", now)
+            .hdel(&job_meta_hash, "lease_token");
 
         let result_json = serde_json::to_string(result)?;
         pipeline.hset(self.job_result_hash_name(), &job.job.id, result_json);
 
         // For "active" idempotency mode, remove from deduplication set immediately
-        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
             pipeline.srem(self.dedupe_set_name(), &job.job.id);
         }
 
@@ -924,13 +946,12 @@ impl<H: DurableExecution> Queue<H> {
     }
 
     async fn post_success_completion(&self) -> Result<(), TwmqError> {
-        // Separate call for pruning with data deletion using Lua
         let trim_script = redis::Script::new(
             r#"
                 local queue_id = KEYS[1]
                 local list_name = KEYS[2]
                 local job_data_hash = KEYS[3]
-                local results_hash = KEYS[4] -- e.g., "myqueue:results"
+                local results_hash = KEYS[4]
                 local dedupe_set_name = KEYS[5]
 
                 local max_len = tonumber(ARGV[1])
@@ -939,8 +960,8 @@ impl<H: DurableExecution> Queue<H> {
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
-                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
                         redis.call('SREM', dedupe_set_name, j_id)
                         redis.call('HDEL', job_data_hash, j_id)
@@ -955,12 +976,12 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            .key(self.name())
+            .key(self.queue_id())
             .key(self.success_list_name())
             .key(self.job_data_hash_name())
-            .key(self.job_result_hash_name()) // results_hash
+            .key(self.job_result_hash_name())
             .key(self.dedupe_set_name())
-            .arg(self.options.max_success) // max_len (LTRIM is 0 to max_success-1)
+            .arg(self.options.max_success)
             .invoke_async(&mut self.redis.clone())
             .await?;
 
@@ -985,14 +1006,10 @@ impl<H: DurableExecution> Queue<H> {
             .as_secs();
 
         let lease_key = self.lease_key_name(&job.job.id, &job.lease_token);
+        let job_meta_hash = self.job_meta_hash_name(&job.job.id);
 
-        // Delete the lease key to consume it
         pipeline.del(&lease_key);
-
-        // Remove from active and clear lease token
-        pipeline
-            .hdel(self.active_hash_name(), &job.job.id)
-            .hdel(self.job_meta_hash_name(&job.job.id), "lease_token");
+        pipeline.hdel(&job_meta_hash, "lease_token");
 
         let error_record = JobErrorRecord {
             attempt: job.job.attempts,
@@ -1004,34 +1021,13 @@ impl<H: DurableExecution> Queue<H> {
         let error_json = serde_json::to_string(&error_record)?;
         pipeline.lpush(self.job_errors_list_name(&job.job.id), error_json);
 
-        // Add to proper queue based on delay and position
-        if let Some(delay_duration) = delay {
-            let delay_until = now + delay_duration.as_secs();
-            let pos_str = position.to_string();
-
-            pipeline
-                .hset(
-                    self.job_meta_hash_name(&job.job.id),
-                    "reentry_position",
-                    pos_str,
-                )
-                .zadd(self.delayed_zset_name(), &job.job.id, delay_until);
-        } else {
-            match position {
-                RequeuePosition::First => {
-                    pipeline.lpush(self.pending_list_name(), &job.job.id);
-                }
-                RequeuePosition::Last => {
-                    pipeline.rpush(self.pending_list_name(), &job.job.id);
-                }
-            }
-        }
+        // Note: The actual requeuing logic needs to be handled by a separate operation
+        // since we need the lane_id from metadata. This will be done in the complete_job method.
 
         Ok(())
     }
 
     async fn post_nack_completion(&self) -> Result<(), TwmqError> {
-        // No pruning needed for nack
         Ok(())
     }
 
@@ -1047,18 +1043,14 @@ impl<H: DurableExecution> Queue<H> {
             .as_secs();
 
         let lease_key = self.lease_key_name(&job.job.id, &job.lease_token);
+        let job_meta_hash = self.job_meta_hash_name(&job.job.id);
 
-        // Delete the lease key to consume it
         pipeline.del(&lease_key);
-
-        // Remove from active, add to failed, clear lease token
         pipeline
-            .hdel(self.active_hash_name(), &job.job.id)
             .lpush(self.failed_list_name(), &job.job.id)
-            .hset(self.job_meta_hash_name(&job.job.id), "finished_at", now)
-            .hdel(self.job_meta_hash_name(&job.job.id), "lease_token");
+            .hset(&job_meta_hash, "finished_at", now)
+            .hdel(&job_meta_hash, "lease_token");
 
-        // Store error
         let error_record = JobErrorRecord {
             attempt: job.job.attempts,
             error,
@@ -1069,7 +1061,7 @@ impl<H: DurableExecution> Queue<H> {
         pipeline.lpush(self.job_errors_list_name(&job.job.id), error_json);
 
         // For "active" idempotency mode, remove from deduplication set immediately
-        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
             pipeline.srem(self.dedupe_set_name(), &job.job.id);
         }
 
@@ -1077,7 +1069,6 @@ impl<H: DurableExecution> Queue<H> {
     }
 
     async fn post_fail_completion(&self) -> Result<(), TwmqError> {
-        // Separate call for pruning with data deletion using Lua
         let trim_script = redis::Script::new(
             r#"
                 local queue_id = KEYS[1]
@@ -1091,8 +1082,8 @@ impl<H: DurableExecution> Queue<H> {
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
-                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
 
                         redis.call('SREM', dedupe_set_name, j_id)
                         redis.call('HDEL', job_data_hash, j_id)
@@ -1106,7 +1097,7 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            .key(self.name())
+            .key(self.queue_id())
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
             .key(self.dedupe_set_name())
@@ -1121,15 +1112,26 @@ impl<H: DurableExecution> Queue<H> {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id(), queue = self.name()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id(), queue = self.queue_id()))]
     async fn complete_job(
         &self,
         job: &BorrowedJob<H::JobData>,
         result: JobResult<H::Output, H::ErrorData>,
     ) -> Result<(), TwmqError> {
-        // 1. Run hook once and build pipeline with all operations
+        // First, we need to get the lane_id and remove from appropriate lane's active hash
+        let mut conn = self.redis.clone();
+        let lane_id: Option<String> = conn
+            .hget(self.job_meta_hash_name(&job.job.id), "lane_id")
+            .await?;
+
+        let lane_id = lane_id.ok_or_else(|| TwmqError::Runtime {
+            message: format!("Job {} missing lane_id in metadata", job.job.id),
+        })?;
+
+        // Build pipeline with hooks and operations
         let mut hook_pipeline = redis::pipe();
-        let mut tx_context = TransactionContext::new(&mut hook_pipeline, self.name().to_string());
+        let mut tx_context =
+            TransactionContext::new(&mut hook_pipeline, self.queue_id().to_string());
 
         match &result {
             Ok(output) => {
@@ -1138,6 +1140,8 @@ impl<H: DurableExecution> Queue<H> {
                     .on_success(job, success_hook_data, &mut tx_context)
                     .await;
                 self.add_success_operations(job, output, &mut hook_pipeline)?;
+                // Remove from lane's active hash
+                hook_pipeline.hdel(self.lane_active_hash_name(&lane_id), &job.job.id);
             }
             Err(JobError::Nack {
                 error,
@@ -1153,6 +1157,39 @@ impl<H: DurableExecution> Queue<H> {
                     .on_nack(job, nack_hook_data, &mut tx_context)
                     .await;
                 self.add_nack_operations(job, error, *delay, *position, &mut hook_pipeline)?;
+
+                // Remove from lane's active hash and requeue to appropriate lane queue
+                hook_pipeline.hdel(self.lane_active_hash_name(&lane_id), &job.job.id);
+
+                if let Some(delay_duration) = delay {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    let delay_until = now + delay_duration.as_secs();
+                    let pos_str = position.to_string();
+
+                    hook_pipeline
+                        .hset(
+                            self.job_meta_hash_name(&job.job.id),
+                            "reentry_position",
+                            pos_str,
+                        )
+                        .zadd(
+                            self.lane_delayed_zset_name(&lane_id),
+                            &job.job.id,
+                            delay_until,
+                        );
+                } else {
+                    match position {
+                        RequeuePosition::First => {
+                            hook_pipeline.lpush(self.lane_pending_list_name(&lane_id), &job.job.id);
+                        }
+                        RequeuePosition::Last => {
+                            hook_pipeline.rpush(self.lane_pending_list_name(&lane_id), &job.job.id);
+                        }
+                    }
+                }
             }
             Err(JobError::Fail(error)) => {
                 let fail_hook_data = FailHookData { error };
@@ -1160,22 +1197,22 @@ impl<H: DurableExecution> Queue<H> {
                     .on_fail(job, fail_hook_data, &mut tx_context)
                     .await;
                 self.add_fail_operations(job, error, &mut hook_pipeline)?;
+                // Remove from lane's active hash
+                hook_pipeline.hdel(self.lane_active_hash_name(&lane_id), &job.job.id);
             }
         }
 
-        // 2. Now use this pipeline in unlimited retry loop with lease check
+        // Execute with lease protection (same pattern as single-lane queue)
         let lease_key = self.lease_key_name(&job.job.id, &job.lease_token);
 
         loop {
             let mut conn = self.redis.clone();
 
-            // WATCH the lease key
             redis::cmd("WATCH")
                 .arg(&lease_key)
                 .query_async::<()>(&mut conn)
                 .await?;
 
-            // Check if lease exists - if not, job was cancelled or timed out
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
@@ -1183,28 +1220,24 @@ impl<H: DurableExecution> Queue<H> {
                 return Ok(());
             }
 
-            // Clone the pipeline and make it atomic for this attempt
             let mut atomic_pipeline = hook_pipeline.clone();
             atomic_pipeline.atomic();
 
-            // Execute atomically with WATCH/MULTI/EXEC
             match atomic_pipeline
                 .query_async::<Vec<redis::Value>>(&mut conn)
                 .await
             {
                 Ok(_) => {
-                    // Success! Now run post-completion methods
                     match &result {
                         Ok(_) => self.post_success_completion().await?,
                         Err(JobError::Nack { .. }) => self.post_nack_completion().await?,
                         Err(JobError::Fail(_)) => self.post_fail_completion().await?,
                     }
 
-                    tracing::debug!(job_id = %job.job.id, "Job completion successful");
+                    tracing::debug!(job_id = %job.job.id, lane_id = %lane_id, "Job completion successful");
                     return Ok(());
                 }
                 Err(_) => {
-                    // WATCH failed (lease key changed), retry
                     tracing::debug!(job_id = %job.job.id, "WATCH failed during completion, retrying");
                     continue;
                 }
@@ -1212,17 +1245,24 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
-    // Special completion method for queue errors (deserialization failures) with lease token
-    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id, queue = self.name()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(job_id = job.id, queue = self.queue_id()))]
     async fn complete_job_queue_error(
         &self,
         job: &Job<Option<H::JobData>>,
         lease_token: &str,
         error: &H::ErrorData,
     ) -> Result<(), TwmqError> {
-        // 1. Run queue error hook once and build pipeline
+        // Get lane_id for proper cleanup
+        let mut conn = self.redis.clone();
+        let lane_id: Option<String> = conn
+            .hget(self.job_meta_hash_name(&job.id), "lane_id")
+            .await?;
+
+        let lane_id = lane_id.unwrap_or_else(|| "unknown".to_string());
+
         let mut hook_pipeline = redis::pipe();
-        let mut tx_context = TransactionContext::new(&mut hook_pipeline, self.name().to_string());
+        let mut tx_context =
+            TransactionContext::new(&mut hook_pipeline, self.queue_id().to_string());
 
         let twmq_error = TwmqError::Runtime {
             message: "Job processing failed with user error".to_string(),
@@ -1232,25 +1272,21 @@ impl<H: DurableExecution> Queue<H> {
             .on_queue_error(job, queue_error_hook_data, &mut tx_context)
             .await;
 
-        // Add fail operations to pipeline
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
         let lease_key = self.lease_key_name(&job.id, lease_token);
+        let job_meta_hash = self.job_meta_hash_name(&job.id);
 
-        // Delete the lease key to consume it
         hook_pipeline.del(&lease_key);
-
-        // Remove from active, add to failed, clear lease token
         hook_pipeline
-            .hdel(self.active_hash_name(), &job.id)
+            .hdel(self.lane_active_hash_name(&lane_id), &job.id)
             .lpush(self.failed_list_name(), &job.id)
-            .hset(self.job_meta_hash_name(&job.id), "finished_at", now)
-            .hdel(self.job_meta_hash_name(&job.id), "lease_token");
+            .hset(&job_meta_hash, "finished_at", now)
+            .hdel(&job_meta_hash, "lease_token");
 
-        // Store error
         let error_record = JobErrorRecord {
             attempt: job.attempts,
             error,
@@ -1261,21 +1297,19 @@ impl<H: DurableExecution> Queue<H> {
         hook_pipeline.lpush(self.job_errors_list_name(&job.id), error_json);
 
         // For "active" idempotency mode, remove from deduplication set immediately
-        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
             hook_pipeline.srem(self.dedupe_set_name(), &job.id);
         }
 
-        // 2. Use pipeline in unlimited retry loop with lease check
+        // Execute with lease protection
         loop {
             let mut conn = self.redis.clone();
 
-            // WATCH the lease key
             redis::cmd("WATCH")
                 .arg(&lease_key)
                 .query_async::<()>(&mut conn)
                 .await?;
 
-            // Check if lease exists - if not, job was cancelled or timed out
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
@@ -1283,43 +1317,47 @@ impl<H: DurableExecution> Queue<H> {
                 return Ok(());
             }
 
-            // Clone the pipeline and make it atomic for this attempt
             let mut atomic_pipeline = hook_pipeline.clone();
             atomic_pipeline.atomic();
 
-            // Execute atomically with WATCH/MULTI/EXEC
             match atomic_pipeline
                 .query_async::<Vec<redis::Value>>(&mut conn)
                 .await
             {
                 Ok(_) => {
-                    // Success! Run post-completion
                     self.post_fail_completion().await?;
-                    tracing::debug!(job_id = %job.id, "Queue error job completion successful");
+                    tracing::debug!(job_id = %job.id, lane_id = %lane_id, "Queue error job completion successful");
                     return Ok(());
                 }
                 Err(_) => {
-                    // WATCH failed (lease key changed), retry
                     tracing::debug!(job_id = %job.id, "WATCH failed during queue error completion, retrying");
                     continue;
                 }
             }
         }
     }
+}
 
-    pub async fn remove_from_dedupe_set(&self, job_id: &str) -> Result<(), TwmqError> {
-        self.redis
-            .clone()
-            .srem::<&str, &str, ()>(&self.dedupe_set_name(), job_id)
-            .await?;
-        Ok(())
+impl<H: DurableExecution> MultilanePushableJob<H> {
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.options.delay = Some(DelayOptions {
+            delay,
+            position: RequeuePosition::Last,
+        });
+        self
     }
 
-    pub async fn empty_dedupe_set(&self) -> Result<(), TwmqError> {
-        self.redis
-            .clone()
-            .del::<&str, ()>(&self.dedupe_set_name())
-            .await?;
-        Ok(())
+    pub fn delay_with_position(mut self, delay: Duration, position: RequeuePosition) -> Self {
+        self.options.delay = Some(DelayOptions { delay, position });
+        self
+    }
+
+    pub fn id(mut self, id: String) -> Self {
+        self.options.id = id;
+        self
+    }
+
+    pub async fn push(self) -> Result<Job<H::JobData>, TwmqError> {
+        self.queue.push_to_lane(&self.lane_id, self.options).await
     }
 }

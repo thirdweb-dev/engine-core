@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use twmq::error::TwmqError;
 use twmq::job::JobError;
-use twmq::{BorrowedJob, UserCancellable};
+use twmq::{BorrowedJob, IdempotencyMode, UserCancellable};
 
 use twmq::{
     DurableExecution, Queue,
@@ -174,6 +174,7 @@ async fn load_test_throughput(
 
     // Optimize queue for high throughput
     let queue_options = QueueOptions {
+        idempotency_mode: IdempotencyMode::Active,
         local_concurrency: 200,                      // High concurrency
         polling_interval: Duration::from_millis(10), // Fast polling
         always_poll: true,                           // Always poll for max responsiveness

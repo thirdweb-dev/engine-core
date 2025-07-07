@@ -1,8 +1,26 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use redis::{Client, aio::ConnectionManager};
+use serde::{Serialize, Deserialize};
 
 use crate::{DurableExecution, Queue, error::TwmqError};
+
+/// Defines how job idempotency is handled
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum IdempotencyMode {
+    /// Jobs stay in the deduplication set until pruned (existing behavior)
+    /// This prevents duplicate jobs from being added even after completion
+    Permanent,
+    /// Jobs are removed from the deduplication set immediately upon completion
+    /// This only prevents duplicates of pending/delayed/active jobs
+    Active,
+}
+
+impl Default for IdempotencyMode {
+    fn default() -> Self {
+        Self::Permanent
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct QueueOptions {
@@ -18,6 +36,9 @@ pub struct QueueOptions {
     /// If you have a horiztonally scaled deployment, this can be set to the default of false
     /// But if there's only one node, you can set this to true to avoid the local concurrency from blocking queue housekeeping
     pub always_poll: bool,
+
+    /// Controls how job idempotency is handled
+    pub idempotency_mode: IdempotencyMode,
 }
 
 impl Default for QueueOptions {
@@ -29,6 +50,7 @@ impl Default for QueueOptions {
             polling_interval: Duration::from_millis(100),
             lease_duration: Duration::from_secs(30),
             always_poll: false,
+            idempotency_mode: IdempotencyMode::default(),
         }
     }
 }
