@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, TxHash};
 use alloy::providers::Provider;
+use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     execution_options::WebhookOptions,
@@ -62,13 +63,25 @@ pub struct Eip7702ConfirmationResult {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
 pub enum Eip7702ConfirmationError {
     #[error("Chain service error for chainId {chain_id}: {message}")]
+    #[serde(rename_all = "camelCase")]
     ChainServiceError { chain_id: u64, message: String },
 
     #[error("Failed to get transaction hash from bundler: {message}")]
     TransactionHashError { message: String },
 
     #[error("Failed to confirm transaction: {message}")]
-    ConfirmationError { message: String },
+    #[serde(rename_all = "camelCase")]
+    ConfirmationError {
+        message: String,
+        inner_error: Option<EngineError>,
+    },
+
+    #[error("Receipt not yet available for transaction: {message}")]
+    #[serde(rename_all = "camelCase")]
+    ReceiptNotAvailable {
+        message: String,
+        transaction_hash: TxHash,
+    },
 
     #[error("Transaction failed: {message}")]
     TransactionFailed { message: String },
@@ -169,26 +182,25 @@ where
             .bundler_client()
             .tw_get_transaction_hash(&job_data.bundler_transaction_id)
             .await
-            .map_err(|e| {
-                // Check if it's a "not found" or "pending" error
-                let error_msg = e.to_string();
-                if error_msg.contains("not found") || error_msg.contains("pending") {
-                    // Transaction not ready yet, nack and retry
-                    Eip7702ConfirmationError::TransactionHashError {
-                        message: format!("Transaction not ready: {}", error_msg),
-                    }
-                    .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)
-                } else {
-                    Eip7702ConfirmationError::TransactionHashError { message: error_msg }.fail()
-                }
-            })?;
+            .map_err(|e| Eip7702ConfirmationError::TransactionHashError {
+                message: e.to_string(),
+            })
+            .map_err_fail()?;
 
-        let transaction_hash = transaction_hash_str.parse::<TxHash>().map_err(|e| {
-            Eip7702ConfirmationError::TransactionHashError {
-                message: format!("Invalid transaction hash format: {}", e),
+        let transaction_hash = match transaction_hash_str {
+            Some(hash) => hash.parse::<TxHash>().map_err(|e| {
+                Eip7702ConfirmationError::TransactionHashError {
+                    message: format!("Invalid transaction hash format: {}", e),
+                }
+                .fail()
+            })?,
+            None => {
+                return Err(Eip7702ConfirmationError::TransactionHashError {
+                    message: "Transaction not found".to_string(),
+                })
+                .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
             }
-            .fail()
-        })?;
+        };
 
         tracing::debug!(
             transaction_hash = ?transaction_hash,
@@ -205,18 +217,20 @@ where
                 // If transaction not found, nack and retry
                 Eip7702ConfirmationError::ConfirmationError {
                     message: format!("Failed to get transaction receipt: {}", e),
+                    inner_error: Some(e.to_engine_error(&chain)),
                 }
-                .nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
+                .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)
             })?;
 
         let receipt = match receipt {
             Some(receipt) => receipt,
             None => {
                 // Transaction not mined yet, nack and retry
-                return Err(Eip7702ConfirmationError::ConfirmationError {
+                return Err(Eip7702ConfirmationError::ReceiptNotAvailable {
                     message: "Transaction not mined yet".to_string(),
+                    transaction_hash,
                 })
-                .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last);
+                .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
             }
         };
 

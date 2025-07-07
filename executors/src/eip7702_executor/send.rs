@@ -1,7 +1,7 @@
 use alloy::{
     dyn_abi::TypedData,
     eips::eip7702::Authorization,
-    primitives::{Address, Bytes, ChainId, FixedBytes, U256},
+    primitives::{Address, Bytes, ChainId, FixedBytes, U256, address},
     providers::Provider,
     sol_types::eip712_domain,
 };
@@ -34,7 +34,8 @@ use crate::{
 
 use super::confirm::{Eip7702ConfirmationHandler, Eip7702ConfirmationJobData};
 
-const MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS: &str = "0xD6999651Fc0964B9c6B444307a0ab20534a66560";
+const MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS: Address =
+    address!("0xD6999651Fc0964B9c6B444307a0ab20534a66560");
 
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -81,13 +82,18 @@ pub enum Eip7702SendError {
     ChainServiceError { chain_id: u64, message: String },
 
     #[error("Failed to sign typed data: {message}")]
-    SigningError { message: String },
-
-    #[error("Failed to sign authorization: {message}")]
-    AuthorizationError { message: String },
+    #[serde(rename_all = "camelCase")]
+    SigningError {
+        message: String,
+        inner_error: Option<EngineError>,
+    },
 
     #[error("Failed to check 7702 delegation: {message}")]
-    DelegationCheckError { message: String },
+    #[serde(rename_all = "camelCase")]
+    DelegationCheckError {
+        message: String,
+        inner_error: Option<EngineError>,
+    },
 
     #[error("Failed to call bundler: {message}")]
     BundlerCallError { message: String },
@@ -241,7 +247,8 @@ where
             )
             .await
             .map_err(|e| Eip7702SendError::SigningError {
-                message: e.to_string(),
+                message: format!("Failed to sign typed data: {e}"),
+                inner_error: Some(e),
             })
             .map_err_fail()?;
 
@@ -249,32 +256,28 @@ where
         let is_minimal_account = check_is_7702_minimal_account(&chain, job_data.eoa_address)
             .await
             .map_err(|e| Eip7702SendError::DelegationCheckError {
-                message: e.to_string(),
+                message: format!("Failed to check if wallet has 7702 delegation: {e}"),
+                inner_error: Some(e),
             })
             .map_err_fail()?;
 
         // 5. Sign authorization if needed
         let authorization = if !is_minimal_account {
             let nonce = job_data.nonce.unwrap_or_default();
-            let minimal_account_address: Address = MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
-                .parse()
-                .map_err(|e| Eip7702SendError::AuthorizationError {
-                    message: format!("Invalid minimal account implementation address: {}", e),
-                })
-                .map_err_fail()?;
 
             let auth = self
                 .eoa_signer
                 .sign_authorization(
                     signing_options.clone(),
                     job_data.chain_id,
-                    minimal_account_address,
+                    MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
                     nonce,
                     job_data.signing_credential.clone(),
                 )
                 .await
-                .map_err(|e| Eip7702SendError::AuthorizationError {
-                    message: e.to_string(),
+                .map_err(|e| Eip7702SendError::SigningError {
+                    message: format!("Failed to sign authorization: {e}"),
+                    inner_error: Some(e),
                 })
                 .map_err_fail()?;
 
@@ -493,12 +496,7 @@ async fn check_is_7702_minimal_account(
     let target_address = Address::from_slice(target_bytes);
 
     // Compare with the minimal account implementation address
-    let minimal_account_address: Address =
-        MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
-            .parse()
-            .map_err(|e| EngineError::ValidationError {
-                message: format!("Invalid minimal account implementation address: {}", e),
-            })?;
+    let minimal_account_address: Address = MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS;
 
     let is_delegated = target_address == minimal_account_address;
 

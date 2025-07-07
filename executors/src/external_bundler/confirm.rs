@@ -52,15 +52,18 @@ pub struct UserOpConfirmationResult {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
 pub enum UserOpConfirmationError {
     #[error("Chain service error for chainId {chain_id}: {message}")]
+    #[serde(rename_all = "camelCase")]
     ChainServiceError { chain_id: u64, message: String },
 
     #[error("Receipt not yet available for user operation {user_op_hash}")]
+    #[serde(rename_all = "camelCase")]
     ReceiptNotAvailable {
         user_op_hash: Bytes,
         attempt_number: u32,
     },
 
     #[error("Failed to query user operation receipt: {message}")]
+    #[serde(rename_all = "camelCase")]
     ReceiptQueryFailed {
         user_op_hash: Bytes,
         message: String,
@@ -68,6 +71,7 @@ pub enum UserOpConfirmationError {
     },
 
     #[error("Internal error: {message}")]
+    #[serde(rename_all = "camelCase")]
     InternalError { message: String },
 
     #[error("Transaction cancelled by user")]

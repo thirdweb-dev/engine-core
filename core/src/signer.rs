@@ -348,7 +348,7 @@ impl AccountSigner for EoaSigner {
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing authorization with EOA (IAW): {:?}", e);
-                        EngineError::from(e)
+                        e
                     })?;
 
                 // Return the signed authorization as Authorization

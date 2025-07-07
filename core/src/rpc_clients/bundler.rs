@@ -149,7 +149,10 @@ impl BundlerClient {
     }
 
     /// Get transaction hash from bundler using transaction ID  
-    pub async fn tw_get_transaction_hash(&self, transaction_id: &str) -> TransportResult<String> {
+    pub async fn tw_get_transaction_hash(
+        &self,
+        transaction_id: &str,
+    ) -> TransportResult<Option<String>> {
         let params = serde_json::json!([transaction_id]);
 
         let response: TwGetTransactionHashResponse =
