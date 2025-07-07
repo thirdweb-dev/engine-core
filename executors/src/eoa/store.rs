@@ -1,11 +1,11 @@
 use alloy::consensus::{Signed, Transaction, TypedTransaction};
-use alloy::eips::eip7702::SignedAuthorization;
 use alloy::network::AnyTransactionReceipt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use chrono;
 use engine_core::chain::RpcCredentials;
 use engine_core::credentials::SigningCredential;
 use engine_core::execution_options::WebhookOptions;
+use engine_core::execution_options::eoa::EoaTransactionTypeData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -248,34 +248,6 @@ pub struct EoaTransactionRequest {
     pub transaction_type_data: Option<EoaTransactionTypeData>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
-pub enum EoaTransactionTypeData {
-    Eip7702(EoaSend7702JobData),
-    Eip1559(EoaSend1559JobData),
-    Legacy(EoaSendLegacyJobData),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EoaSend7702JobData {
-    pub authorization_list: Option<Vec<SignedAuthorization>>,
-    pub max_fee_per_gas: Option<u128>,
-    pub max_priority_fee_per_gas: Option<u128>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EoaSend1559JobData {
-    pub max_fee_per_gas: Option<u128>,
-    pub max_priority_fee_per_gas: Option<u128>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EoaSendLegacyJobData {
-    pub gas_price: Option<u128>,
-}
 /// Active attempt for a transaction (full alloy transaction + metadata)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionAttempt {
@@ -1705,6 +1677,41 @@ impl EoaExecutorStore {
             pipeline.del(recycled_key);
         })
         .await
+    }
+
+    /// Add a transaction to the pending queue and store its data
+    /// This is called when a new transaction request comes in for an EOA
+    pub async fn add_transaction(
+        &self,
+        transaction_request: EoaTransactionRequest,
+    ) -> Result<(), TransactionStoreError> {
+        let transaction_id = &transaction_request.transaction_id;
+        let eoa = transaction_request.from;
+        let chain_id = transaction_request.chain_id;
+
+        let tx_data_key = self.transaction_data_key_name(transaction_id);
+        let pending_key = self.pending_transactions_list_name(eoa, chain_id);
+
+        // Store transaction data as JSON in the user_request field of the hash
+        let user_request_json = serde_json::to_string(&transaction_request)?;
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+        let mut conn = self.redis.clone();
+
+        // Use a pipeline to atomically store data and add to pending queue
+        let mut pipeline = twmq::redis::pipe();
+
+        // Store transaction data
+        pipeline.hset(&tx_data_key, "user_request", &user_request_json);
+        pipeline.hset(&tx_data_key, "status", "pending");
+        pipeline.hset(&tx_data_key, "created_at", now);
+
+        // Add to pending queue
+        pipeline.lpush(&pending_key, transaction_id);
+
+        pipeline.query_async::<()>(&mut conn).await?;
+
+        Ok(())
     }
 }
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use twmq::{
-    DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData,
+    DurableExecution, FailHookData, IdempotencyMode, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
     job::{BorrowedJob, JobResult, JobStatus},
     queue::QueueOptions,
@@ -65,7 +65,10 @@ impl DurableExecution for SleepForeverHandler {
     type ErrorData = TestJobErrorData;
     type JobData = SleepForeverJobData;
 
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         tracing::info!(
             "SLEEP_JOB: Starting to process job {}, attempt {}",
             job.job.id,
@@ -153,6 +156,7 @@ async fn test_job_lease_expiry() {
         polling_interval: Duration::from_millis(100),
         local_concurrency: 1,
         always_poll: true,
+        idempotency_mode: IdempotencyMode::Active,
     };
 
     let handler = SleepForeverHandler {
@@ -301,6 +305,7 @@ async fn test_multiple_job_lease_expiry() {
         lease_duration,
         polling_interval: Duration::from_millis(100),
         always_poll: true,
+        idempotency_mode: IdempotencyMode::Active,
     };
 
     let queue = Arc::new(

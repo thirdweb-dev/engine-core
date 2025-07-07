@@ -937,6 +937,11 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         let result_json = serde_json::to_string(result)?;
         pipeline.hset(self.job_result_hash_name(), &job.job.id, result_json);
 
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
+            pipeline.srem(self.dedupe_set_name(), &job.job.id);
+        }
+
         Ok(())
     }
 
@@ -1054,6 +1059,11 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         };
         let error_json = serde_json::to_string(&error_record)?;
         pipeline.lpush(self.job_errors_list_name(&job.job.id), error_json);
+
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
+            pipeline.srem(self.dedupe_set_name(), &job.job.id);
+        }
 
         Ok(())
     }
@@ -1285,6 +1295,11 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         };
         let error_json = serde_json::to_string(&error_record)?;
         hook_pipeline.lpush(self.job_errors_list_name(&job.id), error_json);
+
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == crate::queue::IdempotencyMode::Active {
+            hook_pipeline.srem(self.dedupe_set_name(), &job.id);
+        }
 
         // Execute with lease protection
         loop {

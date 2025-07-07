@@ -10,6 +10,7 @@ use alloy::rpc::types::TransactionRequest as AlloyTransactionRequest;
 use alloy::signers::Signature;
 use alloy::transports::{RpcError, TransportErrorKind};
 use engine_core::error::EngineError;
+use engine_core::execution_options::eoa::EoaTransactionTypeData;
 use engine_core::signer::AccountSigner;
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
@@ -198,11 +199,25 @@ fn should_trigger_nonce_reset(error: &RpcError<TransportErrorKind>) -> bool {
     error_str.contains("nonce too high")
 }
 
-fn should_update_balance_threshold(error: &RpcError<TransportErrorKind>) -> bool {
-    let error_str = error.to_string().to_lowercase();
-
-    // "insufficient funds" should update the balance threshold
-    error_str.contains("insufficient funds")
+fn should_update_balance_threshold(error: &EngineError) -> bool {
+    match error {
+        EngineError::RpcError { kind, .. }
+        | EngineError::PaymasterError { kind, .. }
+        | EngineError::BundlerError { kind, .. } => match kind {
+            RpcErrorKind::ErrorResp(resp) => {
+                let message = resp.message.to_lowercase();
+                message.contains("insufficient funds")
+                    || message.contains("insufficient balance")
+                    || message.contains("out of gas")
+                    || message.contains("insufficient eth")
+                    || message.contains("balance too low")
+                    || message.contains("not enough funds")
+                    || message.contains("insufficient native token")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
@@ -454,6 +469,7 @@ where
     }
 
     // ========== CRASH RECOVERY ==========
+    #[tracing::instrument(skip_all)]
     async fn recover_borrowed_state(
         &self,
         scoped: &ScopedEoaExecutorStore<'_>,
@@ -533,7 +549,7 @@ where
                                 .await?;
                             tracing::warn!(transaction_id = %borrowed.transaction_id, nonce = nonce, error = %e, "Recycled failed transaction");
 
-                            if should_update_balance_threshold(&e) {
+                            if should_update_balance_threshold(&e.to_engine_error(chain)) {
                                 self.update_balance_threshold(scoped, chain).await?;
                             }
 
@@ -558,6 +574,7 @@ where
     }
 
     // ========== CONFIRM FLOW ==========
+    #[tracing::instrument(skip_all)]
     async fn confirm_flow(
         &self,
         scoped: &ScopedEoaExecutorStore<'_>,
@@ -726,6 +743,7 @@ where
     }
 
     // ========== SEND FLOW ==========
+    #[tracing::instrument(skip_all)]
     async fn send_flow(
         &self,
         scoped: &ScopedEoaExecutorStore<'_>,
@@ -754,9 +772,9 @@ where
             scoped.update_health_data(&health).await?;
         }
 
-        if health.balance < health.balance_threshold {
+        if health.balance <= health.balance_threshold {
             tracing::warn!(
-                "EOA has insufficient balance (< {} wei), skipping send flow",
+                "EOA has insufficient balance (<= {} wei), skipping send flow",
                 health.balance_threshold
             );
             return Ok(0);
@@ -839,6 +857,8 @@ where
 
         // 3. SEQUENTIAL REDIS: Move successfully built transactions to borrowed state
         let mut prepared_txs = Vec::new();
+        let mut balance_threshold_update_needed = false;
+
         for (nonce, transaction_id, build_result) in build_results {
             match build_result {
                 Ok(signed_tx) => {
@@ -881,9 +901,33 @@ where
                     }
                 }
                 Err(e) => {
+                    // Accumulate balance threshold issues instead of updating immediately
+                    if let EoaExecutorWorkerError::TransactionSimulationFailed {
+                        inner_error, ..
+                    } = &e
+                    {
+                        if should_update_balance_threshold(inner_error) {
+                            balance_threshold_update_needed = true;
+                        }
+                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
+                        if should_update_balance_threshold(inner_error) {
+                            balance_threshold_update_needed = true;
+                        }
+                    }
+
                     tracing::warn!("Failed to build transaction {}: {}", transaction_id, e);
                     continue;
                 }
+            }
+        }
+
+        // Update balance threshold once if any build failures were due to balance issues
+        if balance_threshold_update_needed {
+            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                tracing::error!(
+                    "Failed to update balance threshold after parallel build failures: {}",
+                    e
+                );
             }
         }
 
@@ -980,7 +1024,7 @@ where
                                         "Recycled transaction failed, re-recycled nonce"
                                     );
 
-                                    if should_update_balance_threshold(&e) {
+                                    if should_update_balance_threshold(&e.to_engine_error(chain)) {
                                         if let Err(e) =
                                             self.update_balance_threshold(scoped, chain).await
                                         {
@@ -1047,6 +1091,8 @@ where
 
         // 3. SEQUENTIAL REDIS: Move successful transactions to borrowed state (maintain nonce order)
         let mut prepared_txs = Vec::new();
+        let mut balance_threshold_update_needed = false;
+
         for (i, result) in prepared_results.into_iter().enumerate() {
             match result {
                 Ok(prepared) => {
@@ -1091,10 +1137,34 @@ where
                     }
                 }
                 Err(e) => {
+                    // Accumulate balance threshold issues instead of updating immediately
+                    if let EoaExecutorWorkerError::TransactionSimulationFailed {
+                        inner_error, ..
+                    } = &e
+                    {
+                        if should_update_balance_threshold(inner_error) {
+                            balance_threshold_update_needed = true;
+                        }
+                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
+                        if should_update_balance_threshold(inner_error) {
+                            balance_threshold_update_needed = true;
+                        }
+                    }
+
                     tracing::warn!("Failed to build transaction {}: {}", pending_txs[i], e);
                     // Individual transaction failure doesn't stop the worker
                     continue;
                 }
+            }
+        }
+
+        // Update balance threshold once if any build failures were due to balance issues
+        if balance_threshold_update_needed {
+            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                tracing::error!(
+                    "Failed to update balance threshold after parallel build failures: {}",
+                    e
+                );
             }
         }
 
@@ -1197,7 +1267,7 @@ where
                                         "New transaction failed, recycled nonce"
                                     );
 
-                                    if should_update_balance_threshold(&e) {
+                                    if should_update_balance_threshold(&e.to_engine_error(chain)) {
                                         if let Err(e) =
                                             self.update_balance_threshold(scoped, chain).await
                                         {
@@ -1370,11 +1440,52 @@ where
 
             // Get the latest attempt to extract gas values from
             // Build typed transaction -> manually bump -> sign
-            let typed_tx = self
+            let typed_tx = match self
                 .build_typed_transaction(&tx_data, expected_nonce, chain)
-                .await?;
+                .await
+            {
+                Ok(tx) => tx,
+                Err(e) => {
+                    // Check if this is a balance threshold issue during simulation
+                    if let EoaExecutorWorkerError::TransactionSimulationFailed {
+                        inner_error, ..
+                    } = &e
+                    {
+                        if should_update_balance_threshold(inner_error) {
+                            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                                tracing::error!("Failed to update balance threshold: {}", e);
+                            }
+                        }
+                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
+                        if should_update_balance_threshold(inner_error) {
+                            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                                tracing::error!("Failed to update balance threshold: {}", e);
+                            }
+                        }
+                    }
+
+                    tracing::warn!(
+                        transaction_id = %transaction_id,
+                        nonce = expected_nonce,
+                        error = %e,
+                        "Failed to build typed transaction for gas bump"
+                    );
+                    return Ok(false);
+                }
+            };
             let bumped_typed_tx = self.apply_gas_bump_to_typed_transaction(typed_tx, 120); // 20% increase
-            let bumped_tx = self.sign_transaction(bumped_typed_tx, &tx_data).await?;
+            let bumped_tx = match self.sign_transaction(bumped_typed_tx, &tx_data).await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    tracing::warn!(
+                        transaction_id = %transaction_id,
+                        nonce = expected_nonce,
+                        error = %e,
+                        "Failed to sign transaction for gas bump"
+                    );
+                    return Ok(false);
+                }
+            };
 
             // Record the gas bump attempt
             scoped
@@ -1455,12 +1566,15 @@ where
         }
     }
 
+    #[tracing::instrument(skip_all, fields(eoa = %scoped.eoa(), chain_id = %chain.chain_id()))]
     async fn update_balance_threshold(
         &self,
         scoped: &ScopedEoaExecutorStore<'_>,
         chain: &impl Chain,
     ) -> Result<(), EoaExecutorWorkerError> {
         let mut health = self.get_eoa_health(scoped, chain).await?;
+
+        tracing::info!("Updating balance threshold");
         let balance_threshold = chain
             .provider()
             .get_balance(scoped.eoa())
@@ -1650,7 +1764,7 @@ where
         tx_request = if let Some(type_data) = &tx_data.user_request.transaction_type_data {
             // User provided gas settings - respect them first
             match type_data {
-                crate::eoa::store::EoaTransactionTypeData::Eip1559(data) => {
+                EoaTransactionTypeData::Eip1559(data) => {
                     let mut req = tx_request;
                     if let Some(max_fee) = data.max_fee_per_gas {
                         req = req.with_max_fee_per_gas(max_fee);
@@ -1666,7 +1780,7 @@ where
 
                     req
                 }
-                crate::eoa::store::EoaTransactionTypeData::Legacy(data) => {
+                EoaTransactionTypeData::Legacy(data) => {
                     if let Some(gas_price) = data.gas_price {
                         tx_request.with_gas_price(gas_price)
                     } else {
@@ -1674,7 +1788,7 @@ where
                         self.estimate_gas_fees(chain, tx_request).await?
                     }
                 }
-                crate::eoa::store::EoaTransactionTypeData::Eip7702(data) => {
+                EoaTransactionTypeData::Eip7702(data) => {
                     let mut req = tx_request;
                     if let Some(authorization_list) = &data.authorization_list {
                         req = req.with_authorization_list(authorization_list.clone());

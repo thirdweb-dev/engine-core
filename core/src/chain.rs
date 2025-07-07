@@ -126,48 +126,73 @@ impl Chain for ThirdwebChain {
 
 impl ThirdwebChainConfig<'_> {
     pub fn to_chain(&self) -> Result<ThirdwebChain, EngineError> {
-        let rpc_url = Url::parse(&format!(
-            "https://{chain_id}.{base_url}/{client_id}",
-            chain_id = self.chain_id,
-            base_url = self.rpc_base_url,
-            client_id = self.client_id,
-        ))
-        .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse RPC URL: {}", e),
-        })?;
+        // Special handling for chain ID 31337 (local anvil)
+        let (rpc_url, bundler_url, paymaster_url) = if self.chain_id == 31337 {
+            // For local anvil, use localhost URLs
+            let local_rpc_url = "http://127.0.0.1:8545";
+            let rpc_url = Url::parse(local_rpc_url).map_err(|e| EngineError::RpcConfigError {
+                message: format!("Failed to parse local anvil RPC URL: {}", e),
+            })?;
 
-        let bundler_url = Url::parse(&format!(
-            "https://{chain_id}.{base_url}/v2",
-            chain_id = self.chain_id,
-            base_url = self.bundler_base_url,
-        ))
-        .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse Bundler URL: {}", e),
-        })?;
+            // For bundler and paymaster, use the same local RPC URL
+            // since anvil doesn't have separate bundler/paymaster services
+            let bundler_url = rpc_url.clone();
+            let paymaster_url = rpc_url.clone();
 
-        let paymaster_url = Url::parse(&format!(
-            "https://{chain_id}.{base_url}/v2",
-            chain_id = self.chain_id,
-            base_url = self.paymaster_base_url,
-        ))
-        .map_err(|e| EngineError::RpcConfigError {
-            message: format!("Failed to parse Paymaster URL: {}", e),
-        })?;
+            (rpc_url, bundler_url, paymaster_url)
+        } else {
+            // Standard URL construction for other chains
+            let rpc_url = Url::parse(&format!(
+                "https://{chain_id}.{base_url}/{client_id}",
+                chain_id = self.chain_id,
+                base_url = self.rpc_base_url,
+                client_id = self.client_id,
+            ))
+            .map_err(|e| EngineError::RpcConfigError {
+                message: format!("Failed to parse RPC URL: {}", e),
+            })?;
+
+            let bundler_url = Url::parse(&format!(
+                "https://{chain_id}.{base_url}/v2",
+                chain_id = self.chain_id,
+                base_url = self.bundler_base_url,
+            ))
+            .map_err(|e| EngineError::RpcConfigError {
+                message: format!("Failed to parse Bundler URL: {}", e),
+            })?;
+
+            let paymaster_url = Url::parse(&format!(
+                "https://{chain_id}.{base_url}/v2",
+                chain_id = self.chain_id,
+                base_url = self.paymaster_base_url,
+            ))
+            .map_err(|e| EngineError::RpcConfigError {
+                message: format!("Failed to parse Paymaster URL: {}", e),
+            })?;
+
+            (rpc_url, bundler_url, paymaster_url)
+        };
 
         let mut sensitive_headers = HeaderMap::new();
-        sensitive_headers.insert(
-            "x-client-id",
-            HeaderValue::from_str(self.client_id).map_err(|e| EngineError::RpcConfigError {
-                message: format!("Unserialisable client-id used: {e}"),
-            })?,
-        );
 
-        sensitive_headers.insert(
-            "x-secret-key",
-            HeaderValue::from_str(self.secret_key).map_err(|e| EngineError::RpcConfigError {
-                message: format!("Unserialisable secret-key used: {e}"),
-            })?,
-        );
+        // Only add auth headers for non-local chains
+        if self.chain_id != 31337 {
+            sensitive_headers.insert(
+                "x-client-id",
+                HeaderValue::from_str(self.client_id).map_err(|e| EngineError::RpcConfigError {
+                    message: format!("Unserialisable client-id used: {e}"),
+                })?,
+            );
+
+            sensitive_headers.insert(
+                "x-secret-key",
+                HeaderValue::from_str(self.secret_key).map_err(|e| {
+                    EngineError::RpcConfigError {
+                        message: format!("Unserialisable secret-key used: {e}"),
+                    }
+                })?,
+            );
+        }
 
         let reqwest_client =
             HttpClientBuilder::new()
@@ -181,10 +206,19 @@ impl ThirdwebChainConfig<'_> {
         let paymaster_transport = transport_builder.default_transport(paymaster_url.clone());
         let bundler_transport = transport_builder.default_transport(bundler_url.clone());
 
-        let sensitive_bundler_transport =
-            transport_builder.with_headers(bundler_url.clone(), sensitive_headers.clone());
-        let sensitive_paymaster_transport =
-            transport_builder.with_headers(paymaster_url.clone(), sensitive_headers);
+        let sensitive_bundler_transport = if self.chain_id == 31337 {
+            // For local anvil, use the same transport as non-sensitive
+            transport_builder.default_transport(bundler_url.clone())
+        } else {
+            transport_builder.with_headers(bundler_url.clone(), sensitive_headers.clone())
+        };
+
+        let sensitive_paymaster_transport = if self.chain_id == 31337 {
+            // For local anvil, use the same transport as non-sensitive
+            transport_builder.default_transport(paymaster_url.clone())
+        } else {
+            transport_builder.with_headers(paymaster_url.clone(), sensitive_headers)
+        };
 
         let paymaster_rpc_client = RpcClient::builder().transport(paymaster_transport, false);
         let bundler_rpc_client = RpcClient::builder().transport(bundler_transport, false);

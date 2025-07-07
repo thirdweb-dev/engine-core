@@ -24,6 +24,7 @@ use shutdown::WorkerHandle;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
+pub use queue::IdempotencyMode;
 pub use redis;
 use tracing::Instrument;
 
@@ -914,6 +915,11 @@ impl<H: DurableExecution> Queue<H> {
         let result_json = serde_json::to_string(result)?;
         pipeline.hset(self.job_result_hash_name(), &job.job.id, result_json);
 
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+            pipeline.srem(self.dedupe_set_name(), &job.job.id);
+        }
+
         Ok(())
     }
 
@@ -1061,6 +1067,11 @@ impl<H: DurableExecution> Queue<H> {
         };
         let error_json = serde_json::to_string(&error_record)?;
         pipeline.lpush(self.job_errors_list_name(&job.job.id), error_json);
+
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+            pipeline.srem(self.dedupe_set_name(), &job.job.id);
+        }
 
         Ok(())
     }
@@ -1249,6 +1260,11 @@ impl<H: DurableExecution> Queue<H> {
         let error_json = serde_json::to_string(&error_record)?;
         hook_pipeline.lpush(self.job_errors_list_name(&job.id), error_json);
 
+        // For "active" idempotency mode, remove from deduplication set immediately
+        if self.options.idempotency_mode == queue::IdempotencyMode::Active {
+            hook_pipeline.srem(self.dedupe_set_name(), &job.id);
+        }
+
         // 2. Use pipeline in unlimited retry loop with lease check
         loop {
             let mut conn = self.redis.clone();
@@ -1289,5 +1305,21 @@ impl<H: DurableExecution> Queue<H> {
                 }
             }
         }
+    }
+
+    pub async fn remove_from_dedupe_set(&self, job_id: &str) -> Result<(), TwmqError> {
+        self.redis
+            .clone()
+            .srem::<&str, &str, ()>(&self.dedupe_set_name(), job_id)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn empty_dedupe_set(&self) -> Result<(), TwmqError> {
+        self.redis
+            .clone()
+            .del::<&str, ()>(&self.dedupe_set_name())
+            .await?;
+        Ok(())
     }
 }
