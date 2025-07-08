@@ -4,12 +4,12 @@ use alloy::{
     dyn_abi::TypedData,
     primitives::{Address, B256, hex, keccak256},
     sol,
-    sol_types::{SolCall, SolValue, decode_revert_reason, eip712_domain},
+    sol_types::{SolCall, SolValue, eip712_domain},
 };
 use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
-    error::EngineError,
+    error::{ContractErrorToEngineError, EngineError},
     signer::{AccountSigner, EoaSigner, EoaSigningOptions, Erc4337SigningOptions},
 };
 use serde::Serialize;
@@ -266,7 +266,9 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
                 let expected_magic = ERC1271Contract::isValidSignatureCall::SELECTOR;
                 Ok(response.as_slice() == expected_magic)
             }
-            Err(e) => Ok(false),
+            Err(e) => {
+                Err(e.to_engine_error(self.chain.chain_id(), Some(self.smart_account.address)))
+            }
         }
     }
 
