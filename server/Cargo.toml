@@ -13,6 +13,7 @@ vault-sdk = { workspace = true }
 vault-types = { workspace = true }
 engine-core = { path = "../core" }
 engine-aa-core = { path = "../aa-core" }
+engine-aa-types = { path = "../aa-types" }
 engine-executors = { path = "../executors" }
 twmq = { path = "../twmq" }
 thirdweb-core = { path = "../thirdweb-core" }
@@ -40,3 +41,7 @@ utoipa = { version = "5.4.0", features = [
 ] }
 utoipa-axum = "0.2.0"
 utoipa-scalar = { version = "0.3.0", features = ["axum"] }
+rdkafka = { version = "0.36", features = ["ssl"] }
+async-trait = "0.1.83"
+cuid = "1.3.2"
+chrono = "0.4"

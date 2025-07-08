@@ -19,6 +19,7 @@ use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 use crate::{
     chains::ThirdwebChainService,
     config::{QueueConfig, RedisConfig},
+    kafka::{SharedKafkaProducer, create_event_sender},
 };
 
 pub struct QueueManager {
@@ -53,6 +54,7 @@ impl QueueManager {
         chain_service: Arc<ThirdwebChainService>,
         userop_signer: Arc<engine_core::userop::UserOpSigner>,
         eoa_signer: Arc<engine_core::signer::EoaSigner>,
+        kafka_producer: SharedKafkaProducer,
     ) -> Result<Self, EngineError> {
         // Create Redis clients
         let redis_client = twmq::redis::Client::open(redis_config.url.as_str())?;
@@ -147,12 +149,16 @@ impl QueueManager {
             .await?
             .arc();
 
+        // Create event sender from Kafka producer
+        let event_sender = create_event_sender(&kafka_producer);
+
         // Create confirmation queues first (needed by send queues)
         let confirm_handler = UserOpConfirmationHandler::new(
             chain_service.clone(),
             deployment_lock.clone(),
             webhook_queue.clone(),
             transaction_registry.clone(),
+            event_sender.clone(),
         );
 
         let userop_confirm_queue = Queue::builder()
@@ -189,6 +195,7 @@ impl QueueManager {
             webhook_queue: webhook_queue.clone(),
             confirm_queue: userop_confirm_queue.clone(),
             transaction_registry: transaction_registry.clone(),
+            event_sender: event_sender.clone(),
         };
 
         let external_bundler_send_queue = Queue::builder()

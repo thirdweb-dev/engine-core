@@ -27,12 +27,15 @@ use twmq::{
 };
 
 use crate::{
+    kafka_integration::{SharedEventSender, TransactionSentEvent},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
         envelope::{ExecutorStage, HasTransactionMetadata, HasWebhookOptions, WebhookCapable},
     },
 };
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     confirm::{UserOpConfirmationHandler, UserOpConfirmationJobData},
@@ -199,6 +202,7 @@ where
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub confirm_queue: Arc<Queue<UserOpConfirmationHandler<CS>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
+    pub event_sender: SharedEventSender,
 }
 
 impl<CS> ExternalBundlerSendHandler<CS>
@@ -532,6 +536,25 @@ where
                 "Failed to queue confirmation job"
             );
         }
+
+        // Send Kafka transaction sent event
+        let sent_event = TransactionSentEvent {
+            transaction_id: job.job.data.transaction_id.clone(),
+            chain_id: job.job.data.chain_id,
+            account_address: success_data.result.account_address,
+            user_op_hash: success_data.result.user_op_hash.clone(),
+            nonce: success_data.result.nonce,
+            deployment_lock_acquired: success_data.result.deployment_lock_acquired,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            // TODO: Extract team_id and project_id from job data or RPC credentials
+            team_id: "team_placeholder".to_string(),
+            project_id: "prj_placeholder".to_string(),
+        };
+
+        self.event_sender.send_transaction_sent(sent_event).await;
 
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(

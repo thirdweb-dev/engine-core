@@ -9,6 +9,7 @@ pub struct EngineConfig {
     pub thirdweb: ThirdwebConfig,
     pub queue: QueueConfig,
     pub redis: RedisConfig,
+    pub kafka: Option<KafkaConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +30,41 @@ pub struct QueueConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
     pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KafkaConfig {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    
+    #[serde(default = "default_batch_size")]
+    pub batch_size: u32,
+    
+    #[serde(default = "default_buffer_memory_kb")]
+    pub buffer_memory_kb: u32,
+    
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u32,
+    
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+}
+
+fn default_batch_size() -> u32 {
+    1000
+}
+
+fn default_buffer_memory_kb() -> u32 {
+    32768 // 32MB
+}
+
+fn default_request_timeout_ms() -> u32 {
+    5000
+}
+
+fn default_max_retries() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Deserialize)]

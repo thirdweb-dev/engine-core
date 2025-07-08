@@ -15,12 +15,15 @@ use twmq::{
 };
 
 use crate::{
+    kafka_integration::{SharedEventSender, TransactionConfirmedEvent},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
         envelope::{ExecutorStage, HasWebhookOptions, WebhookCapable},
     },
 };
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::deployment::RedisDeploymentLock;
 
@@ -103,6 +106,7 @@ where
     pub transaction_registry: Arc<TransactionRegistry>,
     pub max_confirmation_attempts: u32,
     pub confirmation_retry_delay: Duration,
+    pub event_sender: SharedEventSender,
 }
 
 impl<CS> UserOpConfirmationHandler<CS>
@@ -114,6 +118,7 @@ where
         deployment_lock: RedisDeploymentLock,
         webhook_queue: Arc<Queue<WebhookJobHandler>>,
         transaction_registry: Arc<TransactionRegistry>,
+        event_sender: SharedEventSender,
     ) -> Self {
         Self {
             chain_service,
@@ -122,6 +127,7 @@ where
             transaction_registry,
             max_confirmation_attempts: 20, // ~5 minutes with 15 second delays
             confirmation_retry_delay: Duration::from_secs(5),
+            event_sender,
         }
     }
 
@@ -245,6 +251,23 @@ where
                 "Added atomic lock release and cache update to transaction pipeline"
             );
         }
+
+        // Send Kafka transaction confirmed event
+        let confirmed_event = TransactionConfirmedEvent {
+            transaction_id: job.job.data.transaction_id.clone(),
+            user_op_hash: success_data.result.user_op_hash.clone(),
+            receipt: success_data.result.receipt.clone(),
+            deployment_lock_released: success_data.result.deployment_lock_released,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            // TODO: Extract team_id and project_id from job data or RPC credentials
+            team_id: "team_placeholder".to_string(),
+            project_id: "prj_placeholder".to_string(),
+        };
+
+        self.event_sender.send_transaction_confirmed(confirmed_event).await;
 
         // Queue success webhook
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {

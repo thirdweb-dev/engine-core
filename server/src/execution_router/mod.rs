@@ -35,6 +35,7 @@ use vault_types::{
 };
 
 use crate::chains::ThirdwebChainService;
+use crate::kafka::SharedKafkaProducer;
 
 pub struct ExecutionRouter {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
@@ -47,6 +48,7 @@ pub struct ExecutionRouter {
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
     pub chains: Arc<ThirdwebChainService>,
+    pub kafka_producer: SharedKafkaProducer,
 }
 
 impl ExecutionRouter {
