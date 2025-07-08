@@ -22,7 +22,7 @@ use engine_core::{
 use futures::future::join_all;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value as JsonValue;
-use serde_with::serde_as;
+use serde_with::{DisplayFromStr, PickFirst, serde_as};
 use thirdweb_core::auth::ThirdwebAuth;
 use utoipa::ToSchema;
 
@@ -145,9 +145,9 @@ pub enum MulticallDocType {
 }
 
 /// Options for reading from smart contracts
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
-#[serde_as]
 pub struct ReadOptions {
     /// The blockchain network ID to read from
     #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]

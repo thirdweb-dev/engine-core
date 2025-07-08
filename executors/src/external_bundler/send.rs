@@ -415,11 +415,28 @@ where
             smart_account.encode_execute_batch(&job_data.transactions)
         };
 
+        // 7.1. Calculate custom call gas limit
+        let custom_call_gas_limit = {
+            let gas_limits: Vec<u64> = job_data.transactions.iter()
+                .filter_map(|tx| tx.gas_limit)
+                .collect();
+            
+            if gas_limits.len() == job_data.transactions.len() {
+                // All transactions have gas limits specified, sum them up
+                let total_gas: u64 = gas_limits.iter().sum();
+                Some(U256::from(total_gas))
+            } else {
+                // Not all transactions have gas limits specified
+                None
+            }
+        };
+
         // 8. Build User Operation
         let builder_config = UserOpBuilderConfig {
             account_address: smart_account.address,
             signer_address: job_data.execution_options.signer_address,
             entrypoint_and_factory: job_data.execution_options.entrypoint_details.clone(),
+            call_gas_limit: custom_call_gas_limit,
             call_data,
             init_call_data,
             is_deployed: !needs_init_code,
