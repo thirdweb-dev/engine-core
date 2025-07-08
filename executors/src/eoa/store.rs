@@ -5,7 +5,7 @@ use chrono;
 use engine_core::chain::RpcCredentials;
 use engine_core::credentials::SigningCredential;
 use engine_core::execution_options::WebhookOptions;
-use engine_core::execution_options::eoa::EoaTransactionTypeData;
+use engine_core::transaction::TransactionTypeData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -245,7 +245,7 @@ pub struct EoaTransactionRequest {
     pub rpc_credentials: RpcCredentials,
 
     #[serde(flatten)]
-    pub transaction_type_data: Option<EoaTransactionTypeData>,
+    pub transaction_type_data: Option<TransactionTypeData>,
 }
 
 /// Active attempt for a transaction (full alloy transaction + metadata)
@@ -293,7 +293,7 @@ impl EoaExecutorStore {
     fn transaction_data_key_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
             Some(ns) => format!("{ns}:eoa_executor:tx_data:{transaction_id}"),
-            None => format!("eoa_tx_data:{transaction_id}"),
+            None => format!("eoa_executor:_tx_data:{transaction_id}"),
         }
     }
 

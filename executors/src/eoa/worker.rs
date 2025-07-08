@@ -3,15 +3,14 @@ use alloy::consensus::{
     TypedTransaction,
 };
 use alloy::network::{TransactionBuilder, TransactionBuilder7702};
-use alloy::primitives::utils::Unit;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest as AlloyTransactionRequest;
 use alloy::signers::Signature;
 use alloy::transports::{RpcError, TransportErrorKind};
 use engine_core::error::EngineError;
-use engine_core::execution_options::eoa::EoaTransactionTypeData;
 use engine_core::signer::AccountSigner;
+use engine_core::transaction::TransactionTypeData;
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     credentials::SigningCredential,
@@ -1764,7 +1763,7 @@ where
         tx_request = if let Some(type_data) = &tx_data.user_request.transaction_type_data {
             // User provided gas settings - respect them first
             match type_data {
-                EoaTransactionTypeData::Eip1559(data) => {
+                TransactionTypeData::Eip1559(data) => {
                     let mut req = tx_request;
                     if let Some(max_fee) = data.max_fee_per_gas {
                         req = req.with_max_fee_per_gas(max_fee);
@@ -1780,7 +1779,7 @@ where
 
                     req
                 }
-                EoaTransactionTypeData::Legacy(data) => {
+                TransactionTypeData::Legacy(data) => {
                     if let Some(gas_price) = data.gas_price {
                         tx_request.with_gas_price(gas_price)
                     } else {
@@ -1788,7 +1787,7 @@ where
                         self.estimate_gas_fees(chain, tx_request).await?
                     }
                 }
-                EoaTransactionTypeData::Eip7702(data) => {
+                TransactionTypeData::Eip7702(data) => {
                     let mut req = tx_request;
                     if let Some(authorization_list) = &data.authorization_list {
                         req = req.with_authorization_list(authorization_list.clone());

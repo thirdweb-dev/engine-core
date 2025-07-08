@@ -314,6 +314,8 @@ impl ContractCall {
             to: Some(prepared.target),
             data: prepared.call_data.clone(),
             value,
+            gas_limit: None,
+            transaction_type_data: None,
         }
     }
 }
