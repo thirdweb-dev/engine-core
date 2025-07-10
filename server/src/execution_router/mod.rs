@@ -404,7 +404,7 @@ impl ExecutionRouter {
             data: transaction.data.clone(),
             gas_limit: transaction.gas_limit,
             webhook_options: webhook_options.clone(),
-            signing_credential,
+            signing_credential: signing_credential.clone(),
             rpc_credentials,
             transaction_type_data: transaction.transaction_type_data.clone(),
         };
@@ -429,10 +429,7 @@ impl ExecutionRouter {
         let eoa_job_data = EoaExecutorWorkerJobData {
             eoa_address: eoa_execution_options.from,
             chain_id: base_execution_options.chain_id,
-            worker_id: format!(
-                "eoa_{}_{}",
-                eoa_execution_options.from, base_execution_options.chain_id
-            ),
+            noop_signing_credential: signing_credential,
         };
 
         // Create idempotent job for this EOA:chain - only one will exist

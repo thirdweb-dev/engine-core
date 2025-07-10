@@ -12,7 +12,7 @@ use engine_core::error::EngineError;
 use engine_core::signer::AccountSigner;
 use engine_core::transaction::TransactionTypeData;
 use engine_core::{
-    chain::{Chain, ChainService, RpcCredentials},
+    chain::{Chain, ChainService},
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, RpcErrorKind},
     signer::{EoaSigner, EoaSigningOptions},
@@ -47,7 +47,7 @@ const NONCE_STALL_TIMEOUT: u64 = 300_000; // 5 minutes in milliseconds - after t
 pub struct EoaExecutorWorkerJobData {
     pub eoa_address: Address,
     pub chain_id: u64,
-    pub worker_id: String,
+    pub noop_signing_credential: SigningCredential,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -83,8 +83,14 @@ pub enum EoaExecutorWorkerError {
     #[error("Transaction build failed: {message}")]
     TransactionBuildFailed { message: String },
 
-    #[error("RPC error: {message}")]
+    #[error("RPC error encountered during generic operation: {message}")]
     RpcError {
+        message: String,
+        inner_error: EngineError,
+    },
+
+    #[error("Error encountered when broadcasting transaction: {message}")]
+    TransactionSendError {
         message: String,
         inner_error: EngineError,
     },
@@ -237,7 +243,7 @@ struct PreparedTransaction {
 
 // ========== CONFIRMATION FLOW DATA STRUCTURES ==========
 #[derive(Debug, Clone)]
-struct PendingTransaction {
+struct SubmittedTransaction {
     nonce: u64,
     hash: String,
     transaction_id: String,
@@ -252,7 +258,7 @@ struct ConfirmedTransaction {
 }
 
 #[derive(Debug, Clone)]
-struct FailedTransaction {
+struct ReplacedTransaction {
     hash: String,
     transaction_id: String,
 }
@@ -266,7 +272,7 @@ pub struct TransactionSuccess {
 }
 
 #[derive(Debug, Clone)]
-pub struct TransactionFailure {
+pub struct TransactionReplacement {
     pub hash: String,
     pub transaction_id: String,
 }
@@ -329,7 +335,7 @@ where
             &self.store,
             data.eoa_address,
             data.chain_id,
-            data.worker_id.clone(),
+            job.lease_token.clone(),
         )
         .await
         .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
@@ -353,7 +359,7 @@ where
         self.release_eoa_lock(
             job.job.data.eoa_address,
             job.job.data.chain_id,
-            &job.job.data.worker_id,
+            &job.lease_token,
         )
         .await;
     }
@@ -368,7 +374,7 @@ where
         self.release_eoa_lock(
             job.job.data.eoa_address,
             job.job.data.chain_id,
-            &job.job.data.worker_id,
+            &job.lease_token,
         )
         .await;
     }
@@ -383,7 +389,7 @@ where
         self.release_eoa_lock(
             job.job.data.eoa_address,
             job.job.data.chain_id,
-            &job.job.data.worker_id,
+            &job.lease_token,
         )
         .await;
     }
@@ -433,13 +439,17 @@ where
             .await
             .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?
             .len();
+        let submitted_count = scoped
+            .get_submitted_transactions_count()
+            .await
+            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
 
         // NACK here is a yield, when you think of the queue as a distributed EOA scheduler
-        if pending_count > 0 || borrowed_count > 0 || recycled_count > 0 {
+        if pending_count > 0 || borrowed_count > 0 || recycled_count > 0 || submitted_count > 0 {
             return Err(EoaExecutorWorkerError::WorkRemaining {
                 message: format!(
-                    "Work remaining: {} pending, {} borrowed, {} recycled",
-                    pending_count, borrowed_count, recycled_count
+                    "Work remaining: {} pending, {} borrowed, {} recycled, {} submitted",
+                    pending_count, borrowed_count, recycled_count, submitted_count
                 ),
             })
             .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
@@ -513,6 +523,7 @@ where
 
         // Process results sequentially for Redis state changes
         let mut recovered_count = 0;
+        // TODO: both borrowed -> submitted and borrowed -> recycled need to be batched instead of sequential
         for (borrowed, send_result) in rebroadcast_results {
             let nonce = borrowed.signed_transaction.nonce();
 
@@ -520,11 +531,7 @@ where
                 Ok(_) => {
                     // Transaction was sent successfully
                     scoped
-                        .move_borrowed_to_submitted(
-                            nonce,
-                            &format!("{:?}", borrowed.hash),
-                            &borrowed.transaction_id,
-                        )
+                        .move_borrowed_to_submitted(nonce, &borrowed.hash, &borrowed.transaction_id)
                         .await?;
                     tracing::info!(transaction_id = %borrowed.transaction_id, nonce = nonce, "Moved recovered transaction to submitted");
                 }
@@ -535,7 +542,7 @@ where
                             scoped
                                 .move_borrowed_to_submitted(
                                     nonce,
-                                    &format!("{:?}", borrowed.hash),
+                                    &borrowed.hash,
                                     &borrowed.transaction_id,
                                 )
                                 .await?;
@@ -603,6 +610,8 @@ where
             Ok(cached_nonce) => cached_nonce,
         };
 
+        let submitted_count = scoped.get_submitted_transactions_count().await?;
+
         // no nonce progress
         if current_chain_nonce == cached_nonce {
             let current_health = self.get_eoa_health(scoped, chain).await?;
@@ -610,7 +619,8 @@ where
             // No nonce progress - check if we should attempt gas bumping for stalled nonce
             let time_since_movement = now.saturating_sub(current_health.last_nonce_movement_at);
 
-            if time_since_movement > NONCE_STALL_TIMEOUT {
+            // if there are waiting transactions, we can attempt a gas bump
+            if time_since_movement > NONCE_STALL_TIMEOUT && submitted_count > 0 {
                 tracing::info!(
                     time_since_movement = time_since_movement,
                     stall_timeout = NONCE_STALL_TIMEOUT,
@@ -641,18 +651,18 @@ where
         );
 
         // Get all pending transactions below the current chain nonce
-        let pending_txs = self
-            .get_pending_transactions_below_nonce(scoped, current_chain_nonce)
+        let waiting_txs = self
+            .get_submitted_transactions_below_nonce(scoped, current_chain_nonce)
             .await?;
 
-        if pending_txs.is_empty() {
-            tracing::debug!("No pending transactions to confirm");
+        if waiting_txs.is_empty() {
+            tracing::debug!("No waiting transactions to confirm");
             return Ok((0, 0));
         }
 
         // Fetch receipts and categorize transactions
-        let (confirmed_txs, failed_txs) = self
-            .fetch_and_categorize_transactions(chain, pending_txs)
+        let (confirmed_txs, replaced_txs) = self
+            .fetch_and_categorize_transactions(chain, waiting_txs)
             .await;
 
         // Process confirmed transactions
@@ -695,9 +705,9 @@ where
             0
         };
 
-        // Process failed transactions
-        let failed_count = if !failed_txs.is_empty() {
-            let failures: Vec<TransactionFailure> = failed_txs
+        // Process replaced transactions
+        let replaced_count = if !replaced_txs.is_empty() {
+            let replacements: Vec<TransactionReplacement> = replaced_txs
                 .into_iter()
                 .map(|tx| {
                     tracing::warn!(
@@ -705,15 +715,17 @@ where
                         hash = %tx.hash,
                         "Transaction failed, requeued"
                     );
-                    TransactionFailure {
+                    TransactionReplacement {
                         hash: tx.hash,
                         transaction_id: tx.transaction_id,
                     }
                 })
                 .collect();
 
-            let count = failures.len() as u32;
-            scoped.batch_fail_and_requeue_transactions(failures).await?;
+            let count = replacements.len() as u32;
+            scoped
+                .batch_fail_and_requeue_transactions(replacements)
+                .await?;
             count
         } else {
             0
@@ -725,20 +737,11 @@ where
             .await?;
 
         // Synchronize nonces to ensure consistency
-        if let Err(e) = self
-            .store
-            .synchronize_nonces_with_chain(
-                scoped.eoa(),
-                scoped.chain_id(),
-                scoped.worker_id(),
-                current_chain_nonce,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "Failed to synchronize nonces with chain");
-        }
+        scoped
+            .synchronize_nonces_with_chain(current_chain_nonce)
+            .await?;
 
-        Ok((confirmed_count, failed_count))
+        Ok((confirmed_count, replaced_count))
     }
 
     // ========== SEND FLOW ==========
@@ -753,30 +756,33 @@ where
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
         // Update balance if it's stale
-        if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL {
-            let balance = chain
-                .provider()
-                .get_balance(scoped.eoa())
-                .await
-                .map_err(|e| {
-                    let engine_error = e.to_engine_error(chain);
-                    EoaExecutorWorkerError::RpcError {
-                        message: format!("Failed to get balance: {}", engine_error),
-                        inner_error: engine_error,
-                    }
-                })?;
-
-            health.balance = balance;
-            health.balance_fetched_at = now;
-            scoped.update_health_data(&health).await?;
-        }
-
+        // TODO: refactor this, very ugly
         if health.balance <= health.balance_threshold {
-            tracing::warn!(
-                "EOA has insufficient balance (<= {} wei), skipping send flow",
-                health.balance_threshold
-            );
-            return Ok(0);
+            if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL {
+                let balance = chain
+                    .provider()
+                    .get_balance(scoped.eoa())
+                    .await
+                    .map_err(|e| {
+                        let engine_error = e.to_engine_error(chain);
+                        EoaExecutorWorkerError::RpcError {
+                            message: format!("Failed to get balance: {}", engine_error),
+                            inner_error: engine_error,
+                        }
+                    })?;
+
+                health.balance = balance;
+                health.balance_fetched_at = now;
+                scoped.update_health_data(&health).await?;
+            }
+
+            if health.balance <= health.balance_threshold {
+                tracing::warn!(
+                    "EOA has insufficient balance (<= {} wei), skipping send flow",
+                    health.balance_threshold
+                );
+                return Ok(0);
+            }
         }
 
         let mut total_sent = 0;
@@ -1178,7 +1184,7 @@ where
             .map(|(i, prepared)| async move {
                 // Add delay for ordering (except first transaction)
                 if i > 0 {
-                    sleep(Duration::from_millis(50)).await; // 50ms delay between consecutive nonces
+                    sleep(Duration::from_millis(50 * i as u64)).await; // 50ms delay between consecutive nonces
                 }
 
                 let result = chain
@@ -1195,12 +1201,12 @@ where
         let mut sent_count = 0;
         for (prepared, send_result) in send_results {
             match send_result {
-                Ok(_) => {
+                Ok(pending) => {
                     // Transaction sent successfully
                     match scoped
                         .move_borrowed_to_submitted(
                             prepared.nonce,
-                            &format!("{:?}", prepared.signed_tx.hash()),
+                            &pending.tx_hash().to_string(),
                             &prepared.transaction_id,
                         )
                         .await
@@ -1334,13 +1340,14 @@ where
         scoped: &ScopedEoaExecutorStore<'_>,
         chain: &impl Chain,
         nonce: u64,
-    ) -> Result<bool, EoaExecutorWorkerError> {
+        credential: SigningCredential,
+    ) -> Result<String, EoaExecutorWorkerError> {
         // Create a minimal transaction to consume the recycled nonce
         // Send 0 ETH to self with minimal gas
         let eoa = scoped.eoa();
 
         // Build no-op transaction (send 0 to self)
-        let mut tx_request = AlloyTransactionRequest::default()
+        let tx_request = AlloyTransactionRequest::default()
             .with_from(eoa)
             .with_to(eoa) // Send to self
             .with_value(U256::ZERO) // Send 0 value
@@ -1349,43 +1356,24 @@ where
             .with_nonce(nonce)
             .with_gas_limit(21000); // Minimal gas for basic transfer
 
-        // Estimate gas to ensure the transaction is valid
-        match chain.provider().estimate_gas(tx_request.clone()).await {
-            Ok(gas_limit) => {
-                tx_request = tx_request.with_gas_limit(gas_limit);
+        let tx_request = self.estimate_gas_fees(chain, tx_request).await?;
+        let built_tx = tx_request.build_typed_tx().map_err(|e| {
+            EoaExecutorWorkerError::TransactionBuildFailed {
+                message: format!("Failed to build typed transaction for no-op: {e:?}"),
             }
-            Err(e) => {
-                tracing::warn!(
-                    nonce = nonce,
-                    error = %e,
-                    "Failed to estimate gas for no-op transaction"
-                );
-                return Ok(false);
-            }
-        }
+        })?;
 
-        // Build typed transaction
-        let typed_tx = match tx_request.build_typed_tx() {
-            Ok(tx) => tx,
-            Err(e) => {
-                tracing::warn!(
-                    nonce = nonce,
-                    error = ?e,
-                    "Failed to build typed transaction for no-op"
-                );
-                return Ok(false);
-            }
-        };
+        let tx = self.sign_transaction(eoa, credential, built_tx).await?;
 
-        // Get signing credential from health or use default approach
-        // For no-op transactions, we need to find a valid signing credential
-        // This is a limitation of the current design - no-op transactions
-        // need access to signing credentials which are transaction-specific
-        tracing::warn!(
-            nonce = nonce,
-            "No-op transaction requires signing credential access - recycled nonce will remain unconsumed"
-        );
-        Ok(false)
+        chain
+            .provider()
+            .send_tx_envelope(tx.into())
+            .await
+            .map_err(|e| EoaExecutorWorkerError::TransactionSendError {
+                message: format!("Failed to send no-op transaction: {e:?}"),
+                inner_error: e.to_engine_error(chain),
+            })
+            .map(|pending| pending.tx_hash().to_string())
     }
 
     // ========== GAS BUMP METHODS ==========
@@ -1473,7 +1461,14 @@ where
                 }
             };
             let bumped_typed_tx = self.apply_gas_bump_to_typed_transaction(typed_tx, 120); // 20% increase
-            let bumped_tx = match self.sign_transaction(bumped_typed_tx, &tx_data).await {
+            let bumped_tx = match self
+                .sign_transaction(
+                    tx_data.user_request.from,
+                    tx_data.user_request.signing_credential,
+                    bumped_typed_tx,
+                )
+                .await
+            {
                 Ok(tx) => tx,
                 Err(e) => {
                     tracing::warn!(
@@ -1593,34 +1588,34 @@ where
 
     // ========== CONFIRMATION FLOW HELPERS ==========
 
-    /// Get pending transactions below the given nonce
-    async fn get_pending_transactions_below_nonce(
+    /// Get submitted transactions below the given nonce
+    async fn get_submitted_transactions_below_nonce(
         &self,
         scoped: &ScopedEoaExecutorStore<'_>,
         nonce: u64,
-    ) -> Result<Vec<PendingTransaction>, EoaExecutorWorkerError> {
-        let pending_hashes = scoped.get_hashes_below_nonce(nonce).await?;
+    ) -> Result<Vec<SubmittedTransaction>, EoaExecutorWorkerError> {
+        let submitted_hashes = scoped.get_hashes_below_nonce(nonce).await?;
 
-        let pending_txs = pending_hashes
+        let submitted_txs = submitted_hashes
             .into_iter()
-            .map(|(nonce, hash, transaction_id)| PendingTransaction {
+            .map(|(nonce, hash, transaction_id)| SubmittedTransaction {
                 nonce,
                 hash,
                 transaction_id,
             })
             .collect();
 
-        Ok(pending_txs)
+        Ok(submitted_txs)
     }
 
-    /// Fetch receipts for all pending transactions and categorize them
+    /// Fetch receipts for all submitted transactions and categorize them
     async fn fetch_and_categorize_transactions(
         &self,
         chain: &impl Chain,
-        pending_txs: Vec<PendingTransaction>,
-    ) -> (Vec<ConfirmedTransaction>, Vec<FailedTransaction>) {
+        submitted_txs: Vec<SubmittedTransaction>,
+    ) -> (Vec<ConfirmedTransaction>, Vec<ReplacedTransaction>) {
         // Fetch all receipts in parallel
-        let receipt_futures: Vec<_> = pending_txs
+        let receipt_futures: Vec<_> = submitted_txs
             .iter()
             .filter_map(|tx| match tx.hash.parse::<B256>() {
                 Ok(hash_bytes) => Some(async move {
@@ -1651,7 +1646,7 @@ where
                     });
                 }
                 Ok(None) | Err(_) => {
-                    failed_txs.push(FailedTransaction {
+                    failed_txs.push(ReplacedTransaction {
                         hash: tx.hash.clone(),
                         transaction_id: tx.transaction_id.clone(),
                     });
@@ -1855,21 +1850,18 @@ where
 
     async fn sign_transaction(
         &self,
+        from: Address,
+        credential: SigningCredential,
         typed_tx: TypedTransaction,
-        tx_data: &TransactionData,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let signing_options = EoaSigningOptions {
-            from: tx_data.user_request.from,
-            chain_id: Some(tx_data.user_request.chain_id),
+            from,
+            chain_id: typed_tx.chain_id(),
         };
 
         let signature = self
             .eoa_signer
-            .sign_transaction(
-                signing_options,
-                typed_tx.clone(),
-                tx_data.user_request.signing_credential.clone(),
-            )
+            .sign_transaction(signing_options, typed_tx.clone(), credential)
             .await
             .map_err(|engine_error| EoaExecutorWorkerError::SigningError {
                 message: format!("Failed to sign transaction: {}", engine_error),
@@ -1892,7 +1884,12 @@ where
         chain: &impl Chain,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(tx_data, nonce, chain).await?;
-        self.sign_transaction(typed_tx, tx_data).await
+        self.sign_transaction(
+            tx_data.user_request.from,
+            tx_data.user_request.signing_credential.clone(),
+            typed_tx,
+        )
+        .await
     }
 
     fn apply_gas_bump_to_typed_transaction(
