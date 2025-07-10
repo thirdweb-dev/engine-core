@@ -16,12 +16,12 @@ use engine_core::{
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
     hooks::TransactionContext,
-    job::{BorrowedJob, JobResult, ToJobResult},
+    job::{BorrowedJob, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
 use crate::{
@@ -36,6 +36,21 @@ use super::confirm::{Eip7702ConfirmationHandler, Eip7702ConfirmationJobData};
 
 const MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS: Address =
     address!("0xD6999651Fc0964B9c6B444307a0ab20534a66560");
+
+// --- Retry Configuration ---
+struct RetryConfig {
+    max_attempts: u32,
+    delay: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            delay: Duration::from_secs(3),
+        }
+    }
+}
 
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -191,11 +206,16 @@ where
         let chain = self
             .chain_service
             .get_chain(job_data.chain_id)
-            .map_err(|e| Eip7702SendError::ChainServiceError {
-                chain_id: job_data.chain_id,
-                message: format!("Failed to get chain instance: {}", e),
-            })
-            .map_err_fail()?;
+            .map_err(|e| {
+                handle_with_retry(
+                    job.job.attempts,
+                    || Eip7702SendError::ChainServiceError {
+                        chain_id: job_data.chain_id,
+                        message: format!("Failed to get chain instance: {}", e),
+                    },
+                    None, // Use default retry config
+                )
+            })?;
 
         let chain_auth_headers = job_data
             .rpc_credentials
@@ -246,20 +266,30 @@ where
                 job_data.signing_credential.clone(),
             )
             .await
-            .map_err(|e| Eip7702SendError::SigningError {
-                message: format!("Failed to sign typed data: {e}"),
-                inner_error: Some(e),
-            })
-            .map_err_fail()?;
+            .map_err(|e| {
+                handle_with_retry(
+                    job.job.attempts,
+                    || Eip7702SendError::SigningError {
+                        message: format!("Failed to sign typed data: {e}"),
+                        inner_error: Some(e.clone()),
+                    },
+                    None, // Use default retry config
+                )
+            })?;
 
         // 4. Check if wallet has 7702 delegation set
         let is_minimal_account = check_is_7702_minimal_account(&chain, job_data.eoa_address)
             .await
-            .map_err(|e| Eip7702SendError::DelegationCheckError {
-                message: format!("Failed to check if wallet has 7702 delegation: {e}"),
-                inner_error: Some(e),
-            })
-            .map_err_fail()?;
+            .map_err(|e| {
+                handle_with_retry(
+                    job.job.attempts,
+                    || Eip7702SendError::DelegationCheckError {
+                        message: format!("Failed to check if wallet has 7702 delegation: {e}"),
+                        inner_error: Some(e.clone()),
+                    },
+                    None, // Use default retry config
+                )
+            })?;
 
         // 5. Sign authorization if needed
         let authorization = if !is_minimal_account {
@@ -275,11 +305,16 @@ where
                     job_data.signing_credential.clone(),
                 )
                 .await
-                .map_err(|e| Eip7702SendError::SigningError {
-                    message: format!("Failed to sign authorization: {e}"),
-                    inner_error: Some(e),
-                })
-                .map_err_fail()?;
+                .map_err(|e| {
+                    handle_with_retry(
+                        job.job.attempts,
+                        || Eip7702SendError::SigningError {
+                            message: format!("Failed to sign authorization: {e}"),
+                            inner_error: Some(e.clone()),
+                        },
+                        None, // Use default retry config
+                    )
+                })?;
 
             Some(auth.clone())
         } else {
@@ -300,10 +335,15 @@ where
                 authorization.as_ref(),
             )
             .await
-            .map_err(|e| Eip7702SendError::BundlerCallError {
-                message: e.to_string(),
-            })
-            .map_err_fail()?;
+            .map_err(|e| {
+                handle_with_retry(
+                    job.job.attempts,
+                    || Eip7702SendError::BundlerCallError {
+                        message: e.to_string(),
+                    },
+                    None, // Use default retry config
+                )
+            })?;
 
         tracing::debug!(transaction_id = ?transaction_id, "EIP-7702 transaction sent to bundler");
 
@@ -509,4 +549,24 @@ async fn check_is_7702_minimal_account(
     );
 
     Ok(is_delegated)
+}
+
+/// Helper function to handle retry logic consistently across all map_err calls
+fn handle_with_retry<E, F>(
+    attempts: u32,
+    error_factory: F,
+    config: Option<RetryConfig>,
+) -> twmq::job::JobError<E>
+where
+    E: ToJobError<E>,
+    F: FnOnce() -> E,
+{
+    let config = config.unwrap_or_default();
+    let error = error_factory();
+
+    if attempts < config.max_attempts {
+        error.nack(Some(config.delay), RequeuePosition::Last)
+    } else {
+        error.fail()
+    }
 }
