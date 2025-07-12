@@ -161,6 +161,15 @@ impl<H: DurableExecution> Queue<H> {
         }
     }
 
+    /// Create a TransactionContext from an existing Redis pipeline
+    /// This allows queueing jobs atomically within an existing transaction
+    pub fn transaction_context_from_pipeline<'a>(
+        &self,
+        pipeline: &'a mut redis::Pipeline,
+    ) -> hooks::TransactionContext<'a> {
+        hooks::TransactionContext::new(pipeline, self.name.clone())
+    }
+
     // Get queue name
     pub fn name(&self) -> &str {
         &self.name

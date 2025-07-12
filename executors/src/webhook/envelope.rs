@@ -41,6 +41,35 @@ pub struct WebhookNotificationEnvelope<T> {
     pub delivery_target_url: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BareWebhookNotificationEnvelope<T: Clone> {
+    pub transaction_id: String,
+    pub event_type: StageEvent,
+    pub executor_name: String,
+    pub stage_name: String,
+    pub payload: T,
+}
+
+impl<T: Serialize + Clone> BareWebhookNotificationEnvelope<T> {
+    pub fn into_webhook_notification_envelope(
+        self,
+        timestamp: u64,
+        delivery_target_url: String,
+    ) -> WebhookNotificationEnvelope<T> {
+        WebhookNotificationEnvelope {
+            notification_id: Uuid::new_v4().to_string(),
+            transaction_id: self.transaction_id,
+            timestamp,
+            executor_name: self.executor_name,
+            stage_name: self.stage_name,
+            event_type: self.event_type,
+            payload: self.payload,
+            delivery_target_url: Some(delivery_target_url),
+        }
+    }
+}
+
 // --- Serializable Hook Data Wrappers ---
 // These wrap the hook data to make them serializable (removing lifetimes)
 #[derive(Serialize, Deserialize, Debug, Clone)]

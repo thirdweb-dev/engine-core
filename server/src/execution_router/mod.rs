@@ -26,7 +26,7 @@ use engine_executors::{
     transaction_registry::TransactionRegistry,
     webhook::WebhookJobHandler,
 };
-use twmq::{Queue, error::TwmqError};
+use twmq::{Queue, error::TwmqError, redis::aio::ConnectionManager};
 use vault_sdk::VaultClient;
 use vault_types::{
     RegexRule, Rule,
@@ -37,11 +37,12 @@ use vault_types::{
 use crate::chains::ThirdwebChainService;
 
 pub struct ExecutionRouter {
+    pub redis: ConnectionManager,
+    pub namespace: Option<String>,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
     pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
-    pub eoa_executor_store: Arc<EoaExecutorStore>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
@@ -404,13 +405,20 @@ impl ExecutionRouter {
             data: transaction.data.clone(),
             gas_limit: transaction.gas_limit,
             webhook_options: webhook_options.clone(),
-            signing_credential,
+            signing_credential: signing_credential.clone(),
             rpc_credentials,
             transaction_type_data: transaction.transaction_type_data.clone(),
         };
 
+        let eoa_executor_store = EoaExecutorStore::new(
+            self.redis.clone(),
+            self.namespace.clone(),
+            eoa_execution_options.from,
+            base_execution_options.chain_id,
+        );
+
         // Add transaction to the store
-        self.eoa_executor_store
+        eoa_executor_store
             .add_transaction(eoa_transaction_request)
             .await
             .map_err(|e| TwmqError::Runtime {
@@ -429,10 +437,7 @@ impl ExecutionRouter {
         let eoa_job_data = EoaExecutorWorkerJobData {
             eoa_address: eoa_execution_options.from,
             chain_id: base_execution_options.chain_id,
-            worker_id: format!(
-                "eoa_{}_{}",
-                eoa_execution_options.from, base_execution_options.chain_id
-            ),
+            noop_signing_credential: signing_credential,
         };
 
         // Create idempotent job for this EOA:chain - only one will exist
