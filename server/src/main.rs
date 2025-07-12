@@ -51,9 +51,10 @@ async fn main() -> anyhow::Result<()> {
         iaw_client: iaw_client.clone(),
     });
     let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
+    let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
     let queue_manager = QueueManager::new(
-        &config.redis,
+        redis_client.clone(),
         &config.queue,
         chains.clone(),
         signer.clone(),
@@ -74,11 +75,12 @@ async fn main() -> anyhow::Result<()> {
     .build()?;
 
     let execution_router = ExecutionRouter {
+        namespace: config.queue.execution_namespace.clone(),
+        redis: redis_client.get_connection_manager().await?,
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
         eoa_executor_queue: queue_manager.eoa_executor_queue.clone(),
-        eoa_executor_store: queue_manager.eoa_executor_store.clone(),
         eip7702_send_queue: queue_manager.eip7702_send_queue.clone(),
         eip7702_confirm_queue: queue_manager.eip7702_confirm_queue.clone(),
         transaction_registry: queue_manager.transaction_registry.clone(),
