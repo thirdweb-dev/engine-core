@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
 use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::eoa::store::{
     ConfirmedTransaction, EoaExecutorStoreKeys, TransactionStoreError, atomic::SafeRedisTransaction,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmittedTransaction {
     pub nonce: u64,
     pub hash: String,

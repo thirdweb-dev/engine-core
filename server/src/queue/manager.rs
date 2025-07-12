@@ -5,7 +5,7 @@ use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
-    eoa::{EoaExecutorStore, EoaExecutorWorker},
+    eoa::EoaExecutorWorker,
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
@@ -16,10 +16,7 @@ use engine_executors::{
 };
 use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 
-use crate::{
-    chains::ThirdwebChainService,
-    config::{QueueConfig, RedisConfig},
-};
+use crate::{chains::ThirdwebChainService, config::QueueConfig};
 
 pub struct QueueManager {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
@@ -212,6 +209,7 @@ impl QueueManager {
         let eoa_executor_handler = EoaExecutorWorker {
             chain_service: chain_service.clone(),
             eoa_signer: eoa_signer.clone(),
+            webhook_queue: webhook_queue.clone(),
             namespace: queue_config.execution_namespace.clone(),
             redis: redis_client.get_connection_manager().await?,
             max_inflight: 100,

@@ -1,4 +1,5 @@
 pub mod error_classifier;
+pub mod events;
 pub mod store;
 pub mod worker;
 

@@ -21,6 +21,7 @@ use hex;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
+use twmq::Queue;
 use twmq::redis::AsyncCommands;
 use twmq::redis::aio::ConnectionManager;
 use twmq::{
@@ -35,6 +36,7 @@ use crate::eoa::store::{
     EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, EoaTransactionRequest, ReplacedTransaction,
     SubmittedTransaction, TransactionData, TransactionStoreError,
 };
+use crate::webhook::WebhookJobHandler;
 
 // ========== SPEC-COMPLIANT CONSTANTS ==========
 const MAX_INFLIGHT_PER_EOA: u64 = 100; // Default from spec
@@ -236,8 +238,9 @@ fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ConfirmedTransactionWithRichReceipt {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmedTransactionWithRichReceipt {
     pub nonce: u64,
     pub hash: String,
     pub transaction_id: String,
@@ -273,6 +276,8 @@ where
     CS: ChainService + Send + Sync + 'static,
 {
     pub chain_service: Arc<CS>,
+    pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
+
     pub redis: ConnectionManager,
     pub namespace: Option<String>,
 

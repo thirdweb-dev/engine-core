@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use engine_core::execution_options::WebhookOptions;
 use hex;
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -9,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
 use twmq::job::{BorrowedJob, JobError, JobResult, RequeuePosition, ToJobResult};
-use twmq::{DurableExecution, FailHookData, NackHookData, SuccessHookData, UserCancellable};
+use twmq::{DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable};
+use uuid::Uuid;
+
+use crate::webhook::envelope::{BareWebhookNotificationEnvelope, WebhookNotificationEnvelope};
 
 pub mod envelope;
 
@@ -113,7 +118,10 @@ impl DurableExecution for WebhookJobHandler {
     type JobData = WebhookJobPayload;
 
     #[tracing::instrument(skip_all, fields(queue = "webhook", job_id = job.job.id))]
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         let payload = &job.job.data;
         let mut request_headers = HeaderMap::new();
 
@@ -422,4 +430,78 @@ impl DurableExecution for WebhookJobHandler {
             "Webhook FAILED permanently (on_fail hook)."
         );
     }
+}
+
+pub fn queue_webhook_envelopes<T: Serialize + Clone>(
+    envelope: BareWebhookNotificationEnvelope<T>,
+    webhook_options: Vec<WebhookOptions>,
+    tx: &mut TransactionContext<'_>,
+    webhook_queue: Arc<Queue<WebhookJobHandler>>,
+) -> Result<(), TwmqError> {
+    let now = chrono::Utc::now().timestamp().min(0) as u64;
+    let serialised_webhook_envelopes =
+        webhook_options
+            .iter()
+            .map(|webhook_option| {
+                let webhook_notification_envelope = envelope
+                    .clone()
+                    .into_webhook_notification_envelope(now, webhook_option.url.clone());
+                let serialised_envelope = serde_json::to_string(&webhook_notification_envelope)?;
+                Ok((
+                    serialised_envelope,
+                    webhook_notification_envelope,
+                    webhook_option.clone(),
+                ))
+            })
+            .collect::<Result<
+                Vec<(String, WebhookNotificationEnvelope<T>, WebhookOptions)>,
+                serde_json::Error,
+            >>()?;
+
+    let webhook_payloads = serialised_webhook_envelopes
+        .into_iter()
+        .map(
+            |(serialised_envelope, webhook_notification_envelope, webhook_option)| {
+                let payload = WebhookJobPayload {
+                    url: webhook_option.url,
+                    body: serialised_envelope,
+                    headers: Some(
+                        [
+                            ("Content-Type".to_string(), "application/json".to_string()),
+                            (
+                                "User-Agent".to_string(),
+                                format!("{}/{}", envelope.executor_name, envelope.stage_name),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                    hmac_secret: webhook_option.secret, // TODO: Add HMAC support if needed
+                    http_method: Some("POST".to_string()),
+                };
+                return (payload, webhook_notification_envelope);
+            },
+        )
+        .collect::<Vec<_>>();
+
+    for (payload, webhook_notification_envelope) in webhook_payloads {
+        let mut webhook_job = webhook_queue.clone().job(payload);
+        webhook_job.options.id = format!(
+            "{}_{}_webhook",
+            webhook_notification_envelope.transaction_id,
+            webhook_notification_envelope.notification_id
+        );
+
+        tx.queue_job(webhook_job)?;
+        tracing::info!(
+            transaction_id = %webhook_notification_envelope.transaction_id,
+            executor = %webhook_notification_envelope.executor_name,
+            stage = %webhook_notification_envelope.stage_name,
+            event = ?webhook_notification_envelope.event_type,
+            notification_id = %webhook_notification_envelope.notification_id,
+            "Queued webhook notification"
+        );
+    }
+
+    Ok(())
 }
