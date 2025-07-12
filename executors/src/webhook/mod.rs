@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::env;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,7 +11,6 @@ use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
 use twmq::job::{BorrowedJob, JobError, JobResult, RequeuePosition, ToJobResult};
 use twmq::{DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable};
-use uuid::Uuid;
 
 use crate::webhook::envelope::{BareWebhookNotificationEnvelope, WebhookNotificationEnvelope};
 
@@ -479,7 +477,7 @@ pub fn queue_webhook_envelopes<T: Serialize + Clone>(
                     hmac_secret: webhook_option.secret, // TODO: Add HMAC support if needed
                     http_method: Some("POST".to_string()),
                 };
-                return (payload, webhook_notification_envelope);
+                (payload, webhook_notification_envelope)
             },
         )
         .collect::<Vec<_>>();

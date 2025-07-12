@@ -1,16 +1,16 @@
 use std::fmt::Display;
 
-use engine_core::error::EngineError;
 use serde::{Deserialize, Serialize};
 use twmq::job::RequeuePosition;
 
 use crate::{
     eoa::{
         store::{SubmittedTransaction, TransactionData},
-        worker::ConfirmedTransactionWithRichReceipt,
+        worker::{ConfirmedTransactionWithRichReceipt, EoaExecutorWorkerError},
     },
     webhook::envelope::{
-        BareWebhookNotificationEnvelope, SerializableNackData, SerializableSuccessData, StageEvent,
+        BareWebhookNotificationEnvelope, SerializableFailData, SerializableNackData,
+        SerializableSuccessData, StageEvent,
     },
 };
 
@@ -21,13 +21,12 @@ pub struct EoaExecutorEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EoaSendAttemptNackData {
     pub nonce: u64,
-    pub error: EngineError,
+    pub error: EoaExecutorWorkerError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EoaExecutorStage {
     SendAttempt,
-    SendAttemptNack,
     TransactionReplaced,
     TransactionConfirmed,
 }
@@ -36,7 +35,6 @@ impl Display for EoaExecutorStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EoaExecutorStage::SendAttempt => write!(f, "send_attempt"),
-            EoaExecutorStage::SendAttemptNack => write!(f, "send_attempt_nack"),
             EoaExecutorStage::TransactionReplaced => write!(f, "transaction_replaced"),
             EoaExecutorStage::TransactionConfirmed => write!(f, "transaction_confirmed"),
         }
@@ -46,7 +44,7 @@ impl Display for EoaExecutorStage {
 const EXECUTOR_NAME: &str = "eoa";
 
 impl EoaExecutorEvent {
-    pub fn send_attempt_success_envelopes(
+    pub fn send_attempt_success_envelope(
         &self,
         submitted_transaction: SubmittedTransaction,
     ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransaction>> {
@@ -61,16 +59,16 @@ impl EoaExecutorEvent {
         }
     }
 
-    pub fn send_attempt_nack_envelopes(
+    pub fn send_attempt_nack_envelope(
         &self,
         nonce: u64,
-        error: EngineError,
+        error: EoaExecutorWorkerError,
         attempt_number: u32,
     ) -> BareWebhookNotificationEnvelope<SerializableNackData<EoaSendAttemptNackData>> {
         BareWebhookNotificationEnvelope {
             transaction_id: self.transaction_data.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::SendAttemptNack.to_string(),
+            stage_name: EoaExecutorStage::SendAttempt.to_string(),
             event_type: StageEvent::Nack,
             payload: SerializableNackData {
                 error: EoaSendAttemptNackData {
@@ -86,7 +84,7 @@ impl EoaExecutorEvent {
         }
     }
 
-    pub fn transaction_replaced_envelopes(
+    pub fn transaction_replaced_envelope(
         &self,
         replaced_transaction: SubmittedTransaction,
     ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransaction>> {
@@ -101,7 +99,7 @@ impl EoaExecutorEvent {
         }
     }
 
-    pub fn transaction_confirmed_envelopes(
+    pub fn transaction_confirmed_envelope(
         &self,
         confirmed_transaction: ConfirmedTransactionWithRichReceipt,
     ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<ConfirmedTransactionWithRichReceipt>>
@@ -113,6 +111,23 @@ impl EoaExecutorEvent {
             event_type: StageEvent::Success,
             payload: SerializableSuccessData {
                 result: confirmed_transaction.clone(),
+            },
+        }
+    }
+
+    pub fn transaction_failed_envelope(
+        &self,
+        error: EoaExecutorWorkerError,
+        final_attempt_number: u32,
+    ) -> BareWebhookNotificationEnvelope<SerializableFailData<EoaExecutorWorkerError>> {
+        BareWebhookNotificationEnvelope {
+            transaction_id: self.transaction_data.transaction_id.clone(),
+            executor_name: EXECUTOR_NAME.to_string(),
+            stage_name: EoaExecutorStage::SendAttempt.to_string(),
+            event_type: StageEvent::Failure,
+            payload: SerializableFailData {
+                error: error.clone(),
+                final_attempt_number,
             },
         }
     }
