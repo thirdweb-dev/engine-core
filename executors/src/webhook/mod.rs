@@ -436,7 +436,7 @@ pub fn queue_webhook_envelopes<T: Serialize + Clone>(
     tx: &mut TransactionContext<'_>,
     webhook_queue: Arc<Queue<WebhookJobHandler>>,
 ) -> Result<(), TwmqError> {
-    let now = chrono::Utc::now().timestamp().min(0) as u64;
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
     let serialised_webhook_envelopes =
         webhook_options
             .iter()
