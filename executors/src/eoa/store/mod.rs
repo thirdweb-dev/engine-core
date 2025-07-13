@@ -1,4 +1,4 @@
-use alloy::consensus::{Signed, TypedTransaction};
+use alloy::consensus::{Signed, Transaction, TypedTransaction};
 use alloy::network::AnyTransactionReceipt;
 use alloy::primitives::{Address, Bytes, U256};
 use chrono;
@@ -11,10 +11,15 @@ use std::collections::HashMap;
 use twmq::redis::{AsyncCommands, aio::ConnectionManager};
 
 mod atomic;
+mod borrowed;
+mod pending;
 mod submitted;
 
 pub mod error;
 pub use atomic::AtomicEoaExecutorStore;
+pub use borrowed::{
+    BorrowedProcessingReport, SubmissionErrorFail, SubmissionErrorNack, SubmissionResult,
+};
 pub use submitted::{CleanupReport, SubmittedTransaction};
 
 use crate::eoa::store::submitted::SubmittedTransactionStringWithNonce;
@@ -32,6 +37,21 @@ pub struct ConfirmedTransaction {
     pub hash: String,
     pub transaction_id: String,
     pub receipt_data: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingTransaction {
+    pub transaction_id: String,
+    pub queued_at: u64,
+}
+
+impl From<(String, u64)> for PendingTransaction {
+    fn from((transaction_id, queued_at): (String, u64)) -> Self {
+        Self {
+            transaction_id,
+            queued_at,
+        }
+    }
 }
 
 /// The actual user request data
@@ -120,6 +140,7 @@ impl EoaExecutorStoreKeys {
     /// - "status": String status ("confirmed", "failed", etc.)
     /// - "completed_at": String Unix timestamp (optional)
     /// - "created_at": String Unix timestamp (optional)
+    /// - "failure_reason": String failure reason (optional)
     pub fn transaction_data_key_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
             Some(ns) => format!("{ns}:eoa_executor:tx_data:{transaction_id}"),
@@ -138,7 +159,9 @@ impl EoaExecutorStoreKeys {
         }
     }
 
-    /// Name of the list for pending transactions
+    /// Name of the zset for pending transactions
+    ///
+    /// zset contains the `transaction_id` scored by the queued_at timestamp (unix timestamp in milliseconds)
     pub fn pending_transactions_zset_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
@@ -194,7 +217,7 @@ impl EoaExecutorStoreKeys {
     /// we add the nonce to this set.
     ///
     /// These nonces are used with priority, before any other nonces.
-    pub fn recycled_nonces_set_name(&self) -> String {
+    pub fn recycled_nonces_zset_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
                 "{ns}:eoa_executor:recycled_nonces:{}:{}",
@@ -300,8 +323,20 @@ pub struct EoaHealth {
 pub struct BorrowedTransactionData {
     pub transaction_id: String,
     pub signed_transaction: Signed<TypedTransaction>,
+    pub queued_at: u64,
     pub hash: String,
     pub borrowed_at: u64,
+}
+
+impl Into<SubmittedTransaction> for &BorrowedTransactionData {
+    fn into(self) -> SubmittedTransaction {
+        SubmittedTransaction {
+            nonce: self.signed_transaction.nonce(),
+            hash: self.signed_transaction.hash().to_string(),
+            transaction_id: self.transaction_id.clone(),
+            queued_at: self.queued_at,
+        }
+    }
 }
 
 /// Type of nonce allocation for transaction processing
@@ -438,7 +473,7 @@ impl EoaExecutorStore {
 
     /// Peek recycled nonces without removing them
     pub async fn peek_recycled_nonces(&self) -> Result<Vec<u64>, TransactionStoreError> {
-        let recycled_key = self.recycled_nonces_set_name();
+        let recycled_key = self.recycled_nonces_zset_name();
         let mut conn = self.redis.clone();
 
         let nonces: Vec<u64> = conn.zrange(&recycled_key, 0, -1).await?;
@@ -449,14 +484,19 @@ impl EoaExecutorStore {
     pub async fn peek_pending_transactions(
         &self,
         limit: u64,
-    ) -> Result<Vec<String>, TransactionStoreError> {
+    ) -> Result<Vec<PendingTransaction>, TransactionStoreError> {
         let pending_key = self.pending_transactions_zset_name();
         let mut conn = self.redis.clone();
 
-        // Use LRANGE to peek without removing
-        let transaction_ids: Vec<String> =
-            conn.lrange(&pending_key, 0, (limit as isize) - 1).await?;
-        Ok(transaction_ids)
+        // Use ZRANGE to peek without removing
+        let transaction_ids: Vec<(String, u64)> = conn
+            .zrange_withscores(&pending_key, 0, (limit - 1) as isize)
+            .await?;
+
+        Ok(transaction_ids
+            .into_iter()
+            .map(PendingTransaction::from)
+            .collect())
     }
 
     /// Get inflight budget (how many new transactions can be sent)
@@ -491,7 +531,7 @@ impl EoaExecutorStore {
     }
 
     /// Get current optimistic nonce (without incrementing)
-    pub async fn get_optimistic_nonce(&self) -> Result<u64, TransactionStoreError> {
+    pub async fn get_optimistic_transaction_count(&self) -> Result<u64, TransactionStoreError> {
         let optimistic_key = self.optimistic_transaction_count_key_name();
         let mut conn = self.redis.clone();
 

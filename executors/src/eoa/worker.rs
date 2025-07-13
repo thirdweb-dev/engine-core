@@ -4,7 +4,7 @@ use alloy::consensus::{
 };
 use alloy::network::{TransactionBuilder, TransactionBuilder7702};
 use alloy::primitives::{Address, B256, Bytes, U256};
-use alloy::providers::Provider;
+use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionRequest as AlloyTransactionRequest;
 use alloy::signers::Signature;
 use alloy::transports::{RpcError, TransportErrorKind};
@@ -20,6 +20,7 @@ use engine_core::{
 use hex;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
+use thirdweb_core::iaw::IAWError;
 use tokio::time::sleep;
 use twmq::Queue;
 use twmq::redis::AsyncCommands;
@@ -33,7 +34,8 @@ use twmq::{
 
 use crate::eoa::store::{
     AtomicEoaExecutorStore, BorrowedTransactionData, CleanupReport, ConfirmedTransaction,
-    EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, EoaTransactionRequest, ReplacedTransaction,
+    EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, EoaTransactionRequest, PendingTransaction,
+    ReplacedTransaction, SubmissionErrorFail, SubmissionErrorNack, SubmissionResult,
     SubmittedTransaction, TransactionData, TransactionStoreError,
 };
 use crate::webhook::WebhookJobHandler;
@@ -45,6 +47,10 @@ const TARGET_TRANSACTIONS_PER_EOA: u64 = 10; // Fleet management from spec
 const MIN_TRANSACTIONS_PER_EOA: u64 = 1; // Fleet management from spec
 const HEALTH_CHECK_INTERVAL: u64 = 300; // 5 minutes in seconds
 const NONCE_STALL_TIMEOUT: u64 = 300_000; // 5 minutes in milliseconds - after this time, attempt gas bump
+
+// Retry constants for preparation phase
+const MAX_PREPARATION_RETRIES: u32 = 3;
+const PREPARATION_RETRY_DELAY_MS: u64 = 100;
 
 // ========== JOB DATA ==========
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -144,13 +150,13 @@ impl UserCancellable for EoaExecutorWorkerError {
 
 // ========== SIMPLE ERROR CLASSIFICATION ==========
 #[derive(Debug)]
-enum SendErrorClassification {
+pub enum SendErrorClassification {
     PossiblySent,         // "nonce too low", "already known" etc
     DeterministicFailure, // Invalid signature, malformed tx, insufficient funds etc
 }
 
 #[derive(PartialEq, Eq, Debug)]
-enum SendContext {
+pub enum SendContext {
     Rebroadcast,
     InitialBroadcast,
 }
@@ -238,6 +244,38 @@ fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
     }
 }
 
+fn is_retryable_preparation_error(error: &EoaExecutorWorkerError) -> bool {
+    match error {
+        EoaExecutorWorkerError::RpcError { inner_error, .. } => {
+            // extract the RpcErrorKind from the inner error
+            if let EngineError::RpcError { kind, .. } = inner_error {
+                is_retryable_rpc_error(kind)
+            } else {
+                false
+            }
+        }
+        EoaExecutorWorkerError::ChainServiceError { .. } => true, // Network related
+        EoaExecutorWorkerError::StoreError { inner_error, .. } => {
+            matches!(inner_error, TransactionStoreError::RedisError { .. })
+        }
+        EoaExecutorWorkerError::TransactionSimulationFailed { .. } => false, // Deterministic
+        EoaExecutorWorkerError::TransactionBuildFailed { .. } => false,      // Deterministic
+        EoaExecutorWorkerError::SigningError { inner_error, .. } => match inner_error {
+            // if vault error, it's not retryable
+            EngineError::VaultError { .. } => false,
+            // if iaw error, it's retryable only if it's a network error
+            EngineError::IawError { error, .. } => matches!(error, IAWError::NetworkError { .. }),
+            _ => false,
+        },
+        EoaExecutorWorkerError::TransactionNotFound { .. } => false, // Deterministic
+        EoaExecutorWorkerError::InternalError { .. } => false,       // Deterministic
+        EoaExecutorWorkerError::UserCancelled => false,              // Deterministic
+        EoaExecutorWorkerError::TransactionSendError { .. } => false, // Different context
+        EoaExecutorWorkerError::SignatureParsingFailed { .. } => false, // Deterministic
+        EoaExecutorWorkerError::WorkRemaining { .. } => false,       // Different context
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfirmedTransactionWithRichReceipt {
@@ -245,13 +283,6 @@ pub struct ConfirmedTransactionWithRichReceipt {
     pub hash: String,
     pub transaction_id: String,
     pub receipt: alloy::rpc::types::TransactionReceipt,
-}
-
-#[derive(Debug, Clone)]
-pub struct PreparedTransaction {
-    pub transaction_id: String,
-    pub signed_tx: Signed<TypedTransaction>,
-    pub nonce: u64,
 }
 
 // ========== MAIN WORKER ==========
@@ -356,6 +387,55 @@ where
         _tx: &mut TransactionContext<'_>,
     ) {
         self.release_eoa_lock(&job.job.data).await;
+    }
+}
+
+impl SubmissionResult {
+    /// Convert a send result to a SubmissionResult for batch processing
+    /// This handles the specific RpcError<TransportErrorKind> type from alloy
+    pub fn from_send_result<SR>(
+        borrowed_transaction: &BorrowedTransactionData,
+        send_result: Result<SR, RpcError<TransportErrorKind>>,
+        send_context: SendContext,
+        user_data: Option<TransactionData>,
+        chain: &impl Chain,
+    ) -> Self {
+        match send_result {
+            Ok(_) => SubmissionResult::Success(borrowed_transaction.into()),
+            Err(ref rpc_error) => {
+                match classify_send_error(rpc_error, send_context) {
+                    SendErrorClassification::PossiblySent => {
+                        SubmissionResult::Success(borrowed_transaction.into())
+                    }
+                    SendErrorClassification::DeterministicFailure => {
+                        // Transaction failed, should be retried
+                        let engine_error = rpc_error.to_engine_error(chain);
+                        let error = EoaExecutorWorkerError::TransactionSendError {
+                            message: format!("Transaction send failed: {}", rpc_error),
+                            inner_error: engine_error,
+                        };
+                        SubmissionResult::Nack(SubmissionErrorNack {
+                            transaction_id: borrowed_transaction.transaction_id.clone(),
+                            error,
+                            user_data,
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper method for when we need to create a failure result
+    pub fn from_failure(
+        transaction_id: String,
+        error: EoaExecutorWorkerError,
+        user_data: Option<TransactionData>,
+    ) -> Self {
+        SubmissionResult::Fail(SubmissionErrorFail {
+            transaction_id,
+            error,
+            user_data,
+        })
     }
 }
 
@@ -492,66 +572,45 @@ where
 
         let rebroadcast_results = futures::future::join_all(rebroadcast_futures).await;
 
-        // Process results sequentially for Redis state changes
-        let mut recovered_count = 0;
-        // TODO: both borrowed -> submitted and borrowed -> recycled need to be batched instead of sequential
-        for (borrowed, send_result) in rebroadcast_results {
-            let nonce = borrowed.signed_transaction.nonce();
+        // Convert results to SubmissionResult for batch processing
+        let submission_results: Vec<SubmissionResult> = rebroadcast_results
+            .into_iter()
+            .map(|(borrowed, send_result)| {
+                SubmissionResult::from_send_result(
+                    borrowed,
+                    send_result,
+                    SendContext::Rebroadcast,
+                    None, // We'll let the batch operation fetch user data
+                    chain,
+                )
+            })
+            .collect();
 
-            match send_result {
-                Ok(_) => {
-                    // Transaction was sent successfully
-                    scoped
-                        .atomic_move_borrowed_to_submitted(
-                            nonce,
-                            &borrowed.hash,
-                            &borrowed.transaction_id,
-                        )
-                        .await?;
-                    tracing::info!(transaction_id = %borrowed.transaction_id, nonce = nonce, "Moved recovered transaction to submitted");
-                }
-                Err(e) => {
-                    match classify_send_error(&e, SendContext::Rebroadcast) {
-                        SendErrorClassification::PossiblySent => {
-                            // Transaction possibly sent, move to submitted
-                            scoped
-                                .atomic_move_borrowed_to_submitted(
-                                    nonce,
-                                    &borrowed.hash,
-                                    &borrowed.transaction_id,
-                                )
-                                .await?;
-                            tracing::info!(transaction_id = %borrowed.transaction_id, nonce = nonce, "Moved recovered transaction to submitted (possibly sent)");
-                        }
-                        SendErrorClassification::DeterministicFailure => {
-                            // Transaction is broken, recycle nonce and requeue
-                            scoped
-                                .atomic_move_borrowed_to_recycled(nonce, &borrowed.transaction_id)
-                                .await?;
-                            tracing::warn!(transaction_id = %borrowed.transaction_id, nonce = nonce, error = %e, "Recycled failed transaction");
+        // TODO: Implement post-processing analysis for balance threshold updates and nonce resets
+        // Currently we lose the granular error handling that was in the individual atomic operations.
+        // Consider:
+        // 1. Analyzing submission_results for specific error patterns
+        // 2. Calling update_balance_threshold if needed
+        // 3. Detecting nonce reset conditions
+        // 4. Or move this logic into the batch processor itself
 
-                            if should_update_balance_threshold(&e.to_engine_error(chain)) {
-                                self.update_balance_threshold(scoped, chain).await?;
-                            }
+        // Process all results in one batch operation
+        let report = scoped
+            .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+            .await?;
 
-                            // Check if this should trigger nonce reset
-                            if should_trigger_nonce_reset(&e) {
-                                tracing::warn!(
-                                    eoa = %scoped.eoa(),
-                                    chain_id = %scoped.chain_id(),
-                                    "Nonce too high error detected, may need nonce synchronization"
-                                );
-                                // The next confirm_flow will fetch fresh nonce and auto-sync
-                            }
-                        }
-                    }
-                }
-            }
+        // TODO: Handle post-processing updates here if needed
+        // For now, we skip the individual error analysis that was done in the old atomic approach
 
-            recovered_count += 1;
-        }
+        tracing::info!(
+            "Recovered {} transactions: {} submitted, {} recycled, {} failed",
+            report.total_processed,
+            report.moved_to_submitted,
+            report.moved_to_pending,
+            report.failed_transactions
+        );
 
-        Ok(recovered_count)
+        Ok(report.total_processed as u32)
     }
 
     // ========== CONFIRM FLOW ==========
@@ -760,258 +819,185 @@ where
             return Ok(0);
         }
 
-        // Get pending transactions
-        let pending_txs = scoped
-            .peek_pending_transactions(recycled_nonces.len() as u64)
-            .await?;
+        let mut total_sent = 0;
+        let mut remaining_nonces = recycled_nonces;
 
-        // let highest_submitted_nonce_txs =
-        //     scoped.get_highest_submitted_nonce_tranasactions().await?;
+        // Loop to handle preparation failures and refill with new transactions
+        while !remaining_nonces.is_empty() {
+            // Get pending transactions to match with recycled nonces
+            let pending_txs = scoped
+                .peek_pending_transactions(remaining_nonces.len() as u64)
+                .await?;
 
-        // let highest_submitted_nonce = highest_submitted_nonce_txs
-        //     .first()
-        //     .and_then(|tx| Some(tx.nonce));
+            if pending_txs.is_empty() {
+                tracing::debug!("No pending transactions available for recycled nonces");
+                break;
+            }
 
-        // 1. SEQUENTIAL REDIS: Collect nonce-transaction pairs
-        let mut nonce_tx_pairs = Vec::new();
-        for (i, nonce) in recycled_nonces.into_iter().enumerate() {
-            if let Some(tx_id) = pending_txs.get(i) {
-                // Get transaction data
-                if let Some(tx_data) = scoped.get_transaction_data(tx_id).await? {
-                    nonce_tx_pairs.push((nonce, tx_id.clone(), tx_data));
+            // Pair recycled nonces with pending transactions
+            let mut build_tasks = Vec::new();
+            let mut nonce_tx_pairs = Vec::new();
+
+            for (i, nonce) in remaining_nonces.iter().enumerate() {
+                if let Some(p_tx) = pending_txs.get(i) {
+                    build_tasks.push(self.build_and_sign_single_transaction_with_retries(
+                        scoped, p_tx, *nonce, chain,
+                    ));
+                    nonce_tx_pairs.push((*nonce, p_tx.clone()));
                 } else {
-                    tracing::warn!("Transaction data not found for {}", tx_id);
-                    continue;
+                    // No more pending transactions for this recycled nonce
+                    tracing::debug!("No pending transaction for recycled nonce {}", nonce);
+                    break;
                 }
-            } else {
-                // No pending transactions - skip recycled nonces without pending transactions
-                tracing::debug!("No pending transaction for recycled nonce {}", nonce);
+            }
+
+            if build_tasks.is_empty() {
+                break;
+            }
+
+            // Build and sign all transactions in parallel
+            let prepared_results = futures::future::join_all(build_tasks).await;
+
+            // Separate successful preparations from failures
+            let mut prepared_txs = Vec::new();
+            let mut failed_tx_ids = Vec::new();
+            let mut balance_threshold_update_needed = false;
+
+            for (i, result) in prepared_results.into_iter().enumerate() {
+                match result {
+                    Ok(borrowed_data) => {
+                        prepared_txs.push(borrowed_data);
+                    }
+                    Err(e) => {
+                        // Track balance threshold issues
+                        if let EoaExecutorWorkerError::TransactionSimulationFailed {
+                            inner_error,
+                            ..
+                        } = &e
+                        {
+                            if should_update_balance_threshold(inner_error) {
+                                balance_threshold_update_needed = true;
+                            }
+                        } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
+                            if should_update_balance_threshold(inner_error) {
+                                balance_threshold_update_needed = true;
+                            }
+                        }
+
+                        let (_nonce, pending_tx) = &nonce_tx_pairs[i];
+                        tracing::warn!(
+                            "Failed to build recycled transaction {}: {}",
+                            pending_tx.transaction_id,
+                            e
+                        );
+
+                        // For deterministic build failures, fail the transaction immediately
+                        if !is_retryable_preparation_error(&e) {
+                            failed_tx_ids.push(pending_tx.transaction_id.clone());
+                        }
+                    }
+                }
+            }
+
+            // Fail deterministic failures from pending state
+            for tx_id in failed_tx_ids {
+                if let Err(e) = scoped
+                    .fail_pending_transaction(
+                        &tx_id,
+                        "Deterministic preparation failure",
+                        self.webhook_queue.clone(),
+                    )
+                    .await
+                {
+                    tracing::error!("Failed to fail pending transaction {}: {}", tx_id, e);
+                }
+            }
+
+            // Update balance threshold if needed
+            if balance_threshold_update_needed {
+                if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                    tracing::error!(
+                        "Failed to update balance threshold after build failures: {}",
+                        e
+                    );
+                }
+            }
+
+            if prepared_txs.is_empty() {
+                // No successful preparations, try again with more pending transactions
+                // Remove the nonces we couldn't use from our list
+                remaining_nonces = remaining_nonces
+                    .into_iter()
+                    .skip(nonce_tx_pairs.len())
+                    .collect();
                 continue;
             }
-        }
 
-        if nonce_tx_pairs.is_empty() {
-            return Ok(0);
-        }
+            // Move prepared transactions to borrowed state with recycled nonces
+            let moved_count = scoped
+                .atomic_move_pending_to_borrowed_with_recycled_nonces(&prepared_txs)
+                .await?;
 
-        // 2. PARALLEL BUILD/SIGN: Build and sign all transactions in parallel
-        let build_futures: Vec<_> = nonce_tx_pairs
-            .iter()
-            .map(|(nonce, transaction_id, tx_data)| async move {
-                let prepared = self
-                    .build_and_sign_transaction(tx_data, *nonce, chain)
-                    .await;
-                (*nonce, transaction_id, prepared)
-            })
-            .collect();
+            tracing::debug!(
+                moved_count = moved_count,
+                total_prepared = prepared_txs.len(),
+                "Moved transactions to borrowed state using recycled nonces"
+            );
 
-        let build_results = futures::future::join_all(build_futures).await;
+            // Actually send the transactions to the blockchain
+            let send_tasks: Vec<_> = prepared_txs
+                .iter()
+                .map(|borrowed_tx| {
+                    let signed_tx = borrowed_tx.signed_transaction.clone();
+                    async move { chain.provider().send_tx_envelope(signed_tx.into()).await }
+                })
+                .collect();
 
-        // 3. SEQUENTIAL REDIS: Move successfully built transactions to borrowed state
-        let mut prepared_txs = Vec::new();
-        let mut balance_threshold_update_needed = false;
+            let send_results = futures::future::join_all(send_tasks).await;
 
-        for (nonce, transaction_id, build_result) in build_results {
-            match build_result {
-                Ok(signed_tx) => {
-                    let borrowed_data = BorrowedTransactionData {
-                        transaction_id: transaction_id.clone(),
-                        signed_transaction: signed_tx.clone(),
-                        hash: signed_tx.hash().to_string(),
-                        borrowed_at: chrono::Utc::now().timestamp_millis().max(0) as u64,
-                    };
+            // Process send results and update states
+            let mut submission_results = Vec::new();
+            for (i, send_result) in send_results.into_iter().enumerate() {
+                let borrowed_tx = &prepared_txs[i];
+                let user_data = scoped
+                    .get_transaction_data(&borrowed_tx.transaction_id)
+                    .await?;
 
-                    // Try to atomically move from pending to borrowed with recycled nonce
-                    match scoped
-                        .atomic_move_pending_to_borrowed_with_recycled_nonce(
-                            transaction_id,
-                            nonce,
-                            &borrowed_data,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            let prepared = PreparedTransaction {
-                                transaction_id: transaction_id.clone(),
-                                signed_tx,
-                                nonce,
-                            };
-                            prepared_txs.push(prepared);
-                        }
-                        Err(TransactionStoreError::NonceNotInRecycledSet { .. }) => {
-                            tracing::debug!("Nonce {} was consumed by another worker", nonce);
-                            continue;
-                        }
-                        Err(TransactionStoreError::TransactionNotInPendingQueue { .. }) => {
-                            tracing::debug!("Transaction {} already processed", transaction_id);
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to move {} to borrowed: {}", transaction_id, e);
-                            continue;
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Accumulate balance threshold issues instead of updating immediately
-                    if let EoaExecutorWorkerError::TransactionSimulationFailed {
-                        inner_error, ..
-                    } = &e
-                    {
-                        if should_update_balance_threshold(inner_error) {
-                            balance_threshold_update_needed = true;
-                        }
-                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
-                        if should_update_balance_threshold(inner_error) {
-                            balance_threshold_update_needed = true;
-                        }
-                    }
-
-                    tracing::warn!("Failed to build transaction {}: {}", transaction_id, e);
-                    continue;
-                }
-            }
-        }
-
-        // Update balance threshold once if any build failures were due to balance issues
-        if balance_threshold_update_needed {
-            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
-                tracing::error!(
-                    "Failed to update balance threshold after parallel build failures: {}",
-                    e
+                let submission_result = SubmissionResult::from_send_result(
+                    borrowed_tx,
+                    send_result,
+                    SendContext::InitialBroadcast,
+                    user_data,
+                    chain,
                 );
+                submission_results.push(submission_result);
+            }
+
+            // Use batch processing to handle all submission results
+            let processing_report = scoped
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+                .await?;
+
+            tracing::debug!(
+                "Processed {} borrowed transactions: {} moved to submitted, {} moved to pending, {} failed",
+                processing_report.total_processed,
+                processing_report.moved_to_submitted,
+                processing_report.moved_to_pending,
+                processing_report.failed_transactions
+            );
+
+            total_sent += processing_report.moved_to_submitted;
+
+            // Remove the nonces we successfully processed from our list
+            remaining_nonces = remaining_nonces.into_iter().skip(moved_count).collect();
+
+            // If we didn't use all available nonces, we ran out of pending transactions
+            if moved_count < nonce_tx_pairs.len() {
+                break;
             }
         }
 
-        if prepared_txs.is_empty() {
-            return Ok(0);
-        }
-
-        // 4. PARALLEL SEND: Send all transactions in parallel
-        let send_futures: Vec<_> = prepared_txs
-            .iter()
-            .map(|prepared| async move {
-                let result = chain
-                    .provider()
-                    .send_tx_envelope(prepared.signed_tx.clone().into())
-                    .await;
-                (prepared, result)
-            })
-            .collect();
-
-        let send_results = futures::future::join_all(send_futures).await;
-
-        // 5. SEQUENTIAL REDIS: Process results and update states
-        let mut sent_count = 0;
-        for (prepared, send_result) in send_results {
-            match send_result {
-                Ok(_) => {
-                    // Transaction sent successfully
-                    match scoped
-                        .atomic_move_borrowed_to_submitted(
-                            prepared.nonce,
-                            &prepared.signed_tx.hash().to_string(),
-                            &prepared.transaction_id,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            sent_count += 1;
-                            tracing::info!(
-                                transaction_id = %prepared.transaction_id,
-                                nonce = prepared.nonce,
-                                hash = ?prepared.signed_tx.hash(),
-                                "Successfully sent recycled transaction"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to move {} to submitted: {}",
-                                prepared.transaction_id,
-                                e
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    match classify_send_error(&e, SendContext::InitialBroadcast) {
-                        SendErrorClassification::PossiblySent => {
-                            // Move to submitted state
-                            match scoped
-                                .atomic_move_borrowed_to_submitted(
-                                    prepared.nonce,
-                                    &format!("{:?}", prepared.signed_tx.hash()),
-                                    &prepared.transaction_id,
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    sent_count += 1;
-                                    tracing::info!(
-                                        transaction_id = %prepared.transaction_id,
-                                        nonce = prepared.nonce,
-                                        "Recycled transaction possibly sent"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to move {} to submitted: {}",
-                                        prepared.transaction_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        SendErrorClassification::DeterministicFailure => {
-                            // Recycle nonce and requeue transaction
-                            match scoped
-                                .atomic_move_borrowed_to_recycled(
-                                    prepared.nonce,
-                                    &prepared.transaction_id,
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    tracing::warn!(
-                                        transaction_id = %prepared.transaction_id,
-                                        nonce = prepared.nonce,
-                                        error = %e,
-                                        "Recycled transaction failed, re-recycled nonce"
-                                    );
-
-                                    if should_update_balance_threshold(&e.to_engine_error(chain)) {
-                                        if let Err(e) =
-                                            self.update_balance_threshold(scoped, chain).await
-                                        {
-                                            tracing::error!(
-                                                "Failed to update balance threshold: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-
-                                    if should_trigger_nonce_reset(&e) {
-                                        tracing::warn!(
-                                            nonce = prepared.nonce,
-                                            "Nonce too high error detected, may need nonce synchronization"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to move {} back to recycled: {}",
-                                        prepared.transaction_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(sent_count)
+        Ok(total_sent as u32)
     }
 
     async fn process_new_transactions(
@@ -1024,256 +1010,240 @@ where
             return Ok(0);
         }
 
-        // 1. SEQUENTIAL REDIS: Get pending transactions
-        let pending_txs = scoped.peek_pending_transactions(budget).await?;
-        if pending_txs.is_empty() {
-            return Ok(0);
-        }
+        let mut total_sent = 0;
+        let mut remaining_budget = budget;
 
-        let optimistic_nonce = scoped.get_optimistic_nonce().await?;
+        // Loop to handle preparation failures and refill with new transactions
+        while remaining_budget > 0 {
+            // 1. Get pending transactions
+            let pending_txs = scoped.peek_pending_transactions(remaining_budget).await?;
+            if pending_txs.is_empty() {
+                break;
+            }
 
-        // 2. PARALLEL BUILD/SIGN: Build and sign all transactions in parallel
-        let build_tasks: Vec<_> = pending_txs
-            .iter()
-            .enumerate()
-            .map(|(i, tx_id)| {
-                let expected_nonce = optimistic_nonce + i as u64;
-                self.build_and_sign_single_transaction(scoped, tx_id, expected_nonce, chain)
-            })
-            .collect();
+            let optimistic_nonce = scoped.get_optimistic_transaction_count().await?;
 
-        let prepared_results = futures::future::join_all(build_tasks).await;
+            // 2. Build and sign all transactions in parallel
+            let build_tasks: Vec<_> = pending_txs
+                .iter()
+                .enumerate()
+                .map(|(i, tx)| {
+                    let expected_nonce = optimistic_nonce + i as u64;
+                    self.build_and_sign_single_transaction_with_retries(
+                        scoped,
+                        tx,
+                        expected_nonce,
+                        chain,
+                    )
+                })
+                .collect();
 
-        // 3. SEQUENTIAL REDIS: Move successful transactions to borrowed state (maintain nonce order)
-        let mut prepared_txs = Vec::new();
-        let mut balance_threshold_update_needed = false;
+            let prepared_results = futures::future::join_all(build_tasks).await;
 
-        for (i, result) in prepared_results.into_iter().enumerate() {
-            match result {
-                Ok(prepared) => {
-                    let borrowed_data = BorrowedTransactionData {
-                        transaction_id: prepared.transaction_id.clone(),
-                        signed_transaction: prepared.signed_tx.clone(),
-                        hash: prepared.signed_tx.hash().to_string(),
-                        borrowed_at: chrono::Utc::now().timestamp_millis().max(0) as u64,
-                    };
+            // 3. Separate successful preparations from failures
+            let mut prepared_txs = Vec::new();
+            let mut failed_tx_ids = Vec::new();
+            let mut balance_threshold_update_needed = false;
 
-                    match scoped
-                        .atomic_move_pending_to_borrowed_with_new_nonce(
-                            &prepared.transaction_id,
-                            prepared.nonce,
-                            &borrowed_data,
-                        )
-                        .await
-                    {
-                        Ok(()) => prepared_txs.push(prepared),
-                        Err(TransactionStoreError::OptimisticNonceChanged { .. }) => {
-                            tracing::debug!(
-                                "Nonce changed for transaction {}, skipping",
-                                prepared.transaction_id
-                            );
-                            break; // Stop processing if nonce changed
+            for (i, result) in prepared_results.into_iter().enumerate() {
+                match result {
+                    Ok(borrowed_data) => {
+                        prepared_txs.push(borrowed_data);
+                    }
+                    Err(e) => {
+                        // Track balance threshold issues
+                        if let EoaExecutorWorkerError::TransactionSimulationFailed {
+                            inner_error,
+                            ..
+                        } = &e
+                        {
+                            if should_update_balance_threshold(inner_error) {
+                                balance_threshold_update_needed = true;
+                            }
+                        } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
+                            if should_update_balance_threshold(inner_error) {
+                                balance_threshold_update_needed = true;
+                            }
                         }
-                        Err(TransactionStoreError::TransactionNotInPendingQueue { .. }) => {
-                            tracing::debug!(
-                                "Transaction {} already processed, skipping",
-                                prepared.transaction_id
-                            );
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to move transaction {} to borrowed: {}",
-                                prepared.transaction_id,
-                                e
-                            );
-                            continue;
+
+                        let pending_tx = &pending_txs[i];
+                        tracing::warn!(
+                            "Failed to build transaction {}: {}",
+                            pending_tx.transaction_id,
+                            e
+                        );
+
+                        // For deterministic build failures, fail the transaction immediately
+                        if !is_retryable_preparation_error(&e) {
+                            failed_tx_ids.push(pending_tx.transaction_id.clone());
                         }
                     }
-                }
-                Err(e) => {
-                    // Accumulate balance threshold issues instead of updating immediately
-                    if let EoaExecutorWorkerError::TransactionSimulationFailed {
-                        inner_error, ..
-                    } = &e
-                    {
-                        if should_update_balance_threshold(inner_error) {
-                            balance_threshold_update_needed = true;
-                        }
-                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
-                        if should_update_balance_threshold(inner_error) {
-                            balance_threshold_update_needed = true;
-                        }
-                    }
-
-                    tracing::warn!("Failed to build transaction {}: {}", pending_txs[i], e);
-                    // Individual transaction failure doesn't stop the worker
-                    continue;
                 }
             }
-        }
 
-        // Update balance threshold once if any build failures were due to balance issues
-        if balance_threshold_update_needed {
-            if let Err(e) = self.update_balance_threshold(scoped, chain).await {
-                tracing::error!(
-                    "Failed to update balance threshold after parallel build failures: {}",
-                    e
+            // 4. Fail deterministic failures from pending state
+            for tx_id in failed_tx_ids {
+                if let Err(e) = scoped
+                    .fail_pending_transaction(
+                        &tx_id,
+                        "Deterministic preparation failure",
+                        self.webhook_queue.clone(),
+                    )
+                    .await
+                {
+                    tracing::error!("Failed to fail pending transaction {}: {}", tx_id, e);
+                }
+            }
+
+            // Update balance threshold if needed
+            if balance_threshold_update_needed {
+                if let Err(e) = self.update_balance_threshold(scoped, chain).await {
+                    tracing::error!(
+                        "Failed to update balance threshold after build failures: {}",
+                        e
+                    );
+                }
+            }
+
+            if prepared_txs.is_empty() {
+                // No successful preparations, try again with remaining budget
+                remaining_budget = remaining_budget.saturating_sub(pending_txs.len() as u64);
+                continue;
+            }
+
+            // 5. Move prepared transactions to borrowed state
+            let moved_count = scoped
+                .atomic_move_pending_to_borrowed_with_incremented_nonces(&prepared_txs)
+                .await?;
+
+            tracing::debug!(
+                moved_count = moved_count,
+                total_prepared = prepared_txs.len(),
+                "Moved transactions to borrowed state using incremented nonces"
+            );
+
+            // 6. Actually send the transactions to the blockchain
+            let send_tasks: Vec<_> = prepared_txs
+                .iter()
+                .map(|borrowed_tx| {
+                    let signed_tx = borrowed_tx.signed_transaction.clone();
+                    async move { chain.provider().send_tx_envelope(signed_tx.into()).await }
+                })
+                .collect();
+
+            let send_results = futures::future::join_all(send_tasks).await;
+
+            // 7. Process send results and update states
+            let mut submission_results = Vec::new();
+            for (i, send_result) in send_results.into_iter().enumerate() {
+                let borrowed_tx = &prepared_txs[i];
+                let user_data = scoped
+                    .get_transaction_data(&borrowed_tx.transaction_id)
+                    .await?;
+
+                let submission_result = SubmissionResult::from_send_result(
+                    borrowed_tx,
+                    send_result,
+                    SendContext::InitialBroadcast,
+                    user_data,
+                    chain,
                 );
+                submission_results.push(submission_result);
+            }
+
+            // 8. Use batch processing to handle all submission results
+            let processing_report = scoped
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+                .await?;
+
+            tracing::debug!(
+                "Processed {} borrowed transactions: {} moved to submitted, {} moved to pending, {} failed",
+                processing_report.total_processed,
+                processing_report.moved_to_submitted,
+                processing_report.moved_to_pending,
+                processing_report.failed_transactions
+            );
+
+            total_sent += processing_report.moved_to_submitted;
+            remaining_budget = remaining_budget.saturating_sub(moved_count as u64);
+
+            // If we didn't use all our budget, we ran out of pending transactions
+            if moved_count < pending_txs.len() {
+                break;
             }
         }
 
-        if prepared_txs.is_empty() {
-            return Ok(0);
-        }
-
-        // 4. PARALLEL SEND (but ordered): Send all transactions in parallel but in nonce order
-        let send_futures: Vec<_> = prepared_txs
-            .iter()
-            .enumerate()
-            .map(|(i, prepared)| async move {
-                // Add delay for ordering (except first transaction)
-                if i > 0 {
-                    sleep(Duration::from_millis(50 * i as u64)).await; // 50ms delay between consecutive nonces
-                }
-
-                let result = chain
-                    .provider()
-                    .send_tx_envelope(prepared.signed_tx.clone().into())
-                    .await;
-                (prepared, result)
-            })
-            .collect();
-
-        let send_results = futures::future::join_all(send_futures).await;
-
-        // 5. SEQUENTIAL REDIS: Process results and update states
-        let mut sent_count = 0;
-        for (prepared, send_result) in send_results {
-            match send_result {
-                Ok(pending) => {
-                    // Transaction sent successfully
-                    match scoped
-                        .atomic_move_borrowed_to_submitted(
-                            prepared.nonce,
-                            &pending.tx_hash().to_string(),
-                            &prepared.transaction_id,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            sent_count += 1;
-                            tracing::info!(
-                                transaction_id = %prepared.transaction_id,
-                                nonce = prepared.nonce,
-                                hash = ?prepared.signed_tx.hash(),
-                                "Successfully sent new transaction"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to move {} to submitted: {}",
-                                prepared.transaction_id,
-                                e
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    match classify_send_error(&e, SendContext::InitialBroadcast) {
-                        SendErrorClassification::PossiblySent => {
-                            // Move to submitted state
-                            match scoped
-                                .atomic_move_borrowed_to_submitted(
-                                    prepared.nonce,
-                                    &format!("{:?}", prepared.signed_tx.hash()),
-                                    &prepared.transaction_id,
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    sent_count += 1;
-                                    tracing::info!(
-                                        transaction_id = %prepared.transaction_id,
-                                        nonce = prepared.nonce,
-                                        "New transaction possibly sent"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to move {} to submitted: {}",
-                                        prepared.transaction_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        SendErrorClassification::DeterministicFailure => {
-                            // Recycle nonce and requeue transaction
-                            match scoped
-                                .atomic_move_borrowed_to_recycled(
-                                    prepared.nonce,
-                                    &prepared.transaction_id,
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    tracing::warn!(
-                                        transaction_id = %prepared.transaction_id,
-                                        nonce = prepared.nonce,
-                                        error = %e,
-                                        "New transaction failed, recycled nonce"
-                                    );
-
-                                    if should_update_balance_threshold(&e.to_engine_error(chain)) {
-                                        if let Err(e) =
-                                            self.update_balance_threshold(scoped, chain).await
-                                        {
-                                            tracing::error!(
-                                                "Failed to update balance threshold: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-
-                                    if should_trigger_nonce_reset(&e) {
-                                        tracing::warn!(
-                                            nonce = prepared.nonce,
-                                            "Nonce too high error detected, may need nonce synchronization"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to move {} to recycled: {}",
-                                        prepared.transaction_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(sent_count)
+        Ok(total_sent as u32)
     }
 
     // ========== TRANSACTION BUILDING & SENDING ==========
+    async fn build_and_sign_single_transaction_with_retries(
+        &self,
+        scoped: &AtomicEoaExecutorStore,
+        pending_transaction: &PendingTransaction,
+        nonce: u64,
+        chain: &impl Chain,
+    ) -> Result<BorrowedTransactionData, EoaExecutorWorkerError> {
+        let mut last_error = None;
+
+        // Internal retry loop for retryable errors
+        for attempt in 0..=MAX_PREPARATION_RETRIES {
+            if attempt > 0 {
+                // Simple exponential backoff
+                let delay = PREPARATION_RETRY_DELAY_MS * (2_u64.pow(attempt - 1));
+                sleep(Duration::from_millis(delay)).await;
+
+                tracing::debug!(
+                    transaction_id = %pending_transaction.transaction_id,
+                    attempt = attempt,
+                    "Retrying transaction preparation"
+                );
+            }
+
+            match self
+                .build_and_sign_single_transaction(scoped, pending_transaction, nonce, chain)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    if is_retryable_preparation_error(&error) && attempt < MAX_PREPARATION_RETRIES {
+                        tracing::warn!(
+                            transaction_id = %pending_transaction.transaction_id,
+                            attempt = attempt,
+                            error = %error,
+                            "Retryable error during transaction preparation, will retry"
+                        );
+                        last_error = Some(error);
+                        continue;
+                    } else {
+                        // Either deterministic error or exceeded max retries
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        // This should never be reached, but just in case
+        Err(
+            last_error.unwrap_or_else(|| EoaExecutorWorkerError::InternalError {
+                message: "Unexpected error in retry loop".to_string(),
+            }),
+        )
+    }
+
     async fn build_and_sign_single_transaction(
         &self,
         scoped: &AtomicEoaExecutorStore,
-        transaction_id: &str,
+        pending_transaction: &PendingTransaction,
         nonce: u64,
         chain: &impl Chain,
-    ) -> Result<PreparedTransaction, EoaExecutorWorkerError> {
+    ) -> Result<BorrowedTransactionData, EoaExecutorWorkerError> {
         // Get transaction data
         let tx_data = scoped
-            .get_transaction_data(transaction_id)
+            .get_transaction_data(&pending_transaction.transaction_id)
             .await?
             .ok_or_else(|| EoaExecutorWorkerError::TransactionNotFound {
-                transaction_id: transaction_id.to_string(),
+                transaction_id: pending_transaction.transaction_id.clone(),
             })?;
 
         // Build and sign transaction
@@ -1281,10 +1251,12 @@ where
             .build_and_sign_transaction(&tx_data, nonce, chain)
             .await?;
 
-        Ok(PreparedTransaction {
-            transaction_id: transaction_id.to_string(),
-            signed_tx,
-            nonce,
+        Ok(BorrowedTransactionData {
+            transaction_id: pending_transaction.transaction_id.clone(),
+            hash: signed_tx.hash().to_string(),
+            signed_transaction: signed_tx,
+            borrowed_at: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            queued_at: pending_transaction.queued_at,
         })
     }
 

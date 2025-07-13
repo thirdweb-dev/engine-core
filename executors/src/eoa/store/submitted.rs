@@ -121,7 +121,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
         conn: &mut ConnectionManager,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         let submitted_txs: Vec<SubmittedTransactionStringWithNonce> = conn
-            .zrange_withscores(
+            .zrangebyscore_withscores(
                 self.keys.submitted_transactions_zset_name(),
                 0,
                 self.last_confirmed_nonce as isize,
