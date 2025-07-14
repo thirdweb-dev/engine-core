@@ -7,6 +7,7 @@ use thirdweb_engine::{
     config,
     execution_router::ExecutionRouter,
     http::server::{EngineServer, EngineServerState},
+    kafka::create_kafka_producer,
     queue::manager::QueueManager,
 };
 use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -14,6 +15,12 @@ use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::Subscrib
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = config::get_config();
+
+    // Detect environment for Kafka group ID
+    let environment: config::Environment = std::env::var("APP_ENVIRONMENT")
+        .unwrap_or_else(|_| "local".into())
+        .try_into()
+        .expect("Failed to parse APP_ENVIRONMENT");
 
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -52,12 +59,17 @@ async fn main() -> anyhow::Result<()> {
     });
     let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
 
+    let kafka_producer = create_kafka_producer(config.kafka.clone(), &environment)
+        .map_err(|e| anyhow::anyhow!("Failed to create Kafka producer: {}", e))?;
+    tracing::info!("Kafka producer initialized (enabled: {})", kafka_producer.is_enabled());
+
     let queue_manager = QueueManager::new(
         &config.redis,
         &config.queue,
         chains.clone(),
         signer.clone(),
         eoa_signer.clone(),
+        kafka_producer.clone(),
     )
     .await?;
 
@@ -84,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
         transaction_registry: queue_manager.transaction_registry.clone(),
         vault_client: Arc::new(vault_client.clone()),
         chains: chains.clone(),
+        kafka_producer: kafka_producer.clone(),
     };
 
     let mut server = EngineServer::new(EngineServerState {
@@ -121,6 +134,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!("Error during coordinated shutdown: {}", e);
     } else {
         tracing::info!("All workers shut down successfully");
+    }
+
+    // Flush and shutdown Kafka producer
+    if let Err(e) = kafka_producer.flush().await {
+        tracing::error!("Error flushing Kafka producer during shutdown: {}", e);
+    } else {
+        tracing::info!("Kafka producer flushed successfully");
     }
 
     Ok(())
