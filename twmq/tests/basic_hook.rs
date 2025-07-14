@@ -54,7 +54,6 @@ pub struct WebhookJobOutput {
     pub response: String,
 }
 
-
 // Main job that queues webhook jobs
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MainJobPayload {
@@ -82,7 +81,10 @@ impl DurableExecution for MainJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = MainJobPayload;
 
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         println!("MAIN_JOB: Processing job with id: {}", job.job.id);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -125,7 +127,10 @@ impl DurableExecution for WebhookJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = WebhookJobPayload;
 
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         println!("WEBHOOK_JOB: Sending webhook to: {}", job.job.data.url);
         println!("WEBHOOK_JOB: Payload: {}", job.job.data.payload);
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -172,8 +177,10 @@ async fn test_cross_queue_job_scheduling() {
     println!("Creating main queue: {}", main_queue_name);
     println!("Creating webhook queue: {}", webhook_queue_name);
 
-    let mut queue_options = QueueOptions::default();
-    queue_options.local_concurrency = 1;
+    let mut queue_options = QueueOptions {
+        local_concurrency: 1,
+        ..Default::default()
+    };
 
     let webhook_handler = WebhookJobHandler;
 

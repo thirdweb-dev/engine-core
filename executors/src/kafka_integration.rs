@@ -1,20 +1,35 @@
 use alloy::primitives::{Address, Bytes, U256};
 use engine_core::rpc_clients::UserOperationReceipt;
 use serde::Serialize;
-use std::sync::Arc;
 
 /// Trait for sending transaction events to external messaging systems
 #[async_trait::async_trait]
 pub trait TransactionEventSender: Send + Sync {
-    async fn send_transaction_sent(&self, message: TransactionSentEvent);
-    async fn send_transaction_confirmed(&self, message: TransactionConfirmedEvent);
+    async fn send_transaction_sent(&self, event: TransactionSentEvent);
+    async fn send_transaction_confirmed(&self, event: TransactionConfirmedEvent);
 }
 
+/// No-op implementation for when messaging is disabled
+pub struct NoOpEventSender;
+
+#[async_trait::async_trait]
+impl TransactionEventSender for NoOpEventSender {
+    async fn send_transaction_sent(&self, _event: TransactionSentEvent) {
+        // Do nothing
+    }
+
+    async fn send_transaction_confirmed(&self, _event: TransactionConfirmedEvent) {
+        // Do nothing
+    }
+}
+
+pub type SharedEventSender = std::sync::Arc<dyn TransactionEventSender>;
+
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct TransactionSentEvent {
     pub transaction_id: String,
-    pub chain_id: u64,
+    pub chain_id: String,
     pub account_address: Address,
     pub user_op_hash: Bytes,
     pub nonce: U256,
@@ -25,7 +40,7 @@ pub struct TransactionSentEvent {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct TransactionConfirmedEvent {
     pub transaction_id: String,
     pub user_op_hash: Bytes,
@@ -36,18 +51,3 @@ pub struct TransactionConfirmedEvent {
     pub project_id: String,
 }
 
-/// No-op implementation for when messaging is disabled
-pub struct NoOpEventSender;
-
-#[async_trait::async_trait]
-impl TransactionEventSender for NoOpEventSender {
-    async fn send_transaction_sent(&self, _message: TransactionSentEvent) {
-        // Do nothing
-    }
-
-    async fn send_transaction_confirmed(&self, _message: TransactionConfirmedEvent) {
-        // Do nothing
-    }
-}
-
-pub type SharedEventSender = Arc<dyn TransactionEventSender>;

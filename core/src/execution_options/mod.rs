@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use crate::transaction::InnerTransaction;
 pub mod aa;
 pub mod auto;
-pub mod eoa;
 pub mod eip7702;
+pub mod eoa;
 
 // Base execution options for all transactions
 // All specific execution options share this
@@ -32,7 +32,7 @@ fn default_idempotency_key() -> String {
 #[schema(title = "Execution Option Variants")]
 pub enum SpecificExecutionOptions {
     #[serde(rename = "auto")]
-    #[schema(title = "Auto Determine Execution")]
+    #[schema(title = "Auto Determine Execution", default)]
     Auto(auto::AutoExecutionOptions),
 
     #[schema(title = "ERC-4337 Execution Options")]

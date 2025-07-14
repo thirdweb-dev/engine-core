@@ -404,11 +404,11 @@ impl ExecutionRouter {
             to: transaction.to,
             value: transaction.value,
             data: transaction.data.clone(),
-            gas_limit: eoa_execution_options.gas_limit,
+            gas_limit: transaction.gas_limit,
             webhook_options: webhook_options.clone(),
             signing_credential,
             rpc_credentials,
-            transaction_type_data: eoa_execution_options.transaction_type_data.clone(),
+            transaction_type_data: transaction.transaction_type_data.clone(),
         };
 
         // Add transaction to the store

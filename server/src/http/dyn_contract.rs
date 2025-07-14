@@ -198,8 +198,7 @@ impl ContractCall {
     fn extract_function_name(&self, method: &str) -> Result<String, EngineError> {
         let trimmed = method.trim();
 
-        if trimmed.starts_with("function ") {
-            let after_function = &trimmed[9..];
+        if let Some(after_function) = trimmed.strip_prefix("function ") {
             if let Some(paren_pos) = after_function.find('(') {
                 return Ok(after_function[..paren_pos].trim().to_string());
             }
@@ -315,6 +314,8 @@ impl ContractCall {
             to: Some(prepared.target),
             data: prepared.call_data.clone(),
             value,
+            gas_limit: None,
+            transaction_type_data: None,
         }
     }
 }
