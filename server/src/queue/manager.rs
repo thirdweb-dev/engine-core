@@ -5,7 +5,7 @@ use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
-    eoa::EoaExecutorWorker,
+    eoa::EoaExecutorJobHandler,
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
@@ -22,7 +22,7 @@ pub struct QueueManager {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
-    pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
+    pub eoa_executor_queue: Arc<Queue<EoaExecutorJobHandler<ThirdwebChainService>>>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
@@ -206,7 +206,7 @@ impl QueueManager {
             .arc();
 
         // Create EOA executor queue
-        let eoa_executor_handler = EoaExecutorWorker {
+        let eoa_executor_handler = EoaExecutorJobHandler {
             chain_service: chain_service.clone(),
             eoa_signer: eoa_signer.clone(),
             webhook_queue: webhook_queue.clone(),

@@ -5,8 +5,8 @@ use twmq::job::RequeuePosition;
 
 use crate::{
     eoa::{
-        store::{SubmittedTransaction, TransactionData},
-        worker::{ConfirmedTransactionWithRichReceipt, EoaExecutorWorkerError},
+        store::{ConfirmedTransaction, SubmittedTransactionDehydrated},
+        worker::error::EoaExecutorWorkerError,
     },
     webhook::envelope::{
         BareWebhookNotificationEnvelope, SerializableFailData, SerializableNackData,
@@ -15,7 +15,17 @@ use crate::{
 };
 
 pub struct EoaExecutorEvent {
-    pub transaction_data: TransactionData,
+    pub transaction_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "errorCode")]
+pub enum EoaConfirmationError {
+    #[error(
+        "Previously submitted attempt for transaction replaced at nonce with different transaction"
+    )]
+    #[serde(rename_all = "camelCase")]
+    TransactionReplaced { nonce: u64, hash: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,19 +34,22 @@ pub struct EoaSendAttemptNackData {
     pub error: EoaExecutorWorkerError,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EoaExecutorConfirmedTransaction {
+    pub receipt: alloy::rpc::types::TransactionReceipt,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EoaExecutorStage {
-    SendAttempt,
-    TransactionReplaced,
-    TransactionConfirmed,
+    Send,
+    Confirmation,
 }
 
 impl Display for EoaExecutorStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EoaExecutorStage::SendAttempt => write!(f, "send_attempt"),
-            EoaExecutorStage::TransactionReplaced => write!(f, "transaction_replaced"),
-            EoaExecutorStage::TransactionConfirmed => write!(f, "transaction_confirmed"),
+            EoaExecutorStage::Send => write!(f, "send"),
+            EoaExecutorStage::Confirmation => write!(f, "confirmation"),
         }
     }
 }
@@ -46,12 +59,13 @@ const EXECUTOR_NAME: &str = "eoa";
 impl EoaExecutorEvent {
     pub fn send_attempt_success_envelope(
         &self,
-        submitted_transaction: SubmittedTransaction,
-    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransaction>> {
+        submitted_transaction: SubmittedTransactionDehydrated,
+    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransactionDehydrated>>
+    {
         BareWebhookNotificationEnvelope {
-            transaction_id: self.transaction_data.transaction_id.clone(),
+            transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::SendAttempt.to_string(),
+            stage_name: EoaExecutorStage::Send.to_string(),
             event_type: StageEvent::Success,
             payload: SerializableSuccessData {
                 result: submitted_transaction.clone(),
@@ -66,9 +80,9 @@ impl EoaExecutorEvent {
         attempt_number: u32,
     ) -> BareWebhookNotificationEnvelope<SerializableNackData<EoaSendAttemptNackData>> {
         BareWebhookNotificationEnvelope {
-            transaction_id: self.transaction_data.transaction_id.clone(),
+            transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::SendAttempt.to_string(),
+            stage_name: EoaExecutorStage::Send.to_string(),
             event_type: StageEvent::Nack,
             payload: SerializableNackData {
                 error: EoaSendAttemptNackData {
@@ -86,31 +100,41 @@ impl EoaExecutorEvent {
 
     pub fn transaction_replaced_envelope(
         &self,
-        replaced_transaction: SubmittedTransaction,
-    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransaction>> {
+        replaced_transaction: SubmittedTransactionDehydrated,
+    ) -> BareWebhookNotificationEnvelope<SerializableNackData<EoaConfirmationError>> {
         BareWebhookNotificationEnvelope {
-            transaction_id: self.transaction_data.transaction_id.clone(),
+            transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::TransactionReplaced.to_string(),
-            event_type: StageEvent::Success,
-            payload: SerializableSuccessData {
-                result: replaced_transaction.clone(),
+            stage_name: EoaExecutorStage::Send.to_string(),
+            event_type: StageEvent::Nack,
+            payload: SerializableNackData {
+                error: EoaConfirmationError::TransactionReplaced {
+                    nonce: replaced_transaction.nonce,
+                    hash: replaced_transaction.hash,
+                },
+                delay_ms: None,
+                position: RequeuePosition::Last,
+                attempt_number: 0,
+                max_attempts: None,
+                next_retry_at: None,
             },
         }
     }
 
     pub fn transaction_confirmed_envelope(
         &self,
-        confirmed_transaction: ConfirmedTransactionWithRichReceipt,
-    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<ConfirmedTransactionWithRichReceipt>>
+        confirmed_transaction: ConfirmedTransaction,
+    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<EoaExecutorConfirmedTransaction>>
     {
         BareWebhookNotificationEnvelope {
-            transaction_id: self.transaction_data.transaction_id.clone(),
+            transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::TransactionConfirmed.to_string(),
+            stage_name: EoaExecutorStage::Confirmation.to_string(),
             event_type: StageEvent::Success,
             payload: SerializableSuccessData {
-                result: confirmed_transaction.clone(),
+                result: EoaExecutorConfirmedTransaction {
+                    receipt: confirmed_transaction.receipt,
+                },
             },
         }
     }
@@ -121,9 +145,9 @@ impl EoaExecutorEvent {
         final_attempt_number: u32,
     ) -> BareWebhookNotificationEnvelope<SerializableFailData<EoaExecutorWorkerError>> {
         BareWebhookNotificationEnvelope {
-            transaction_id: self.transaction_data.transaction_id.clone(),
+            transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::SendAttempt.to_string(),
+            stage_name: EoaExecutorStage::Send.to_string(),
             event_type: StageEvent::Failure,
             payload: SerializableFailData {
                 error: error.clone(),

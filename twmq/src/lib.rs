@@ -485,6 +485,7 @@ impl<H: DurableExecution> Queue<H> {
                     // Normal polling tick
                     _ = interval.tick() => {
                         let queue_clone = outer_queue_clone.clone();
+                        let queue_name = queue_clone.name();
 
                         // Check available permits for batch size
                         let available_permits = semaphore.available_permits();
@@ -504,7 +505,8 @@ impl<H: DurableExecution> Queue<H> {
                                     let job_id = job.id().to_string();
                                     let handler_clone = handler_clone.clone();
 
-                                    tokio::spawn(async move {
+                                    tokio::spawn(
+                                        async move {
                                         // Process job - note we don't pass a context here
                                         let result = handler_clone.process(&job).await;
 
@@ -519,7 +521,7 @@ impl<H: DurableExecution> Queue<H> {
 
                                         // Release permit when done
                                         drop(permit);
-                                    }.instrument(tracing::info_span!("twmq_worker", job_id)));
+                                    }.instrument(tracing::info_span!("twmq_worker", job_id, queue_name)));
                                 }
                             }
                             Err(e) => {

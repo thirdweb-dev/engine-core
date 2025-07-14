@@ -43,7 +43,7 @@ pub struct WebhookNotificationEnvelope<T> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct BareWebhookNotificationEnvelope<T: Clone> {
+pub struct BareWebhookNotificationEnvelope<T: Serialize + Clone> {
     pub transaction_id: String,
     pub event_type: StageEvent,
     pub executor_name: String,
@@ -104,7 +104,7 @@ pub trait ExecutorStage {
 
 // --- Webhook Options Trait ---
 pub trait HasWebhookOptions {
-    fn webhook_options(&self) -> Option<Vec<WebhookOptions>>;
+    fn webhook_options(&self) -> Vec<WebhookOptions>;
 }
 
 pub trait HasTransactionMetadata {
@@ -131,10 +131,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::Output: Serialize + Clone,
     {
-        let webhook_options = match job.job.data.webhook_options() {
-            Some(w) => w,
-            None => return Ok(()), // No webhook configured, skip silently
-        };
+        let webhook_options = job.job.data.webhook_options();
 
         for w in webhook_options {
             let envelope = WebhookNotificationEnvelope {
@@ -166,10 +163,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_options = match job.job.data.webhook_options() {
-            Some(w) => w,
-            None => return Ok(()), // No webhook configured, skip silently
-        };
+        let webhook_options = job.job.data.webhook_options();
         for w in webhook_options {
             let now: u64 = chrono::Utc::now().timestamp().try_into().unwrap();
             let next_retry_at = nack_data.delay.map(|delay| now + delay.as_secs());
@@ -207,10 +201,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::ErrorData: Serialize + Clone,
     {
-        let webhook_options = match job.job.data.webhook_options() {
-            Some(w) => w,
-            None => return Ok(()), // No webhook configured, skip silently
-        };
+        let webhook_options = job.job.data.webhook_options();
         for w in webhook_options {
             let envelope = WebhookNotificationEnvelope {
                 notification_id: Uuid::new_v4().to_string(),

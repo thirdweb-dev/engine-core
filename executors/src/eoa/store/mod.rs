@@ -8,6 +8,7 @@ use engine_core::execution_options::WebhookOptions;
 use engine_core::transaction::TransactionTypeData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ops::Deref;
 use twmq::redis::{AsyncCommands, aio::ConnectionManager};
 
 mod atomic;
@@ -15,14 +16,15 @@ mod borrowed;
 mod pending;
 mod submitted;
 
+pub mod hydrate;
+
 pub mod error;
 pub use atomic::AtomicEoaExecutorStore;
-pub use borrowed::{
-    BorrowedProcessingReport, SubmissionErrorFail, SubmissionErrorNack, SubmissionResult,
+pub use borrowed::{BorrowedProcessingReport, SubmissionResult, SubmissionResultType};
+pub use submitted::{
+    CleanupReport, SubmittedNoopTransaction, SubmittedTransaction, SubmittedTransactionDehydrated,
+    SubmittedTransactionHydrated, SubmittedTransactionStringWithNonce,
 };
-pub use submitted::{CleanupReport, SubmittedTransaction};
-
-use crate::eoa::store::submitted::SubmittedTransactionStringWithNonce;
 
 pub const NO_OP_TRANSACTION_ID: &str = "noop";
 
@@ -36,22 +38,18 @@ pub struct ReplacedTransaction {
 pub struct ConfirmedTransaction {
     pub hash: String,
     pub transaction_id: String,
-    pub receipt_data: String,
+    pub receipt: alloy::rpc::types::TransactionReceipt,
+    pub receipt_serialized: String,
 }
+
+/// (transaction_id, queued_at)
+type PendingTransactionStringWithQueuedAt = (String, u64);
 
 #[derive(Debug, Clone)]
 pub struct PendingTransaction {
     pub transaction_id: String,
     pub queued_at: u64,
-}
-
-impl From<(String, u64)> for PendingTransaction {
-    fn from((transaction_id, queued_at): (String, u64)) -> Self {
-        Self {
-            transaction_id,
-            queued_at,
-        }
-    }
+    pub user_request: EoaTransactionRequest,
 }
 
 /// The actual user request data
@@ -69,7 +67,8 @@ pub struct EoaTransactionRequest {
     #[serde(alias = "gas")]
     pub gas_limit: Option<u64>,
 
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
 
     pub signing_credential: SigningCredential,
     pub rpc_credentials: RpcCredentials,
@@ -95,12 +94,6 @@ pub struct TransactionData {
     pub receipt: Option<AnyTransactionReceipt>,
     pub attempts: Vec<TransactionAttempt>,
     pub created_at: u64, // Unix timestamp in milliseconds
-}
-
-pub struct BorrowedTransaction {
-    pub transaction_id: String,
-    pub data: Signed<TypedTransaction>,
-    pub borrowed_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Transaction store focused on transaction_id operations and nonce indexing
@@ -328,13 +321,35 @@ pub struct BorrowedTransactionData {
     pub borrowed_at: u64,
 }
 
-impl Into<SubmittedTransaction> for &BorrowedTransactionData {
-    fn into(self) -> SubmittedTransaction {
+#[derive(Debug, Clone)]
+pub struct BorrowedTransaction {
+    pub data: BorrowedTransactionData,
+    pub user_request: EoaTransactionRequest,
+}
+
+impl Deref for BorrowedTransaction {
+    type Target = BorrowedTransactionData;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl From<BorrowedTransactionData> for SubmittedTransactionDehydrated {
+    fn from(data: BorrowedTransactionData) -> Self {
+        SubmittedTransactionDehydrated {
+            nonce: data.signed_transaction.nonce(),
+            hash: data.signed_transaction.hash().to_string(),
+            transaction_id: data.transaction_id.clone(),
+            queued_at: data.queued_at,
+        }
+    }
+}
+
+impl From<BorrowedTransaction> for SubmittedTransaction {
+    fn from(data: BorrowedTransaction) -> Self {
         SubmittedTransaction {
-            nonce: self.signed_transaction.nonce(),
-            hash: self.signed_transaction.hash().to_string(),
-            transaction_id: self.transaction_id.clone(),
-            queued_at: self.queued_at,
+            data: data.data.into(),
+            user_request: data.user_request.clone(),
         }
     }
 }
@@ -412,7 +427,7 @@ impl EoaExecutorStore {
         let borrowed_map: HashMap<String, String> = conn.hgetall(&borrowed_key).await?;
         let mut result = Vec::new();
 
-        for (_nonce_str, transaction_json) in borrowed_map {
+        for (_transaction_id, transaction_json) in borrowed_map {
             let borrowed_data: BorrowedTransactionData = serde_json::from_str(&transaction_json)?;
             result.push(borrowed_data);
         }
@@ -422,20 +437,24 @@ impl EoaExecutorStore {
 
     /// Get all hashes below a certain nonce from submitted transactions
     /// Returns (nonce, hash, transaction_id) tuples
-    pub async fn get_submitted_transactions_below_nonce(
+    pub async fn get_submitted_transactions_below_chain_transaction_count(
         &self,
-        below_nonce: u64,
-    ) -> Result<Vec<SubmittedTransaction>, TransactionStoreError> {
+        count: u64,
+    ) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
         let submitted_key = self.submitted_transactions_zset_name();
         let mut conn = self.redis.clone();
 
-        // Get all entries with nonce < below_nonce
+        // Get all entries with nonce < transaction count
         let results: Vec<SubmittedTransactionStringWithNonce> = conn
-            .zrangebyscore_withscores(&submitted_key, 0, below_nonce - 1)
+            .zrangebyscore_withscores(&submitted_key, 0, count - 1)
             .await?;
 
-        let submitted_txs: Vec<SubmittedTransaction> =
-            SubmittedTransaction::from_redis_strings(&results);
+        let submitted_txs: Vec<SubmittedTransactionDehydrated> =
+            SubmittedTransactionDehydrated::from_redis_strings(&results);
 
         Ok(submitted_txs)
     }
@@ -444,7 +463,7 @@ impl EoaExecutorStore {
     pub async fn get_submitted_transactions_for_nonce(
         &self,
         nonce: u64,
-    ) -> Result<Vec<SubmittedTransaction>, TransactionStoreError> {
+    ) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
         let submitted_key = self.submitted_transactions_zset_name();
         let mut conn = self.redis.clone();
 
@@ -452,14 +471,14 @@ impl EoaExecutorStore {
             .zrangebyscore_withscores(&submitted_key, nonce, nonce)
             .await?;
 
-        let submitted_txs: Vec<SubmittedTransaction> =
-            SubmittedTransaction::from_redis_strings(&results);
+        let submitted_txs: Vec<SubmittedTransactionDehydrated> =
+            SubmittedTransactionDehydrated::from_redis_strings(&results);
 
         Ok(submitted_txs)
     }
 
     /// Check EOA health (balance, etc.)
-    pub async fn check_eoa_health(&self) -> Result<Option<EoaHealth>, TransactionStoreError> {
+    pub async fn get_eoa_health(&self) -> Result<Option<EoaHealth>, TransactionStoreError> {
         let mut conn = self.redis.clone();
 
         let health_json: Option<String> = conn.get(self.eoa_health_key_name()).await?;
@@ -489,14 +508,37 @@ impl EoaExecutorStore {
         let mut conn = self.redis.clone();
 
         // Use ZRANGE to peek without removing
-        let transaction_ids: Vec<(String, u64)> = conn
+        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> = conn
             .zrange_withscores(&pending_key, 0, (limit - 1) as isize)
             .await?;
 
-        Ok(transaction_ids
+        let mut pipe = twmq::redis::pipe();
+
+        for (transaction_id, _) in &transaction_ids {
+            let tx_data_key = self.transaction_data_key_name(transaction_id);
+            pipe.hget(&tx_data_key, "user_request");
+        }
+
+        let user_requests: Vec<String> = pipe.query_async(&mut conn).await?;
+
+        let user_requests: Vec<EoaTransactionRequest> = user_requests
             .into_iter()
-            .map(PendingTransaction::from)
-            .collect())
+            .map(|user_request_json| serde_json::from_str(&user_request_json))
+            .collect::<Result<Vec<EoaTransactionRequest>, serde_json::Error>>()?;
+
+        let pending_transactions: Vec<PendingTransaction> = transaction_ids
+            .into_iter()
+            .zip(user_requests)
+            .map(
+                |((transaction_id, queued_at), user_request)| PendingTransaction {
+                    transaction_id,
+                    queued_at,
+                    user_request,
+                },
+            )
+            .collect();
+
+        Ok(pending_transactions)
     }
 
     /// Get inflight budget (how many new transactions can be sent)
@@ -677,15 +719,15 @@ impl EoaExecutorStore {
     #[tracing::instrument(skip_all)]
     pub async fn get_highest_submitted_nonce_tranasactions(
         &self,
-    ) -> Result<Vec<SubmittedTransaction>, TransactionStoreError> {
+    ) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
         let submitted_key = self.submitted_transactions_zset_name();
         let mut conn = self.redis.clone();
 
         let highest_nonce_txs: Vec<SubmittedTransactionStringWithNonce> =
             conn.zrange_withscores(&submitted_key, -1, -1).await?;
 
-        let submitted_txs: Vec<SubmittedTransaction> =
-            SubmittedTransaction::from_redis_strings(&highest_nonce_txs);
+        let submitted_txs: Vec<SubmittedTransactionDehydrated> =
+            SubmittedTransactionDehydrated::from_redis_strings(&highest_nonce_txs);
 
         Ok(submitted_txs)
     }

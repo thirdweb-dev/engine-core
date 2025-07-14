@@ -161,7 +161,7 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
                     },
                     message,
                     format,
-                    self.credentials.clone(),
+                    &self.credentials,
                 )
                 .await
         }
@@ -189,7 +189,7 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
                         from: self.options.signer_address,
                     },
                     typed_data,
-                    self.credentials.clone(),
+                    &self.credentials,
                 )
                 .await;
         }
@@ -212,7 +212,7 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
                         from: self.options.signer_address,
                     },
                     typed_data,
-                    self.credentials.clone(),
+                    &self.credentials,
                 )
                 .await
         }
@@ -242,7 +242,7 @@ impl<C: Chain + Clone> SmartAccountSigner<C> {
                     from: self.options.signer_address,
                 },
                 &typed_data,
-                self.credentials.clone(),
+                &self.credentials,
             )
             .await
     }

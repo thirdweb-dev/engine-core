@@ -23,7 +23,7 @@ pub struct InnerTransaction {
     /// Gas limit for the transaction
     /// If not provided, engine will estimate the gas limit
     #[schema(value_type = Option<u64>)]
-    #[serde(default, rename = "gasLimit")]
+    #[serde(default, rename = "gasLimit", skip_serializing_if = "Option::is_none")]
     pub gas_limit: Option<u64>,
 
     /// Transaction type-specific data for different EIP standards
@@ -33,7 +33,7 @@ pub struct InnerTransaction {
     /// Depending on the execution mode chosen, these might be ignored:
     ///
     /// - For ERC4337 execution, all gas fee related fields are ignored. Sending signed authorizations is also not supported.
-    #[serde(flatten)]
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
     pub transaction_type_data: Option<TransactionTypeData>,
 }
 
@@ -58,14 +58,17 @@ pub struct Transaction7702Data {
     /// List of signed authorizations for contract delegation
     /// Each authorization allows the EOA to temporarily delegate to a smart contract
     #[schema(value_type = Option<Vec<SignedAuthorizationSchema>>)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_list: Option<Vec<SignedAuthorization>>,
 
     /// Maximum fee per gas willing to pay (in wei)
     /// This is the total fee cap including base fee and priority fee
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_fee_per_gas: Option<u128>,
 
     /// Maximum priority fee per gas willing to pay (in wei)
     /// This is the tip paid to validators for transaction inclusion
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_priority_fee_per_gas: Option<u128>,
 }
 
@@ -77,10 +80,12 @@ pub struct Transaction7702Data {
 pub struct Transaction1559Data {
     /// Maximum fee per gas willing to pay (in wei)
     /// This is the total fee cap including base fee and priority fee
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_fee_per_gas: Option<u128>,
 
     /// Maximum priority fee per gas willing to pay (in wei)
     /// This is the tip paid to validators for transaction inclusion
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_priority_fee_per_gas: Option<u128>,
 }
 
@@ -92,5 +97,6 @@ pub struct Transaction1559Data {
 pub struct TransactionLegacyData {
     /// Gas price willing to pay (in wei)
     /// This is the total price per unit of gas for legacy transactions
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gas_price: Option<u128>,
 }

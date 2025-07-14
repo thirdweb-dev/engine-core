@@ -34,7 +34,7 @@ pub struct UserOpConfirmationJobData {
     pub user_op_hash: Bytes,
     pub nonce: U256,
     pub deployment_lock_acquired: bool,
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    pub webhook_options: Vec<WebhookOptions>,
     pub rpc_credentials: RpcCredentials,
 }
 
@@ -338,7 +338,7 @@ where
 }
 
 impl HasWebhookOptions for UserOpConfirmationJobData {
-    fn webhook_options(&self) -> Option<Vec<WebhookOptions>> {
+    fn webhook_options(&self) -> Vec<WebhookOptions> {
         self.webhook_options.clone()
     }
 }

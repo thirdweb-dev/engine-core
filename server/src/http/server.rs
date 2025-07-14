@@ -64,6 +64,9 @@ impl EngineServer {
             .routes(routes!(
                 crate::http::routes::sign_typed_data::sign_typed_data
             ))
+            .routes(routes!(
+                crate::http::routes::admin::queue::empty_queue_idempotency_set
+            ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .with_state(state);

@@ -9,17 +9,22 @@ use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 use crate::{
     eoa::{
         EoaExecutorStore,
+        events::EoaExecutorEvent,
         store::{
-            BorrowedTransactionData, ConfirmedTransaction, EoaHealth, TransactionAttempt,
-            TransactionStoreError,
+            BorrowedTransactionData, ConfirmedTransaction, EoaHealth, PendingTransaction,
+            SubmittedTransactionDehydrated, TransactionAttempt, TransactionStoreError,
             borrowed::{BorrowedProcessingReport, ProcessBorrowedTransactions, SubmissionResult},
             pending::{
                 MovePendingToBorrowedWithIncrementedNonces, MovePendingToBorrowedWithRecycledNonces,
             },
-            submitted::{CleanSubmittedTransactions, CleanupReport, SubmittedTransaction},
+            submitted::{
+                CleanAndGetRecycledNonces, CleanSubmittedTransactions, CleanupReport,
+                SubmittedNoopTransaction, SubmittedTransaction,
+            },
         },
+        worker::error::EoaExecutorWorkerError,
     },
-    webhook::WebhookJobHandler,
+    webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
 
 const MAX_RETRIES: u32 = 10;
@@ -38,6 +43,7 @@ pub trait SafeRedisTransaction: Send + Sync {
     fn validation(
         &self,
         conn: &mut ConnectionManager,
+        store: &EoaExecutorStore,
     ) -> impl Future<Output = Result<Self::ValidationData, TransactionStoreError>> + Send;
     fn watch_keys(&self) -> Vec<String>;
 }
@@ -333,7 +339,7 @@ impl AtomicEoaExecutorStore {
             }
 
             // Execute validation
-            match safe_tx.validation(&mut conn).await {
+            match safe_tx.validation(&mut conn, &self.store).await {
                 Ok(validation_data) => {
                     // Build and execute pipeline
                     let mut pipeline = twmq::redis::pipe();
@@ -345,7 +351,8 @@ impl AtomicEoaExecutorStore {
                         .await
                     {
                         Ok(_) => return Ok(result), // Success
-                        Err(_) => {
+                        Err(e) => {
+                            tracing::error!("WATCH failed: {}", e);
                             // WATCH failed, check if it was our lock
                             let still_own_lock: Option<String> = conn.get(&lock_key).await?;
                             if still_own_lock.as_deref() != Some(self.worker_id()) {
@@ -393,7 +400,7 @@ impl AtomicEoaExecutorStore {
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
         // First, read current health data
-        let current_health = self.check_eoa_health().await?;
+        let current_health = self.get_eoa_health().await?;
 
         // Prepare health update if health data exists
         let health_update = if let Some(mut health) = current_health {
@@ -422,7 +429,7 @@ impl AtomicEoaExecutorStore {
     /// Add a gas bump attempt (new hash) to submitted transactions
     pub async fn add_gas_bump_attempt(
         &self,
-        submitted_transaction: &SubmittedTransaction,
+        submitted_transaction: &SubmittedTransactionDehydrated,
         signed_transaction: Signed<TypedTransaction>,
     ) -> Result<(), TransactionStoreError> {
         let new_hash = signed_transaction.hash().to_string();
@@ -472,7 +479,7 @@ impl AtomicEoaExecutorStore {
     ) -> Result<(), TransactionStoreError> {
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
-        let current_health = self.check_eoa_health().await?;
+        let current_health = self.get_eoa_health().await?;
 
         // Prepare health update if health data exists
         let health_update = if let Some(mut health) = current_health {
@@ -505,53 +512,44 @@ impl AtomicEoaExecutorStore {
         .await
     }
 
-    /// Fail a transaction that's in the borrowed state (we know the nonce)
-    pub async fn fail_borrowed_transaction(
-        &self,
-        transaction_id: &str,
-        nonce: u64,
-        failure_reason: &str,
-    ) -> Result<(), TransactionStoreError> {
-        self.with_lock_check(|pipeline| {
-            let borrowed_key = self.borrowed_transactions_hashmap_name();
-            let tx_data_key = self.transaction_data_key_name(transaction_id);
-            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-
-            // Remove from borrowed state using the known nonce
-            pipeline.hdel(&borrowed_key, nonce.to_string());
-
-            // Update transaction data with failure
-            pipeline.hset(&tx_data_key, "completed_at", now);
-            pipeline.hset(&tx_data_key, "failure_reason", failure_reason);
-            pipeline.hset(&tx_data_key, "status", "failed");
-        })
-        .await
-    }
-
     /// Fail a transaction that's in the pending state (remove from pending and fail)
     /// This is used for deterministic failures during preparation that should not retry
     pub async fn fail_pending_transaction(
         &self,
-        transaction_id: &str,
-        failure_reason: &str,
+        pending_transaction: &PendingTransaction,
+        error: EoaExecutorWorkerError,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<(), TransactionStoreError> {
         self.with_lock_check(|pipeline| {
             let pending_key = self.pending_transactions_zset_name();
-            let tx_data_key = self.transaction_data_key_name(transaction_id);
+            let tx_data_key = self.transaction_data_key_name(&pending_transaction.transaction_id);
             let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
             // Remove from pending state
-            pipeline.zrem(&pending_key, transaction_id);
+            pipeline.zrem(&pending_key, &pending_transaction.transaction_id);
 
             // Update transaction data with failure
             pipeline.hset(&tx_data_key, "completed_at", now);
-            pipeline.hset(&tx_data_key, "failure_reason", failure_reason);
+            pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
             pipeline.hset(&tx_data_key, "status", "failed");
 
-            // TODO: Queue webhook event for failed transaction
-            // let webhook_job = WebhookJobHandler::new(...);
-            // webhook_queue.push(webhook_job);
+            let event = EoaExecutorEvent {
+                transaction_id: pending_transaction.transaction_id.clone(),
+            };
+
+            let fail_envelope = event.transaction_failed_envelope(error.clone(), 1);
+
+            if !pending_transaction.user_request.webhook_options.is_empty() {
+                let mut tx_context = webhook_queue.transaction_context_from_pipeline(pipeline);
+                if let Err(e) = queue_webhook_envelopes(
+                    fail_envelope,
+                    pending_transaction.user_request.webhook_options.clone(),
+                    &mut tx_context,
+                    webhook_queue.clone(),
+                ) {
+                    tracing::error!("Failed to queue webhook for fail: {}", e);
+                }
+            }
         })
         .await
     }
@@ -560,11 +558,13 @@ impl AtomicEoaExecutorStore {
         &self,
         confirmed_transactions: &[ConfirmedTransaction],
         last_confirmed_nonce: u64,
+        webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<CleanupReport, TransactionStoreError> {
         self.execute_with_watch_and_retry(&CleanSubmittedTransactions {
             confirmed_transactions,
             last_confirmed_nonce,
             keys: &self.keys,
+            webhook_queue,
         })
         .await
     }
@@ -577,10 +577,46 @@ impl AtomicEoaExecutorStore {
         results: Vec<SubmissionResult>,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<BorrowedProcessingReport, TransactionStoreError> {
+        dbg!("getting here", &results);
         self.execute_with_watch_and_retry(&ProcessBorrowedTransactions {
             results,
             keys: &self.keys,
             webhook_queue,
+        })
+        .await
+    }
+
+    pub async fn clean_and_get_recycled_nonces(&self) -> Result<Vec<u64>, TransactionStoreError> {
+        self.execute_with_watch_and_retry(&CleanAndGetRecycledNonces { keys: &self.keys })
+            .await
+    }
+
+    pub async fn process_noop_transactions(
+        &self,
+        noop_transactions: &[SubmittedNoopTransaction],
+    ) -> Result<(), TransactionStoreError> {
+        self.with_lock_check(|pipeline| {
+            let recycled_key = self.recycled_nonces_zset_name();
+            let submitted_key = self.submitted_transactions_zset_name();
+
+            pipeline.zrem(
+                &recycled_key,
+                noop_transactions
+                    .iter()
+                    .map(|tx| tx.nonce)
+                    .collect::<Vec<_>>(),
+            );
+
+            pipeline.zadd_multiple(
+                submitted_key,
+                &noop_transactions
+                    .iter()
+                    .map(|tx| {
+                        let (tx_string, nonce) = tx.to_redis_string_with_nonce();
+                        (nonce, tx_string)
+                    })
+                    .collect::<Vec<_>>(),
+            );
         })
         .await
     }

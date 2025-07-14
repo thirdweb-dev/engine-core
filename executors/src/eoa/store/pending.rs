@@ -3,9 +3,12 @@ use std::collections::HashSet;
 use alloy::{consensus::Transaction, primitives::Address};
 use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
-use crate::eoa::store::{
-    BorrowedTransactionData, EoaExecutorStoreKeys, TransactionStoreError,
-    atomic::SafeRedisTransaction,
+use crate::eoa::{
+    EoaExecutorStore,
+    store::{
+        BorrowedTransactionData, EoaExecutorStoreKeys, TransactionStoreError,
+        atomic::SafeRedisTransaction,
+    },
 };
 
 /// Atomic operation to move pending transactions to borrowed state using incremented nonces
@@ -44,6 +47,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
     async fn validation(
         &self,
         conn: &mut ConnectionManager,
+        _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         if self.transactions.is_empty() {
             return Err(TransactionStoreError::InternalError {
@@ -55,11 +59,10 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         let current_optimistic: Option<u64> = conn
             .get(self.keys.optimistic_transaction_count_key_name())
             .await?;
-        let current_nonce =
-            current_optimistic.ok_or_else(|| TransactionStoreError::NonceSyncRequired {
-                eoa: self.eoa,
-                chain_id: self.chain_id,
-            })?;
+        let current_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
+            eoa: self.eoa,
+            chain_id: self.chain_id,
+        })?;
 
         // Extract and validate nonces
         let mut nonces: Vec<u64> = self
@@ -125,13 +128,11 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         let optimistic_key = self.keys.optimistic_transaction_count_key_name();
 
         for (tx, borrowed_json) in self.transactions.iter().zip(serialized_transactions.iter()) {
-            let nonce = tx.signed_transaction.nonce();
-
             // Remove from pending queue
             pipeline.zrem(&pending_key, &tx.transaction_id);
 
             // Add to borrowed state
-            pipeline.hset(&borrowed_key, nonce.to_string(), borrowed_json);
+            pipeline.hset(&borrowed_key, &tx.transaction_id, borrowed_json);
         }
 
         // Update optimistic tx count to highest nonce + 1
@@ -177,6 +178,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonces<'_> {
     async fn validation(
         &self,
         conn: &mut ConnectionManager,
+        _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         if self.transactions.is_empty() {
             return Err(TransactionStoreError::InternalError {
@@ -249,7 +251,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonces<'_> {
             pipeline.zrem(&pending_key, &tx.transaction_id);
 
             // Add to borrowed state
-            pipeline.hset(&borrowed_key, nonce.to_string(), borrowed_json);
+            pipeline.hset(&borrowed_key, &tx.transaction_id, borrowed_json);
         }
 
         self.transactions.len()

@@ -46,13 +46,14 @@ pub struct Eip7702SendJobData {
     pub transactions: Vec<InnerTransaction>,
     pub eoa_address: Address,
     pub signing_credential: SigningCredential,
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
     pub rpc_credentials: RpcCredentials,
     pub nonce: Option<U256>,
 }
 
 impl HasWebhookOptions for Eip7702SendJobData {
-    fn webhook_options(&self) -> Option<Vec<WebhookOptions>> {
+    fn webhook_options(&self) -> Vec<WebhookOptions> {
         self.webhook_options.clone()
     }
 }
@@ -243,7 +244,7 @@ where
             .sign_typed_data(
                 signing_options.clone(),
                 &typed_data,
-                job_data.signing_credential.clone(),
+                &job_data.signing_credential,
             )
             .await
             .map_err(|e| Eip7702SendError::SigningError {
@@ -272,7 +273,7 @@ where
                     job_data.chain_id,
                     MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
                     nonce,
-                    job_data.signing_credential.clone(),
+                    &job_data.signing_credential,
                 )
                 .await
                 .map_err(|e| Eip7702SendError::SigningError {

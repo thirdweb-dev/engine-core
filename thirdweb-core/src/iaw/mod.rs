@@ -214,9 +214,9 @@ impl IAWClient {
     /// Sign a message with an EOA
     pub async fn sign_message(
         &self,
-        auth_token: AuthToken,
-        thirdweb_auth: ThirdwebAuth,
-        message: String,
+        auth_token: &AuthToken,
+        thirdweb_auth: &ThirdwebAuth,
+        message: &str,
         _from: Address,
         _chain_id: Option<ChainId>,
         format: Option<MessageFormat>,
@@ -296,9 +296,9 @@ impl IAWClient {
     /// Sign a typed data structure with an EOA
     pub async fn sign_typed_data(
         &self,
-        auth_token: AuthToken,
-        thirdweb_auth: ThirdwebAuth,
-        typed_data: TypedData,
+        auth_token: &AuthToken,
+        thirdweb_auth: &ThirdwebAuth,
+        typed_data: &TypedData,
         _from: Address,
     ) -> Result<SignTypedDataData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
@@ -365,9 +365,9 @@ impl IAWClient {
     /// Sign a transaction with an EOA
     pub async fn sign_transaction(
         &self,
-        auth_token: AuthToken,
-        thirdweb_auth: ThirdwebAuth,
-        transaction: EthereumTypedTransaction<TxEip4844Variant>,
+        auth_token: &AuthToken,
+        thirdweb_auth: &ThirdwebAuth,
+        transaction: &EthereumTypedTransaction<TxEip4844Variant>,
     ) -> Result<SignTransactionData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
@@ -435,10 +435,10 @@ impl IAWClient {
     /// Sign an authorization with an EOA
     pub async fn sign_authorization(
         &self,
-        auth_token: AuthToken,
-        thirdweb_auth: ThirdwebAuth,
+        auth_token: &AuthToken,
+        thirdweb_auth: &ThirdwebAuth,
         _from: Address,
-        authorization: Authorization,
+        authorization: &Authorization,
     ) -> Result<SignAuthorizationData, IAWError> {
         // Get ThirdwebAuth headers for billing/authentication
         let mut headers = thirdweb_auth.to_header_map()?;
