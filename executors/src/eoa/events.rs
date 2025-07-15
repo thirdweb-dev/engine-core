@@ -105,7 +105,7 @@ impl EoaExecutorEvent {
         BareWebhookNotificationEnvelope {
             transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
-            stage_name: EoaExecutorStage::Send.to_string(),
+            stage_name: EoaExecutorStage::Confirmation.to_string(),
             event_type: StageEvent::Nack,
             payload: SerializableNackData {
                 error: EoaConfirmationError::TransactionReplaced {

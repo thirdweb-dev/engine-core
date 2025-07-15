@@ -120,7 +120,7 @@ async fn sign_single_message(
                     eoa_options.clone(),
                     &message_input.message,
                     message_input.format,
-                    &signing_credential,
+                    signing_credential,
                 )
                 .await
         }
