@@ -143,7 +143,7 @@ async fn sign_single_typed_data(
             // Direct EOA signing
             state
                 .eoa_signer
-                .sign_typed_data(eoa_options.clone(), typed_data, signing_credential.clone())
+                .sign_typed_data(eoa_options.clone(), typed_data, signing_credential)
                 .await
         }
         SigningOptions::ERC4337(smart_account_options) => {

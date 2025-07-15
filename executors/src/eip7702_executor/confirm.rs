@@ -32,11 +32,12 @@ pub struct Eip7702ConfirmationJobData {
     pub bundler_transaction_id: String,
     pub eoa_address: Address,
     pub rpc_credentials: RpcCredentials,
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
 }
 
 impl HasWebhookOptions for Eip7702ConfirmationJobData {
-    fn webhook_options(&self) -> Option<Vec<WebhookOptions>> {
+    fn webhook_options(&self) -> Vec<WebhookOptions> {
         self.webhook_options.clone()
     }
 }

@@ -89,7 +89,8 @@ pub struct WebhookOptions {
 pub struct SendTransactionRequest {
     pub execution_options: ExecutionOptions,
     pub params: Vec<InnerTransaction>,
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
 }
 
 /// # QueuedTransaction

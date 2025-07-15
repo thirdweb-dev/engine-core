@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod contract_encode;
 pub mod contract_read;
 pub mod contract_write;

@@ -56,7 +56,8 @@ pub struct WriteContractRequest {
     /// or as separate transactions if atomic batching is not supported
     pub params: Vec<ContractWrite>,
 
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
 }
 
 // ===== CONVENIENCE METHODS =====

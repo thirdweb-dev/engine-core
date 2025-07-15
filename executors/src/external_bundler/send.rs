@@ -49,7 +49,8 @@ pub struct ExternalBundlerSendJobData {
     pub execution_options: Erc4337ExecutionOptions,
     pub signing_credential: SigningCredential,
 
-    pub webhook_options: Option<Vec<WebhookOptions>>,
+    #[serde(default)]
+    pub webhook_options: Vec<WebhookOptions>,
 
     pub rpc_credentials: RpcCredentials,
 
@@ -59,7 +60,7 @@ pub struct ExternalBundlerSendJobData {
 }
 
 impl HasWebhookOptions for ExternalBundlerSendJobData {
-    fn webhook_options(&self) -> Option<Vec<WebhookOptions>> {
+    fn webhook_options(&self) -> Vec<WebhookOptions> {
         self.webhook_options.clone()
     }
 }
@@ -417,10 +418,12 @@ where
 
         // 7.1. Calculate custom call gas limit
         let custom_call_gas_limit = {
-            let gas_limits: Vec<u64> = job_data.transactions.iter()
+            let gas_limits: Vec<u64> = job_data
+                .transactions
+                .iter()
                 .filter_map(|tx| tx.gas_limit)
                 .collect();
-            
+
             if gas_limits.len() == job_data.transactions.len() {
                 // All transactions have gas limits specified, sum them up
                 let total_gas: u64 = gas_limits.iter().sum();

@@ -5,7 +5,7 @@ use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
-    eoa::{EoaExecutorStore, EoaExecutorWorker},
+    eoa::EoaExecutorJobHandler,
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
@@ -16,17 +16,13 @@ use engine_executors::{
 };
 use twmq::{Queue, queue::QueueOptions, shutdown::ShutdownHandle};
 
-use crate::{
-    chains::ThirdwebChainService,
-    config::{QueueConfig, RedisConfig},
-};
+use crate::{chains::ThirdwebChainService, config::QueueConfig};
 
 pub struct QueueManager {
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
-    pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
-    pub eoa_executor_store: Arc<EoaExecutorStore>,
+    pub eoa_executor_queue: Arc<Queue<EoaExecutorJobHandler<ThirdwebChainService>>>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
@@ -48,23 +44,14 @@ const EOA_EXECUTOR_QUEUE_NAME: &str = "eoa_executor";
 
 impl QueueManager {
     pub async fn new(
-        redis_config: &RedisConfig,
+        redis_client: twmq::redis::Client,
         queue_config: &QueueConfig,
         chain_service: Arc<ThirdwebChainService>,
         userop_signer: Arc<engine_core::userop::UserOpSigner>,
         eoa_signer: Arc<engine_core::signer::EoaSigner>,
     ) -> Result<Self, EngineError> {
-        // Create Redis clients
-        let redis_client = twmq::redis::Client::open(redis_config.url.as_str())?;
-
         // Create transaction registry
         let transaction_registry = Arc::new(TransactionRegistry::new(
-            redis_client.get_connection_manager().await?,
-            queue_config.execution_namespace.clone(),
-        ));
-
-        // Create EOA executor store
-        let eoa_executor_store = Arc::new(EoaExecutorStore::new(
             redis_client.get_connection_manager().await?,
             queue_config.execution_namespace.clone(),
         ));
@@ -219,10 +206,12 @@ impl QueueManager {
             .arc();
 
         // Create EOA executor queue
-        let eoa_executor_handler = EoaExecutorWorker {
+        let eoa_executor_handler = EoaExecutorJobHandler {
             chain_service: chain_service.clone(),
-            store: eoa_executor_store.clone(),
             eoa_signer: eoa_signer.clone(),
+            webhook_queue: webhook_queue.clone(),
+            namespace: queue_config.execution_namespace.clone(),
+            redis: redis_client.get_connection_manager().await?,
             max_inflight: 100,
             max_recycled_nonces: 50,
         };
@@ -241,7 +230,6 @@ impl QueueManager {
             external_bundler_send_queue,
             userop_confirm_queue,
             eoa_executor_queue,
-            eoa_executor_store,
             eip7702_send_queue,
             eip7702_confirm_queue,
             transaction_registry,

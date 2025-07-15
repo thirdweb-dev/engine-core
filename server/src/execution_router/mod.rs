@@ -18,7 +18,9 @@ use engine_executors::{
         confirm::Eip7702ConfirmationHandler,
         send::{Eip7702SendHandler, Eip7702SendJobData},
     },
-    eoa::{EoaExecutorStore, EoaExecutorWorker, EoaExecutorWorkerJobData, EoaTransactionRequest},
+    eoa::{
+        EoaExecutorJobHandler, EoaExecutorStore, EoaExecutorWorkerJobData, EoaTransactionRequest,
+    },
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
@@ -26,7 +28,7 @@ use engine_executors::{
     transaction_registry::TransactionRegistry,
     webhook::WebhookJobHandler,
 };
-use twmq::{Queue, error::TwmqError};
+use twmq::{Queue, error::TwmqError, redis::aio::ConnectionManager};
 use vault_sdk::VaultClient;
 use vault_types::{
     RegexRule, Rule,
@@ -37,11 +39,12 @@ use vault_types::{
 use crate::chains::ThirdwebChainService;
 
 pub struct ExecutionRouter {
+    pub redis: ConnectionManager,
+    pub namespace: Option<String>,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,
     pub userop_confirm_queue: Arc<Queue<UserOpConfirmationHandler<ThirdwebChainService>>>,
-    pub eoa_executor_queue: Arc<Queue<EoaExecutorWorker<ThirdwebChainService>>>,
-    pub eoa_executor_store: Arc<EoaExecutorStore>,
+    pub eoa_executor_queue: Arc<Queue<EoaExecutorJobHandler<ThirdwebChainService>>>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
@@ -233,7 +236,7 @@ impl ExecutionRouter {
                 self.execute_eip7702(
                     &execution_request.execution_options.base,
                     eip7702_execution_options,
-                    &execution_request.webhook_options,
+                    execution_request.webhook_options,
                     &execution_request.params,
                     rpc_credentials,
                     signing_credential,
@@ -262,7 +265,7 @@ impl ExecutionRouter {
                 self.execute_eoa(
                     &execution_request.execution_options.base,
                     eoa_execution_options,
-                    &execution_request.webhook_options,
+                    execution_request.webhook_options,
                     &execution_request.params,
                     rpc_credentials,
                     signing_credential,
@@ -289,7 +292,7 @@ impl ExecutionRouter {
         &self,
         base_execution_options: &BaseExecutionOptions,
         erc4337_execution_options: &Erc4337ExecutionOptions,
-        webhook_options: &Option<Vec<WebhookOptions>>,
+        webhook_options: &Vec<WebhookOptions>,
         transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
@@ -338,7 +341,7 @@ impl ExecutionRouter {
         &self,
         base_execution_options: &BaseExecutionOptions,
         eip7702_execution_options: &Eip7702ExecutionOptions,
-        webhook_options: &Option<Vec<WebhookOptions>>,
+        webhook_options: Vec<WebhookOptions>,
         transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
@@ -349,7 +352,7 @@ impl ExecutionRouter {
             transactions: transactions.to_vec(),
             eoa_address: eip7702_execution_options.from,
             signing_credential,
-            webhook_options: webhook_options.clone(),
+            webhook_options,
             rpc_credentials,
             nonce: None, // Let the executor handle nonce generation
         };
@@ -383,7 +386,7 @@ impl ExecutionRouter {
         &self,
         base_execution_options: &BaseExecutionOptions,
         eoa_execution_options: &EoaExecutionOptions,
-        webhook_options: &Option<Vec<WebhookOptions>>,
+        webhook_options: Vec<WebhookOptions>,
         transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
@@ -403,14 +406,21 @@ impl ExecutionRouter {
             value: transaction.value,
             data: transaction.data.clone(),
             gas_limit: transaction.gas_limit,
-            webhook_options: webhook_options.clone(),
-            signing_credential,
+            webhook_options: webhook_options.to_vec(),
+            signing_credential: signing_credential.clone(),
             rpc_credentials,
             transaction_type_data: transaction.transaction_type_data.clone(),
         };
 
+        let eoa_executor_store = EoaExecutorStore::new(
+            self.redis.clone(),
+            self.namespace.clone(),
+            eoa_execution_options.from,
+            base_execution_options.chain_id,
+        );
+
         // Add transaction to the store
-        self.eoa_executor_store
+        eoa_executor_store
             .add_transaction(eoa_transaction_request)
             .await
             .map_err(|e| TwmqError::Runtime {
@@ -429,10 +439,7 @@ impl ExecutionRouter {
         let eoa_job_data = EoaExecutorWorkerJobData {
             eoa_address: eoa_execution_options.from,
             chain_id: base_execution_options.chain_id,
-            worker_id: format!(
-                "eoa_{}_{}",
-                eoa_execution_options.from, base_execution_options.chain_id
-            ),
+            noop_signing_credential: signing_credential,
         };
 
         // Create idempotent job for this EOA:chain - only one will exist
