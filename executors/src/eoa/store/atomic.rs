@@ -577,7 +577,6 @@ impl AtomicEoaExecutorStore {
         results: Vec<SubmissionResult>,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<BorrowedProcessingReport, TransactionStoreError> {
-        dbg!("getting here", &results);
         self.execute_with_watch_and_retry(&ProcessBorrowedTransactions {
             results,
             keys: &self.keys,

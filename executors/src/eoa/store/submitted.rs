@@ -462,7 +462,7 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
                         chain_id: self.keys.chain_id,
                     });
                 };
-                count - 1
+                count.saturating_sub(1)
             }
         };
 
@@ -475,7 +475,7 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
             .filter(|nonce| *nonce < highest_submitted_nonce)
             .collect();
 
-        return Ok((highest_submitted_nonce, recycled_nonces));
+        Ok((highest_submitted_nonce, recycled_nonces))
     }
 
     fn operation(

@@ -398,8 +398,6 @@ impl<C: Chain> EoaExecutorWorker<C> {
             })
             .collect();
 
-        dbg!(&submission_results);
-
         // TODO: Implement post-processing analysis for balance threshold updates and nonce resets
         // Currently we lose the granular error handling that was in the individual atomic operations.
         // Consider:
