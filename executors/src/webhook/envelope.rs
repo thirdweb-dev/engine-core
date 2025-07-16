@@ -39,6 +39,10 @@ pub struct WebhookNotificationEnvelope<T> {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_target_url: Option<String>,
+
+    /// Custom metadata provided by the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_metadata: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -56,6 +60,7 @@ impl<T: Serialize + Clone> BareWebhookNotificationEnvelope<T> {
         self,
         timestamp: u64,
         delivery_target_url: String,
+        user_metadata: Option<String>,
     ) -> WebhookNotificationEnvelope<T> {
         WebhookNotificationEnvelope {
             notification_id: Uuid::new_v4().to_string(),
@@ -66,6 +71,7 @@ impl<T: Serialize + Clone> BareWebhookNotificationEnvelope<T> {
             event_type: self.event_type,
             payload: self.payload,
             delivery_target_url: Some(delivery_target_url),
+            user_metadata,
         }
     }
 }
@@ -145,6 +151,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
                     result: success_data.result.clone(),
                 },
                 delivery_target_url: Some(w.url.clone()),
+                user_metadata: w.user_metadata.clone(),
             };
 
             self.queue_webhook_envelope(envelope, w, job, tx)?
@@ -184,6 +191,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
                     next_retry_at,
                 },
                 delivery_target_url: Some(w.url.clone()),
+                user_metadata: w.user_metadata.clone(),
             };
 
             self.queue_webhook_envelope(envelope, w, job, tx)?;
@@ -215,6 +223,7 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
                     final_attempt_number: job.job.attempts,
                 },
                 delivery_target_url: Some(w.url.clone()),
+                user_metadata: w.user_metadata.clone(),
             };
 
             self.queue_webhook_envelope(envelope, w, job, tx)?;

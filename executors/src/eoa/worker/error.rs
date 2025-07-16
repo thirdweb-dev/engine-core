@@ -1,18 +1,23 @@
-use alloy::transports::{RpcError, TransportErrorKind};
+use std::time::Duration;
+
+use alloy::{
+    primitives::U256,
+    transports::{RpcError, TransportErrorKind},
+};
 use engine_core::{
     chain::Chain,
     error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
 };
 use serde::{Deserialize, Serialize};
 use thirdweb_core::iaw::IAWError;
-use twmq::{UserCancellable, error::TwmqError};
+use twmq::{
+    UserCancellable,
+    error::TwmqError,
+    job::{JobError, RequeuePosition},
+};
 
 use crate::eoa::{
-    EoaTransactionRequest,
-    store::{
-        BorrowedTransaction, BorrowedTransactionData, SubmissionResult, SubmissionResultType,
-        SubmittedTransaction, TransactionStoreError,
-    },
+    store::{BorrowedTransaction, SubmissionResult, SubmissionResultType, TransactionStoreError},
     worker::EoaExecutorWorkerResult,
 };
 
@@ -64,11 +69,38 @@ pub enum EoaExecutorWorkerError {
     #[error("Work still remaining: {result:?}")]
     WorkRemaining { result: EoaExecutorWorkerResult },
 
+    #[error("EOA out of funds: {balance} < {balance_threshold} wei")]
+    EoaOutOfFunds {
+        balance: U256,
+        balance_threshold: U256,
+    },
+
     #[error("Internal error: {message}")]
     InternalError { message: String },
 
     #[error("User cancelled")]
     UserCancelled,
+}
+
+impl EoaExecutorWorkerError {
+    pub fn handle(self) -> JobError<EoaExecutorWorkerError> {
+        match &self {
+            EoaExecutorWorkerError::EoaOutOfFunds { .. } => JobError::Nack {
+                error: self,
+                delay: Some(Duration::from_secs(60)),
+                position: RequeuePosition::Last,
+            },
+            EoaExecutorWorkerError::StoreError {
+                inner_error: TransactionStoreError::LockLost { .. },
+                ..
+            } => JobError::Fail(self),
+            _ => JobError::Nack {
+                error: self,
+                delay: Some(Duration::from_secs(10)),
+                position: RequeuePosition::Last,
+            },
+        }
+    }
 }
 
 impl From<TwmqError> for EoaExecutorWorkerError {
@@ -220,6 +252,7 @@ pub fn is_retryable_preparation_error(error: &EoaExecutorWorkerError) -> bool {
         EoaExecutorWorkerError::TransactionSendError { .. } => false, // Different context
         EoaExecutorWorkerError::SignatureParsingFailed { .. } => false, // Deterministic
         EoaExecutorWorkerError::WorkRemaining { .. } => false,       // Different context
+        EoaExecutorWorkerError::EoaOutOfFunds { .. } => false,       // Deterministic
     }
 }
 

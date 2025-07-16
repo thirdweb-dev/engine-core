@@ -443,7 +443,7 @@ pub fn queue_webhook_envelopes<T: Serialize + Clone>(
             .map(|webhook_option| {
                 let webhook_notification_envelope = envelope
                     .clone()
-                    .into_webhook_notification_envelope(now, webhook_option.url.clone());
+                    .into_webhook_notification_envelope(now, webhook_option.url.clone(), webhook_option.user_metadata.clone());
                 let serialised_envelope = serde_json::to_string(&webhook_notification_envelope)?;
                 Ok((
                     serialised_envelope,

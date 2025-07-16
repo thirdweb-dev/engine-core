@@ -153,7 +153,7 @@ where
         )
         .acquire_eoa_lock_aggressively(&job.lease_token)
         .await
-        .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+        .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
         let worker = EoaExecutorWorker {
             store: scoped,
@@ -169,7 +169,9 @@ where
         };
 
         let result = worker.execute_main_workflow().await?;
-        worker.release_eoa_lock().await;
+        if let Err(e) = worker.release_eoa_lock().await {
+            tracing::error!("Error releasing EOA lock: {}", e);
+        }
 
         if result.is_work_remaining() {
             Err(EoaExecutorWorkerError::WorkRemaining { result })
@@ -267,7 +269,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in recover_borrowed_state: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            .map_err(|e| e.handle())?;
 
         // 2. CONFIRM FLOW
         let confirmations_report = self
@@ -277,7 +279,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in confirm flow: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            .map_err(|e| e.handle())?;
 
         // 3. SEND FLOW
         let sent = self
@@ -287,7 +289,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in send_flow: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            .map_err(|e| e.handle())?;
 
         // 4. CHECK FOR REMAINING WORK
         let pending_count = self
@@ -298,8 +300,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in peek_pending_transactions: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
             .len();
+
         let borrowed_count = self
             .store
             .peek_borrowed_transactions()
@@ -308,8 +311,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in peek_borrowed_transactions: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
             .len();
+
         let recycled_count = self
             .store
             .peek_recycled_nonces()
@@ -318,8 +322,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in peek_recycled_nonces: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
             .len();
+
         let submitted_count = self
             .store
             .get_submitted_transactions_count()
@@ -328,7 +333,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!("Error in get_submitted_transactions_count: {}", e);
                 e
             })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
         Ok(EoaExecutorWorkerResult {
             recovered_transactions: recovered,
@@ -493,7 +498,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         Ok(())
     }
 
-    async fn release_eoa_lock(self) {
-        self.store.release_eoa_lock().await;
+    async fn release_eoa_lock(self) -> Result<(), EoaExecutorWorkerError> {
+        self.store.release_eoa_lock().await?;
+        Ok(())
     }
 }

@@ -23,7 +23,6 @@ use crate::eoa::{
     EoaTransactionRequest,
     store::{
         BorrowedTransaction, BorrowedTransactionData, PendingTransaction, SubmittedNoopTransaction,
-        TransactionData,
     },
     worker::{
         EoaExecutorWorker,
