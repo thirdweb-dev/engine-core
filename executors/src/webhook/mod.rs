@@ -16,6 +16,10 @@ use crate::webhook::envelope::{BareWebhookNotificationEnvelope, WebhookNotificat
 
 pub mod envelope;
 
+// --- Constants ---
+const SIGNATURE_HEADER_NAME: &str = "x-signature-sha256";
+const TIMESTAMP_HEADER_NAME: &str = "x-request-timestamp";
+
 // --- Configuration ---
 #[derive(Clone, Debug)]
 pub struct WebhookRetryConfig {
@@ -187,15 +191,11 @@ impl DurableExecution for WebhookJobHandler {
             let signature_bytes = mac.finalize().into_bytes();
             let signature_hex = hex::encode(signature_bytes);
 
-            // Standard header names
-            let signature_header_name = "X-Signature-SHA256";
-            let timestamp_header_name = "X-Request-Timestamp";
-
             let signature_header_value = HeaderValue::from_str(&signature_hex)
                 .map_err(|e| {
                     WebhookError::RequestConstruction(format!(
                         "Invalid header value for '{}': {}",
-                        signature_header_name, e
+                        SIGNATURE_HEADER_NAME, e
                     ))
                 })
                 .map_err_fail()?;
@@ -204,17 +204,17 @@ impl DurableExecution for WebhookJobHandler {
                 .map_err(|e| {
                     WebhookError::RequestConstruction(format!(
                         "Invalid header value for '{}': {}",
-                        timestamp_header_name, e
+                        TIMESTAMP_HEADER_NAME, e
                     ))
                 })
                 .map_err_fail()?;
 
             request_headers.insert(
-                HeaderName::from_static(signature_header_name),
+                HeaderName::from_static(SIGNATURE_HEADER_NAME),
                 signature_header_value,
             );
             request_headers.insert(
-                HeaderName::from_static(timestamp_header_name),
+                HeaderName::from_static(TIMESTAMP_HEADER_NAME),
                 timestamp_header_value,
             );
         }
