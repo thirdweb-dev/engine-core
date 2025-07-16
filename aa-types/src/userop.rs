@@ -1,6 +1,6 @@
 use alloy::{
     core::sol_types::SolValue,
-    primitives::{keccak256, Address, ChainId, Bytes, U256, B256},
+    primitives::{Address, B256, Bytes, ChainId, U256, keccak256},
     rpc::types::{PackedUserOperation, UserOperation},
 };
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,15 @@ pub enum VersionedUserOp {
 }
 
 /// Error type for UserOp operations
-#[derive(Debug, Clone, thiserror::Error, serde::Serialize, serde::Deserialize, schemars::JsonSchema, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    thiserror::Error,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    utoipa::ToSchema,
+)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum UserOpError {
     #[error("Unexpected error: {0}")]
@@ -68,7 +76,12 @@ pub fn compute_user_op_v07_hash(
     // Construct initCode from factory and factoryData
     let init_code: Bytes = if let Some(factory) = op.factory {
         if factory != Address::ZERO {
-            [&factory[..], &op.factory_data.clone().unwrap_or_default()[..]].concat().into()
+            [
+                &factory[..],
+                &op.factory_data.clone().unwrap_or_default()[..],
+            ]
+            .concat()
+            .into()
         } else {
             op.factory_data.clone().unwrap_or_default()
         }
@@ -80,9 +93,10 @@ pub fn compute_user_op_v07_hash(
     let vgl_u128: u128 = op.verification_gas_limit.try_into().map_err(|_| {
         UserOpError::UnexpectedError("verification_gas_limit too large".to_string())
     })?;
-    let cgl_u128: u128 = op.call_gas_limit.try_into().map_err(|_| {
-        UserOpError::UnexpectedError("call_gas_limit too large".to_string())
-    })?;
+    let cgl_u128: u128 = op
+        .call_gas_limit
+        .try_into()
+        .map_err(|_| UserOpError::UnexpectedError("call_gas_limit too large".to_string()))?;
 
     let mut account_gas_limits_bytes = [0u8; 32];
     account_gas_limits_bytes[0..16].copy_from_slice(&vgl_u128.to_be_bytes());
@@ -93,9 +107,10 @@ pub fn compute_user_op_v07_hash(
     let mpfpg_u128: u128 = op.max_priority_fee_per_gas.try_into().map_err(|_| {
         UserOpError::UnexpectedError("max_priority_fee_per_gas too large".to_string())
     })?;
-    let mfpg_u128: u128 = op.max_fee_per_gas.try_into().map_err(|_| {
-        UserOpError::UnexpectedError("max_fee_per_gas too large".to_string())
-    })?;
+    let mfpg_u128: u128 = op
+        .max_fee_per_gas
+        .try_into()
+        .map_err(|_| UserOpError::UnexpectedError("max_fee_per_gas too large".to_string()))?;
 
     let mut gas_fees_bytes = [0u8; 32];
     gas_fees_bytes[0..16].copy_from_slice(&mpfpg_u128.to_be_bytes());
@@ -105,12 +120,24 @@ pub fn compute_user_op_v07_hash(
     // Construct paymasterAndData
     let paymaster_and_data: Bytes = if let Some(paymaster) = op.paymaster {
         if paymaster != Address::ZERO {
-            let pm_vgl_u128: u128 = op.paymaster_verification_gas_limit.unwrap_or_default().try_into().map_err(|_| {
-                UserOpError::UnexpectedError("paymaster_verification_gas_limit too large".to_string())
-            })?;
-            let pm_pogl_u128: u128 = op.paymaster_post_op_gas_limit.unwrap_or_default().try_into().map_err(|_| {
-                UserOpError::UnexpectedError("paymaster_post_op_gas_limit too large".to_string())
-            })?;
+            let pm_vgl_u128: u128 = op
+                .paymaster_verification_gas_limit
+                .unwrap_or_default()
+                .try_into()
+                .map_err(|_| {
+                    UserOpError::UnexpectedError(
+                        "paymaster_verification_gas_limit too large".to_string(),
+                    )
+                })?;
+            let pm_pogl_u128: u128 = op
+                .paymaster_post_op_gas_limit
+                .unwrap_or_default()
+                .try_into()
+                .map_err(|_| {
+                    UserOpError::UnexpectedError(
+                        "paymaster_post_op_gas_limit too large".to_string(),
+                    )
+                })?;
             [
                 &paymaster[..],
                 &pm_vgl_u128.to_be_bytes()[..],

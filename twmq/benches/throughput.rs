@@ -294,7 +294,7 @@ async fn load_test_throughput(
     );
     println!("  Jobs pushed: {}", jobs_pushed);
     println!("  Jobs processed: {}", total_processed);
-    println!("  Success rate: {:.1}%", success_rate * 100.0);
+    println!("  Simulated success rate: {:.1}%", success_rate * 100.0);
     println!("  Avg processing time: {:.2}ms", avg_processing_time);
     println!("  Max queue depth: {}", max_depth);
     println!("  Final backlog: {}", final_pending + final_active);
@@ -325,7 +325,7 @@ fn find_max_throughput(c: &mut Criterion) {
     group.sample_size(10);
 
     // Test different throughput levels to find the limit
-    let throughput_levels = vec![50_000, 100_000, 120_000, 150_000, 200_000, 250_000];
+    let throughput_levels = vec![150_000, 200_000, 250_000];
 
     for &jobs_per_second in &throughput_levels {
         group.throughput(Throughput::Elements(jobs_per_second as u64));

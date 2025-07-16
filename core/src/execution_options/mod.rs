@@ -76,10 +76,42 @@ pub struct ExecutionOptions {
     pub specific: SpecificExecutionOptions,
 }
 
+const MAX_USER_METADATA_SIZE: usize = 4096; // 4KB limit
+
+fn validate_user_metadata_size(metadata: &Option<String>) -> Result<(), String> {
+    if let Some(meta) = metadata {
+        if meta.len() > MAX_USER_METADATA_SIZE {
+            return Err(format!(
+                "User metadata exceeds maximum size of {} bytes (provided: {} bytes)",
+                MAX_USER_METADATA_SIZE,
+                meta.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn deserialize_and_validate_user_metadata<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let metadata: Option<String> = Option::deserialize(deserializer)?;
+    validate_user_metadata_size(&metadata).map_err(D::Error::custom)?;
+    Ok(metadata)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct WebhookOptions {
     pub url: String,
     pub secret: Option<String>,
+    /// Custom metadata provided by the user to be included in webhook notifications.
+    /// Limited to 4KB (4096 bytes) to prevent abuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_and_validate_user_metadata")]
+    pub user_metadata: Option<String>,
 }
 
 /// Incoming transaction request, parsed into InnerTransaction
@@ -150,5 +182,44 @@ impl ExecutionOptions {
 
     pub fn transaction_id(&self) -> &str {
         &self.base.idempotency_key
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_webhook_options_user_metadata_validation() {
+        // Test valid metadata
+        let valid_json = r#"{
+            "url": "https://example.com/webhook",
+            "secret": "test_secret",
+            "userMetadata": "test metadata"
+        }"#;
+        
+        let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(valid_json);
+        assert!(webhook_options.is_ok());
+        assert_eq!(webhook_options.unwrap().user_metadata, Some("test metadata".to_string()));
+        
+        // Test metadata that's too large (over 4KB)
+        let large_metadata = "x".repeat(5000); // 5KB string
+        let invalid_json = format!(r#"{{
+            "url": "https://example.com/webhook", 
+            "secret": "test_secret",
+            "userMetadata": "{}"
+        }}"#, large_metadata);
+        
+        let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(&invalid_json);
+        assert!(webhook_options.is_err());
+        
+        // Test missing metadata (should default to None)
+        let minimal_json = r#"{
+            "url": "https://example.com/webhook"
+        }"#;
+        
+        let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(minimal_json);
+        assert!(webhook_options.is_ok());
+        assert_eq!(webhook_options.unwrap().user_metadata, None);
     }
 }

@@ -49,7 +49,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     "EOA has insufficient balance (<= {} wei), skipping send flow",
                     health.balance_threshold
                 );
-                return Ok(0);
+                return Err(EoaExecutorWorkerError::EoaOutOfFunds {
+                    balance: health.balance,
+                    balance_threshold: health.balance_threshold,
+                });
             }
         }
 
