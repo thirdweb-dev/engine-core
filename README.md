@@ -62,6 +62,31 @@ Advanced Redis-backed job queue with enterprise features:
 - **Webhook Delivery**: Reliable HTTP webhook notifications with configurable retries
 - **Transaction Confirmation**: Block confirmation tracking with reorganization handling  
 - **External Bundler Integration**: UserOperation submission and status monitoring
+- **EOA Transaction Processing**: Production-grade EOA (Externally Owned Account) transaction management with advanced nonce handling, crash recovery, and optimal throughput
+
+##### EOA Executor Deep Dive
+
+The EOA executor implements a sophisticated single-worker-per-EOA architecture that ensures transaction consistency while maximizing throughput:
+
+**Key Features:**
+- **Crash-Resilient Recovery**: Borrowed transaction pattern prevents loss during worker restarts
+- **Intelligent Nonce Management**: Optimistic nonce allocation with recycling for failed transactions
+- **Three-Phase Processing**: Recovery → Confirmation → Send phases ensure complete transaction lifecycle management
+- **Adaptive Capacity Control**: Dynamic in-flight transaction limits based on network conditions
+- **Health Monitoring**: Automatic EOA balance checking with funding state awareness
+
+**Transaction Flow:**
+1. **Recovery Phase**: Rebroadcasts any prepared transactions from crashes
+2. **Confirmation Phase**: Efficiently tracks transaction confirmations using nonce progression
+3. **Send Phase**: Processes new transactions with recycled nonce prioritization and capacity management
+
+**Error Classification:**
+- **Deterministic Failures**: Immediate requeue with nonce recycling (invalid signatures, malformed transactions)
+- **Success Cases**: Transaction tracking for known/duplicate transactions
+- **Indeterminate Cases**: Optimistic handling for network timeouts and unknown errors
+
+This architecture provides strong consistency guarantees while handling high-volume transaction processing with graceful degradation under network stress.
+For more details, see [README_EOA.md](README_EOA.md).
 
 ### Thirdweb Service Integration (`thirdweb-core/`)
 **Purpose**: First-party service integrations
@@ -261,6 +286,11 @@ cargo nextest run -p twmq --profile ci
 │   └── src/
 │       ├── webhook/  # Webhook delivery
 │       └── external_bundler/ # AA bundler integration
+│       └── eoa/      # EOA transaction processing
+│           ├── worker/       # Main worker logic
+│           ├── store/        # Redis-backed state management
+│           ├── events.rs     # Transaction lifecycle events
+│           └── error_classifier.rs # Error categorization
 └── thirdweb-core/    # Thirdweb integrations
 ```
 
@@ -377,3 +407,4 @@ For issues and questions:
 ---
 
 **Built with ❤️ by the Thirdweb team**
+
