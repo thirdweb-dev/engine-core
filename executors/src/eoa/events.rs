@@ -49,7 +49,7 @@ impl Display for EoaExecutorStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EoaExecutorStage::Send => write!(f, "send"),
-            EoaExecutorStage::Confirmation => write!(f, "confirmation"),
+            EoaExecutorStage::Confirmation => write!(f, "confirm"),
         }
     }
 }
