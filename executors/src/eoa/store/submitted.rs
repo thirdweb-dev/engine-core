@@ -35,7 +35,7 @@ impl Deref for SubmittedTransaction {
 #[derive(Debug, Clone)]
 pub struct SubmittedNoopTransaction {
     pub nonce: u64,
-    pub hash: String,
+    pub transaction_hash: String,
 }
 
 pub type SubmittedTransactionStringWithNonce = (String, u64);
@@ -43,7 +43,7 @@ pub type SubmittedTransactionStringWithNonce = (String, u64);
 impl SubmittedNoopTransaction {
     pub fn to_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
         (
-            format!("{}:{}:0", self.hash, NO_OP_TRANSACTION_ID),
+            format!("{}:{}:0", self.transaction_hash, NO_OP_TRANSACTION_ID),
             self.nonce,
         )
     }
@@ -58,8 +58,8 @@ pub enum SubmittedTransactionHydrated {
 impl SubmittedTransactionHydrated {
     pub fn hash(&self) -> &str {
         match self {
-            SubmittedTransactionHydrated::Noop(tx) => &tx.hash,
-            SubmittedTransactionHydrated::Real(tx) => &tx.hash,
+            SubmittedTransactionHydrated::Noop(tx) => &tx.transaction_hash,
+            SubmittedTransactionHydrated::Real(tx) => &tx.transaction_hash,
         }
     }
 
@@ -89,7 +89,7 @@ impl SubmittedTransactionHydrated {
 #[serde(rename_all = "camelCase")]
 pub struct SubmittedTransactionDehydrated {
     pub nonce: u64,
-    pub hash: String,
+    pub transaction_hash: String,
     pub transaction_id: String,
     pub queued_at: u64,
 }
@@ -103,7 +103,7 @@ impl SubmittedTransactionDehydrated {
                 if parts.len() == 3 {
                     if let Ok(queued_at) = parts[2].parse::<u64>() {
                         Some(SubmittedTransactionDehydrated {
-                            hash: parts[0].to_string(),
+                            transaction_hash: parts[0].to_string(),
                             transaction_id: parts[1].to_string(),
                             nonce: tx.1,
                             queued_at,
@@ -136,7 +136,10 @@ impl SubmittedTransactionDehydrated {
     /// The nonce is the value of the transaction in the submitted state, and is used as the score of the submitted zset
     pub fn to_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
         (
-            format!("{}:{}:{}", self.hash, self.transaction_id, self.queued_at),
+            format!(
+                "{}:{}:{}",
+                self.transaction_hash, self.transaction_id, self.queued_at
+            ),
             self.nonce,
         )
     }
@@ -226,7 +229,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
         let confirmed_hashes: HashSet<&str> = self
             .confirmed_transactions
             .iter()
-            .map(|tx| tx.hash.as_str())
+            .map(|tx| tx.transaction_hash.as_str())
             .collect();
 
         let confirmed_ids: BTreeMap<&str, ConfirmedTransaction> = self
@@ -396,8 +399,8 @@ fn detect_violations<'a>(
     for (nonce, txs) in &txs_by_nonce {
         let confirmed_hashes_for_nonce: Vec<String> = txs
             .iter()
-            .filter(|tx| confirmed_hashes.contains(tx.hash.as_str()))
-            .map(|tx| tx.hash.clone())
+            .filter(|tx| confirmed_hashes.contains(tx.transaction_hash.as_str()))
+            .map(|tx| tx.transaction_hash.clone())
             .collect();
 
         if confirmed_hashes_for_nonce.len() > 1 {
@@ -411,9 +414,9 @@ fn detect_violations<'a>(
     for (nonce, txs) in &txs_by_nonce {
         let has_confirmed = txs
             .iter()
-            .any(|tx| confirmed_hashes.contains(tx.hash.as_str()));
+            .any(|tx| confirmed_hashes.contains(tx.transaction_hash.as_str()));
         if !has_confirmed {
-            let hashes: Vec<String> = txs.iter().map(|tx| tx.hash.clone()).collect();
+            let hashes: Vec<String> = txs.iter().map(|tx| tx.transaction_hash.clone()).collect();
             report.nonces_without_receipts.push((*nonce, hashes));
         }
     }

@@ -110,7 +110,7 @@ impl EoaExecutorEvent {
             payload: SerializableNackData {
                 error: EoaConfirmationError::TransactionReplaced {
                     nonce: replaced_transaction.nonce,
-                    hash: replaced_transaction.hash,
+                    hash: replaced_transaction.transaction_hash,
                 },
                 delay_ms: None,
                 position: RequeuePosition::Last,

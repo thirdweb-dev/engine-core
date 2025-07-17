@@ -30,13 +30,13 @@ pub const NO_OP_TRANSACTION_ID: &str = "noop";
 
 #[derive(Debug, Clone)]
 pub struct ReplacedTransaction {
-    pub hash: String,
+    pub transaction_hash: String,
     pub transaction_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConfirmedTransaction {
-    pub hash: String,
+    pub transaction_hash: String,
     pub transaction_id: String,
     pub receipt: alloy::rpc::types::TransactionReceipt,
     pub receipt_serialized: String,
@@ -338,7 +338,7 @@ impl From<BorrowedTransactionData> for SubmittedTransactionDehydrated {
     fn from(data: BorrowedTransactionData) -> Self {
         SubmittedTransactionDehydrated {
             nonce: data.signed_transaction.nonce(),
-            hash: data.signed_transaction.hash().to_string(),
+            transaction_hash: data.signed_transaction.hash().to_string(),
             transaction_id: data.transaction_id.clone(),
             queued_at: data.queued_at,
         }

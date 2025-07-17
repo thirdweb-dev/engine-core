@@ -35,7 +35,7 @@ impl Dehydrated<SubmittedTransactionHydrator> for SubmittedTransactionDehydrated
             SubmittedTransactionHydrator::Noop => {
                 SubmittedTransactionHydrated::Noop(SubmittedNoopTransaction {
                     nonce: self.nonce,
-                    hash: self.hash,
+                    transaction_hash: self.transaction_hash,
                 })
             }
             SubmittedTransactionHydrator::Real(request) => {

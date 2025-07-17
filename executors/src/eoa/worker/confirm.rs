@@ -19,7 +19,7 @@ const NONCE_STALL_TIMEOUT: u64 = 300_000; // 5 minutes in milliseconds - after t
 #[serde(rename_all = "camelCase")]
 pub struct ConfirmedTransactionWithRichReceipt {
     pub nonce: u64,
-    pub hash: String,
+    pub transaction_hash: String,
     pub transaction_id: String,
     pub receipt: alloy::rpc::types::TransactionReceipt,
 }
@@ -122,7 +122,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     Err(e) => {
                         tracing::warn!(
                             transaction_id = %tx.transaction_id,
-                            hash = %tx.hash,
+                            hash = %tx.transaction_hash,
                             error = %e,
                             "Failed to serialize receipt as JSON, using debug format"
                         );
@@ -133,12 +133,12 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::info!(
                     transaction_id = %tx.transaction_id,
                     nonce = tx.nonce,
-                    hash = %tx.hash,
+                    hash = %tx.transaction_hash,
                     "Transaction confirmed"
                 );
 
                 ConfirmedTransaction {
-                    hash: tx.hash,
+                    transaction_hash: tx.transaction_hash,
                     transaction_id: tx.transaction_id,
                     receipt: tx.receipt.into(),
                     receipt_serialized: receipt_data,
@@ -169,7 +169,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Fetch all receipts in parallel
         let receipt_futures: Vec<_> = submitted_txs
             .iter()
-            .filter_map(|tx| match tx.hash.parse::<B256>() {
+            .filter_map(|tx| match tx.transaction_hash.parse::<B256>() {
                 Ok(hash_bytes) => Some(async move {
                     let receipt = self
                         .chain
@@ -179,7 +179,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     (tx, receipt)
                 }),
                 Err(_) => {
-                    tracing::warn!("Invalid hash format: {}, skipping", tx.hash);
+                    tracing::warn!("Invalid hash format: {}, skipping", tx.transaction_hash);
                     None
                 }
             })
@@ -196,14 +196,14 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 Ok(Some(receipt)) => {
                     confirmed_txs.push(ConfirmedTransactionWithRichReceipt {
                         nonce: tx.nonce,
-                        hash: tx.hash.clone(),
+                        transaction_hash: tx.transaction_hash.clone(),
                         transaction_id: tx.transaction_id.clone(),
                         receipt,
                     });
                 }
                 Ok(None) | Err(_) => {
                     failed_txs.push(ReplacedTransaction {
-                        hash: tx.hash.clone(),
+                        transaction_hash: tx.transaction_hash.clone(),
                         transaction_id: tx.transaction_id.clone(),
                     });
                 }
@@ -323,7 +323,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .add_gas_bump_attempt(
                     &SubmittedTransactionDehydrated {
                         nonce: expected_nonce,
-                        hash: bumped_tx.hash().to_string(),
+                        transaction_hash: bumped_tx.hash().to_string(),
                         transaction_id: transaction_id.to_string(),
                         queued_at: tx_data.created_at,
                     },

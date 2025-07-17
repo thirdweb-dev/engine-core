@@ -38,7 +38,7 @@ pub enum SpecificExecutionOptions {
     #[schema(title = "ERC-4337 Execution Options")]
     ERC4337(aa::Erc4337ExecutionOptions),
 
-    #[serde(rename = "eoa")]
+    #[serde(rename = "EOA")]
     #[schema(title = "EOA Execution Options")]
     EOA(eoa::EoaExecutionOptions),
 
@@ -188,7 +188,7 @@ impl ExecutionOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_webhook_options_user_metadata_validation() {
         // Test valid metadata
@@ -197,27 +197,33 @@ mod tests {
             "secret": "test_secret",
             "userMetadata": "test metadata"
         }"#;
-        
+
         let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(valid_json);
         assert!(webhook_options.is_ok());
-        assert_eq!(webhook_options.unwrap().user_metadata, Some("test metadata".to_string()));
-        
+        assert_eq!(
+            webhook_options.unwrap().user_metadata,
+            Some("test metadata".to_string())
+        );
+
         // Test metadata that's too large (over 4KB)
         let large_metadata = "x".repeat(5000); // 5KB string
-        let invalid_json = format!(r#"{{
+        let invalid_json = format!(
+            r#"{{
             "url": "https://example.com/webhook", 
             "secret": "test_secret",
             "userMetadata": "{}"
-        }}"#, large_metadata);
-        
+        }}"#,
+            large_metadata
+        );
+
         let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(&invalid_json);
         assert!(webhook_options.is_err());
-        
+
         // Test missing metadata (should default to None)
         let minimal_json = r#"{
             "url": "https://example.com/webhook"
         }"#;
-        
+
         let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(minimal_json);
         assert!(webhook_options.is_ok());
         assert_eq!(webhook_options.unwrap().user_metadata, None);
