@@ -45,8 +45,12 @@ pub struct EoaSendAttemptSuccessData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EoaExecutorConfirmedTransaction {
     pub receipt: alloy::rpc::types::TransactionReceipt,
+    pub eoa_address: Address,
+    pub transaction_id: String,
+    pub transaction_hash: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -146,6 +150,9 @@ impl EoaExecutorEvent {
             payload: SerializableSuccessData {
                 result: EoaExecutorConfirmedTransaction {
                     receipt: confirmed_transaction.receipt,
+                    eoa_address: self.address,
+                    transaction_id: self.transaction_id.clone(),
+                    transaction_hash: confirmed_transaction.transaction_hash,
                 },
             },
         }
