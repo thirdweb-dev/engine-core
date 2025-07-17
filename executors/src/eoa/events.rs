@@ -40,7 +40,7 @@ pub struct EoaSendAttemptNackData {
 pub struct EoaSendAttemptSuccessData {
     #[serde(flatten)]
     pub submitted_transaction: SubmittedTransactionDehydrated,
-    pub address: Address,
+    pub eoa_address: Address,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ impl EoaExecutorEvent {
             payload: SerializableSuccessData {
                 result: EoaSendAttemptSuccessData {
                     submitted_transaction: submitted_transaction.clone(),
-                    address: self.address,
+                    eoa_address: self.address,
                 },
             },
         }
