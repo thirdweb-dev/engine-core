@@ -37,6 +37,7 @@ pub struct EoaSendAttemptNackData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EoaSendAttemptSuccessData {
     #[serde(flatten)]
     pub submitted_transaction: SubmittedTransactionDehydrated,
