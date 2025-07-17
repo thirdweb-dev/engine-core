@@ -278,6 +278,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                             if !tx.user_request.webhook_options.is_empty() {
                                 let event = EoaExecutorEvent {
                                     transaction_id: tx.transaction_id.clone(),
+                                    address: tx.user_request.from,
                                 };
 
                                 let success_envelope =
@@ -309,6 +310,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                             if !tx.user_request.webhook_options.is_empty() {
                                 let event = EoaExecutorEvent {
                                     transaction_id: tx.transaction_id.clone(),
+                                    address: tx.user_request.from,
                                 };
 
                                 let success_envelope =

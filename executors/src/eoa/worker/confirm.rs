@@ -70,6 +70,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     time_since_movement = time_since_movement,
                     stall_timeout = NONCE_STALL_TIMEOUT,
                     current_chain_nonce = current_chain_transaction_count,
+                    cached_transaction_count = cached_transaction_count,
                     "Nonce has been stalled, attempting gas bump"
                 );
 
@@ -85,13 +86,13 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 }
             }
 
-            tracing::debug!("No nonce progress, skipping confirm flow");
-            return Ok(CleanupReport::default());
+            tracing::debug!("No nonce progress, still going ahead with confirm flow");
+            // return Ok(CleanupReport::default());
         }
 
         tracing::info!(
             current_chain_nonce = current_chain_transaction_count,
-            cached_nonce = cached_transaction_count,
+            cached_transaction_count = cached_transaction_count,
             "Processing confirmations"
         );
 
@@ -140,7 +141,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 ConfirmedTransaction {
                     transaction_hash: tx.transaction_hash,
                     transaction_id: tx.transaction_id,
-                    receipt: tx.receipt.into(),
+                    receipt: tx.receipt,
                     receipt_serialized: receipt_data,
                 }
             })
