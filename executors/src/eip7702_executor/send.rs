@@ -96,6 +96,13 @@ pub enum Eip7702SendError {
         inner_error: Option<EngineError>,
     },
 
+    #[error("Failed to fetch nonce: {message}")]
+    #[serde(rename_all = "camelCase")]
+    NonceFetchError {
+        message: String,
+        inner_error: Option<EngineError>,
+    },
+
     #[error("Failed to call bundler: {message}")]
     BundlerCallError { message: String },
 
@@ -264,7 +271,13 @@ where
 
         // 5. Sign authorization if needed
         let authorization = if !is_minimal_account {
-            let nonce = job_data.nonce.unwrap_or_default();
+            let nonce = get_eoa_nonce(&chain, job_data.eoa_address)
+                .await
+                .map_err(|e| Eip7702SendError::NonceFetchError {
+                    message: format!("Failed to fetch nonce: {e}"),
+                    inner_error: Some(e),
+                })
+                .map_err_fail()?;
 
             let auth = self
                 .eoa_signer
@@ -510,4 +523,19 @@ async fn check_is_7702_minimal_account(
     );
 
     Ok(is_delegated)
+}
+
+async fn get_eoa_nonce(chain: &impl Chain, eoa_address: Address) -> Result<u64, EngineError> {
+    chain
+        .provider()
+        .get_transaction_count(eoa_address)
+        .await
+        .map_err(|e| EngineError::RpcError {
+            chain_id: chain.chain_id(),
+            rpc_url: chain.rpc_url().to_string(),
+            message: format!("Failed to get nonce for address {}: {}", eoa_address, e),
+            kind: RpcErrorKind::InternalError {
+                message: e.to_string(),
+            },
+        })
 }
