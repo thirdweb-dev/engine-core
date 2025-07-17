@@ -194,7 +194,7 @@ pub trait AccountSigner {
         options: Self::SigningOptions,
         chain_id: u64,
         address: Address,
-        nonce: alloy::primitives::U256,
+        nonce: u64,
         credentials: &SigningCredential,
     ) -> impl std::future::Future<Output = Result<SignedAuthorization, EngineError>> + Send;
 }
@@ -355,14 +355,14 @@ impl AccountSigner for EoaSigner {
         options: EoaSigningOptions,
         chain_id: u64,
         address: Address,
-        nonce: U256,
+        nonce: u64,
         credentials: &SigningCredential,
     ) -> Result<SignedAuthorization, EngineError> {
         // Create the Authorization struct that both clients expect
         let authorization = Authorization {
             chain_id: U256::from(chain_id),
             address,
-            nonce: nonce.to::<u64>(),
+            nonce,
         };
         match credentials {
             SigningCredential::Vault(auth_method) => {
