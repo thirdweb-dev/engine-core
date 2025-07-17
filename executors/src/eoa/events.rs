@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use twmq::job::RequeuePosition;
 
@@ -16,6 +17,7 @@ use crate::{
 
 pub struct EoaExecutorEvent {
     pub transaction_id: String,
+    pub address: Address,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, thiserror::Error)]
@@ -32,6 +34,13 @@ pub enum EoaConfirmationError {
 pub struct EoaSendAttemptNackData {
     pub nonce: u64,
     pub error: EoaExecutorWorkerError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EoaSendAttemptSuccessData {
+    #[serde(flatten)]
+    pub submitted_transaction: SubmittedTransactionDehydrated,
+    pub eoa_address: Address,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,15 +69,17 @@ impl EoaExecutorEvent {
     pub fn send_attempt_success_envelope(
         &self,
         submitted_transaction: SubmittedTransactionDehydrated,
-    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<SubmittedTransactionDehydrated>>
-    {
+    ) -> BareWebhookNotificationEnvelope<SerializableSuccessData<EoaSendAttemptSuccessData>> {
         BareWebhookNotificationEnvelope {
             transaction_id: self.transaction_id.clone(),
             executor_name: EXECUTOR_NAME.to_string(),
             stage_name: EoaExecutorStage::Send.to_string(),
             event_type: StageEvent::Success,
             payload: SerializableSuccessData {
-                result: submitted_transaction.clone(),
+                result: EoaSendAttemptSuccessData {
+                    submitted_transaction: submitted_transaction.clone(),
+                    eoa_address: self.address,
+                },
             },
         }
     }

@@ -535,6 +535,7 @@ impl AtomicEoaExecutorStore {
 
             let event = EoaExecutorEvent {
                 transaction_id: pending_transaction.transaction_id.clone(),
+                address: pending_transaction.user_request.from,
             };
 
             let fail_envelope = event.transaction_failed_envelope(error.clone(), 1);

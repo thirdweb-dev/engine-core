@@ -139,6 +139,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
 
                     // Queue webhook event using user_request from SubmissionResult
                     let event = EoaExecutorEvent {
+                        address: result.transaction.user_request.from,
                         transaction_id: transaction_id.to_string(),
                     };
 
@@ -177,6 +178,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Queue webhook event using user_request from SubmissionResult
                     let event = EoaExecutorEvent {
                         transaction_id: transaction_id.to_string(),
+                        address: result.transaction.user_request.from,
                     };
                     let envelope = event.send_attempt_nack_envelope(nonce, err.clone(), 1);
 
@@ -208,6 +210,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Queue webhook event using user_request from SubmissionResult
                     let event = EoaExecutorEvent {
                         transaction_id: transaction_id.to_string(),
+                        address: result.transaction.user_request.from,
                     };
                     let envelope = event.transaction_failed_envelope(err.clone(), 1);
                     if !result.transaction.user_request.webhook_options.is_empty() {
