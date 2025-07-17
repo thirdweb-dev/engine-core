@@ -115,7 +115,7 @@ impl Erc4337SigningOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SigningOptions {
-    #[serde(rename = "eoa")]
+    #[serde(rename = "EOA")]
     #[schema(title = "EOA Signing Options")]
     Eoa(EoaSigningOptions),
 

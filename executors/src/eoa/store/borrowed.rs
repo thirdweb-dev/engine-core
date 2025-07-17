@@ -129,7 +129,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Update hash-to-ID mapping
                     let hash_to_id_key = self
                         .keys
-                        .transaction_hash_to_id_key_name(&result.transaction.hash);
+                        .transaction_hash_to_id_key_name(&result.transaction.transaction_hash);
 
                     pipeline.set(&hash_to_id_key, transaction_id);
 

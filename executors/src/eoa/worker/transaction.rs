@@ -156,7 +156,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             })
             .map(|pending| SubmittedNoopTransaction {
                 nonce,
-                hash: pending.tx_hash().to_string(),
+                transaction_hash: pending.tx_hash().to_string(),
             })
     }
 

@@ -333,7 +333,7 @@ where
     }
 
     fn stage_name() -> &'static str {
-        "confirmation"
+        "confirm"
     }
 }
 

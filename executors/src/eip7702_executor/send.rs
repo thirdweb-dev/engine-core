@@ -160,7 +160,7 @@ where
     }
 
     fn stage_name() -> &'static str {
-        "prepare_and_send"
+        "send"
     }
 }
 

@@ -49,7 +49,7 @@ impl Display for EoaExecutorStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EoaExecutorStage::Send => write!(f, "send"),
-            EoaExecutorStage::Confirmation => write!(f, "confirmation"),
+            EoaExecutorStage::Confirmation => write!(f, "confirm"),
         }
     }
 }
@@ -110,7 +110,7 @@ impl EoaExecutorEvent {
             payload: SerializableNackData {
                 error: EoaConfirmationError::TransactionReplaced {
                     nonce: replaced_transaction.nonce,
-                    hash: replaced_transaction.hash,
+                    hash: replaced_transaction.transaction_hash,
                 },
                 delay_ms: None,
                 position: RequeuePosition::Last,
