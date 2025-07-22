@@ -2,9 +2,11 @@ use alloy::{
     consensus::TypedTransaction,
     dyn_abi::TypedData,
     eips::eip7702::SignedAuthorization,
-    hex::FromHex,
+    hex::{self, FromHex},
+    network::TxSigner,
     primitives::{Address, Bytes, ChainId, U256},
     rpc::types::Authorization,
+    signers::Signer,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
@@ -15,7 +17,7 @@ use vault_types::enclave::encrypted::eoa::MessageFormat;
 use crate::{
     credentials::SigningCredential,
     defs::AddressDef,
-    error::EngineError,
+    error::{EngineError, SerialisableAwsSdkError, SerialisableAwsSignerError},
     execution_options::aa::{EntrypointAndFactoryDetails, EntrypointAndFactoryDetailsDeserHelper},
 };
 
@@ -273,6 +275,30 @@ impl AccountSigner for EoaSigner {
 
                 Ok(iaw_result.signature)
             }
+            SigningCredential::AwsKms(creds) => {
+                let signer = creds.get_signer(options.chain_id).await?;
+                let message = match format {
+                    MessageFormat::Text => message.to_string().into_bytes(),
+                    MessageFormat::Hex => {
+                        hex::decode(message).map_err(|_| EngineError::ValidationError {
+                            message: "Invalid hex string".to_string(),
+                        })?
+                    }
+                };
+
+                // TODO: create serialisable error for @alloy-signer::error::Error
+                let signature = signer.sign_message(&message).await.map_err(|e| {
+                    tracing::error!("Error signing message with EOA (AWS KMS): {:?}", e);
+                    EngineError::AwsKmsSignerError {
+                        error: SerialisableAwsSignerError::Sign {
+                            aws_sdk_error: SerialisableAwsSdkError::Other {
+                                message: e.to_string(),
+                            },
+                        },
+                    }
+                })?;
+                Ok(signature.to_string())
+            }
         }
     }
 
@@ -310,6 +336,26 @@ impl AccountSigner for EoaSigner {
 
                 Ok(iaw_result.signature)
             }
+
+            SigningCredential::AwsKms(creds) => {
+                let signer = creds.get_signer(options.chain_id).await?;
+
+                // TODO: create serialisable error for @alloy-signer::error::Error
+                let signature = signer
+                    .sign_dynamic_typed_data(typed_data)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing message with EOA (AWS KMS): {:?}", e);
+                        EngineError::AwsKmsSignerError {
+                            error: SerialisableAwsSignerError::Sign {
+                                aws_sdk_error: SerialisableAwsSdkError::Other {
+                                    message: e.to_string(),
+                                },
+                            },
+                        }
+                    })?;
+                Ok(signature.to_string())
+            }
         }
     }
 
@@ -346,6 +392,26 @@ impl AccountSigner for EoaSigner {
                     })?;
 
                 Ok(iaw_result.signature)
+            }
+            SigningCredential::AwsKms(creds) => {
+                let signer = creds.get_signer(options.chain_id).await?;
+                let mut transaction = transaction.clone();
+
+                // TODO: create serialisable error for @alloy-signer::error::Error
+                let signature = signer
+                    .sign_transaction(&mut transaction)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing message with EOA (AWS KMS): {:?}", e);
+                        EngineError::AwsKmsSignerError {
+                            error: SerialisableAwsSignerError::Sign {
+                                aws_sdk_error: SerialisableAwsSdkError::Other {
+                                    message: e.to_string(),
+                                },
+                            },
+                        }
+                    })?;
+                Ok(signature.to_string())
             }
         }
     }
@@ -394,10 +460,26 @@ impl AccountSigner for EoaSigner {
                 // Return the signed authorization as Authorization
                 Ok(iaw_result.signed_authorization)
             }
+            SigningCredential::AwsKms(creds) => {
+                let signer = creds.get_signer(options.chain_id).await?;
+                let authorization_hash = authorization.signature_hash();
+
+                let signature = signer.sign_hash(&authorization_hash).await.map_err(|e| {
+                    tracing::error!("Error signing authorization with EOA (AWS KMS): {:?}", e);
+                    EngineError::AwsKmsSignerError {
+                        error: SerialisableAwsSignerError::Sign {
+                            aws_sdk_error: SerialisableAwsSdkError::Other {
+                                message: e.to_string(),
+                            },
+                        },
+                    }
+                })?;
+
+                Ok(authorization.into_signed(signature))
+            }
         }
     }
 }
-
 /// Parameters for signing a message (used in routes)
 pub struct MessageSignerParams {
     pub credentials: SigningCredential,

@@ -41,3 +41,4 @@ utoipa = { version = "5.4.0", features = [
 utoipa-axum = "0.2.0"
 utoipa-scalar = { version = "0.3.0", features = ["axum"] }
 serde_with = "3.14.0"
+aws-arn = "0.3.1"

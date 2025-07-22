@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::eoa::{
     store::{
-        CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransaction,
-        SubmittedTransactionDehydrated, TransactionData, TransactionStoreError,
+        CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransactionDehydrated,
+        TransactionData, TransactionStoreError,
     },
     worker::{
         EoaExecutorWorker,
@@ -111,7 +111,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         }
 
         // Fetch receipts and categorize transactions
-        let (confirmed_txs, replaced_txs) =
+        let (confirmed_txs, _replaced_txs) =
             self.fetch_confirmed_transaction_receipts(waiting_txs).await;
 
         // Process confirmed transactions
