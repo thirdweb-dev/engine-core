@@ -15,6 +15,7 @@ use twmq::{
     job::{BorrowedJob, JobResult, RequeuePosition, ToJobError, ToJobResult},
 };
 
+use crate::eip7702_executor::send::Eip7702Sender;
 use crate::{
     transaction_registry::TransactionRegistry,
     webhook::{
@@ -30,7 +31,12 @@ pub struct Eip7702ConfirmationJobData {
     pub transaction_id: String,
     pub chain_id: u64,
     pub bundler_transaction_id: String,
-    pub eoa_address: Address,
+    /// ! Deprecated todo: remove this field after all jobs are processed
+    pub eoa_address: Option<Address>,
+
+    // TODO: make non-optional after all jobs are processed
+    pub sender_details: Option<Eip7702Sender>,
+
     pub rpc_credentials: RpcCredentials,
     #[serde(default)]
     pub webhook_options: Vec<WebhookOptions>,
@@ -55,7 +61,9 @@ pub struct Eip7702ConfirmationResult {
     pub transaction_id: String,
     pub transaction_hash: TxHash,
     pub receipt: TransactionReceipt,
-    pub eoa_address: Address,
+
+    #[serde(flatten)]
+    pub sender_details: Eip7702Sender,
 }
 
 // --- Error Types ---
@@ -86,7 +94,7 @@ pub enum Eip7702ConfirmationError {
     #[error("Transaction failed: {message}")]
     TransactionFailed {
         message: String,
-        receipt: TransactionReceipt,
+        receipt: Box<TransactionReceipt>,
     },
 
     #[error("Invalid RPC Credentials: {message}")]
@@ -242,7 +250,7 @@ where
         if !success {
             return Err(Eip7702ConfirmationError::TransactionFailed {
                 message: "Transaction reverted".to_string(),
-                receipt,
+                receipt: Box::new(receipt),
             })
             .map_err_fail();
         }
@@ -254,11 +262,25 @@ where
             "Transaction confirmed successfully"
         );
 
+        // todo: remove this after all jobs are processed
+        let sender_details = job_data
+            .sender_details
+            .clone()
+            .or_else(|| {
+                job_data
+                    .eoa_address
+                    .map(|eoa_address| Eip7702Sender::Owner { eoa_address })
+            })
+            .ok_or_else(|| Eip7702ConfirmationError::InternalError {
+                message: "No sender details found".to_string(),
+            })
+            .map_err_fail()?;
+
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
             transaction_hash,
             receipt,
-            eoa_address: job_data.eoa_address,
+            sender_details,
         })
     }
 

@@ -338,7 +338,7 @@ impl AccountSigner for EoaSigner {
             } => {
                 let iaw_result = self
                     .iaw_client
-                    .sign_transaction(auth_token, thirdweb_auth, &transaction)
+                    .sign_transaction(auth_token, thirdweb_auth, transaction)
                     .await
                     .map_err(|e| {
                         tracing::error!("Error signing transaction with EOA (IAW): {:?}", e);

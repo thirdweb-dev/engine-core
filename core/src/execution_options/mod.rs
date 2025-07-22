@@ -27,7 +27,7 @@ fn default_idempotency_key() -> String {
 }
 
 /// All supported specific execution options are contained here
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type")]
 #[schema(title = "Execution Option Variants")]
 pub enum SpecificExecutionOptions {

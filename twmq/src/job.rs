@@ -54,6 +54,14 @@ pub enum JobError<E> {
 pub trait ToJobResult<T, E> {
     fn map_err_nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobResult<T, E>;
     fn map_err_fail(self) -> JobResult<T, E>;
+
+    fn map_err_with_max_retries(
+        self,
+        delay: Option<Duration>,
+        position: RequeuePosition,
+        max_retries: u32,
+        current_attempts: u32,
+    ) -> JobResult<T, E>;
 }
 
 impl<T, E, ErrorType> ToJobResult<T, E> for Result<T, ErrorType>
@@ -71,11 +79,39 @@ where
     fn map_err_fail(self) -> JobResult<T, E> {
         self.map_err(|e| JobError::Fail(e.into()))
     }
+
+    fn map_err_with_max_retries(
+        self,
+        delay: Option<Duration>,
+        position: RequeuePosition,
+        max_retries: u32,
+        current_attempts: u32,
+    ) -> JobResult<T, E> {
+        self.map_err(|e| {
+            if current_attempts >= max_retries {
+                JobError::Fail(e.into())
+            } else {
+                JobError::Nack {
+                    error: e.into(),
+                    delay,
+                    position,
+                }
+            }
+        })
+    }
 }
 
 pub trait ToJobError<E> {
     fn nack(self, delay: Option<Duration>, position: RequeuePosition) -> JobError<E>;
     fn fail(self) -> JobError<E>;
+
+    fn nack_with_max_retries(
+        self,
+        delay: Option<Duration>,
+        position: RequeuePosition,
+        max_retries: u32,
+        current_attempts: u32,
+    ) -> JobError<E>;
 }
 
 impl<E> ToJobError<E> for E {
@@ -89,6 +125,24 @@ impl<E> ToJobError<E> for E {
 
     fn fail(self) -> JobError<E> {
         JobError::Fail(self)
+    }
+
+    fn nack_with_max_retries(
+        self,
+        delay: Option<Duration>,
+        position: RequeuePosition,
+        max_retries: u32,
+        current_attempts: u32,
+    ) -> JobError<E> {
+        if current_attempts >= max_retries {
+            JobError::Fail(self)
+        } else {
+            JobError::Nack {
+                error: self,
+                delay,
+                position,
+            }
+        }
     }
 }
 
