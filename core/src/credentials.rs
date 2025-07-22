@@ -1,6 +1,6 @@
 use alloy::primitives::ChainId;
 use alloy_signer_aws::AwsSigner;
-use aws_config::BehaviorVersion;
+use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::provider::future::ProvideCredentials as ProvideCredentialsFuture;
 use aws_sdk_kms::config::{Credentials, ProvideCredentials};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,7 @@ impl AwsKmsCredential {
     pub async fn get_signer(&self, chain_id: Option<ChainId>) -> Result<AwsSigner, EngineError> {
         let config = aws_config::defaults(BehaviorVersion::latest())
             .credentials_provider(self.clone())
+            .region(Region::new(self.region.clone()))
             .load()
             .await;
         let client = aws_sdk_kms::Client::new(&config);

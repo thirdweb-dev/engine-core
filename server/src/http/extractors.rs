@@ -22,7 +22,7 @@ const HEADER_THIRDWEB_SERVICE_KEY: &str = "x-thirdweb-service-key";
 const HEADER_WALLET_ACCESS_TOKEN: &str = "x-wallet-access-token";
 const HEADER_VAULT_ACCESS_TOKEN: &str = "x-vault-access-token";
 const HEADER_AWS_KMS_ARN: &str = "x-aws-kms-arn";
-const HEADER_AWS_KMS_ACCESS_KEY_ID: &str = "x-aws-kms-access-key-id";
+const HEADER_AWS_ACCESS_KEY_ID: &str = "x-aws-access-key-id";
 const HEADER_AWS_SECRET_ACCESS_KEY: &str = "x-aws-secret-access-key";
 
 /// Extractor for RPC credentials from headers
@@ -147,7 +147,7 @@ impl SigningCredentialsExtractor {
     /// Try to extract AWS KMS credentials from headers
     fn try_extract_aws_kms(parts: &Parts) -> Result<Option<AwsKmsCredential>, ApiEngineError> {
         let arn = Self::get_header_value(parts, HEADER_AWS_KMS_ARN);
-        let access_key_id = Self::get_header_value(parts, HEADER_AWS_KMS_ACCESS_KEY_ID);
+        let access_key_id = Self::get_header_value(parts, HEADER_AWS_ACCESS_KEY_ID);
         let secret_access_key = Self::get_header_value(parts, HEADER_AWS_SECRET_ACCESS_KEY);
 
         match (arn, access_key_id, secret_access_key) {
@@ -180,12 +180,19 @@ impl SigningCredentialsExtractor {
         }
 
         // Extract and validate key ID
-        let key_id = parsed_arn.resource.to_string();
-        if key_id.is_empty() {
-            return Err(ApiEngineError(EngineError::ValidationError {
-                message: "KMS ARN must contain a valid key ID in the resource part".to_string(),
-            }));
-        }
+        let key_id = parsed_arn
+            .resource
+            .path_split()
+            .last()
+            .map(|id| {
+                dbg!(&id);
+                id.to_string()
+            })
+            .ok_or_else(|| {
+                ApiEngineError(EngineError::ValidationError {
+                    message: "KMS ARN must contain a valid key ID in the resource part".to_string(),
+                })
+            })?;
 
         // Extract and validate region
         let region = parsed_arn.region.ok_or_else(|| {
@@ -193,6 +200,8 @@ impl SigningCredentialsExtractor {
                 message: "KMS ARN must contain a valid region".to_string(),
             })
         })?;
+
+        dbg!(&region);
 
         Ok((key_id, region.to_string()))
     }
