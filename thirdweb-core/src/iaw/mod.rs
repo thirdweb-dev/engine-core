@@ -68,16 +68,13 @@ impl From<reqwest::Error> for IAWError {
 
 /// Message format for signing operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum MessageFormat {
+    #[default]
     Text,
     Hex,
 }
 
-impl Default for MessageFormat {
-    fn default() -> Self {
-        MessageFormat::Text
-    }
-}
 
 /// Response data for message signing operations
 #[derive(Debug, Clone, Serialize, Deserialize)]

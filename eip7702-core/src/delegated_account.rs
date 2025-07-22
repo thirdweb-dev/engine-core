@@ -5,7 +5,7 @@ use alloy::{
 use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
-    error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
+    error::{AlloyRpcErrorToEngineError, EngineError},
     signer::{AccountSigner, EoaSigner, EoaSigningOptions},
 };
 use rand::Rng;
