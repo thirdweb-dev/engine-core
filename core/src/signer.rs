@@ -6,7 +6,7 @@ use alloy::{
     network::TxSigner,
     primitives::{Address, Bytes, ChainId, U256},
     rpc::types::Authorization,
-    signers::Signer,
+    signers::{Signer, SignerSync},
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, PickFirst, serde_as};
@@ -162,13 +162,11 @@ pub enum SigningOptions {
     ERC4337(Erc4337SigningOptions),
 }
 
-/// Account signer trait using impl Future pattern like TWMQ
 pub trait AccountSigner {
-    type SigningOptions;
     /// Sign a message
     fn sign_message(
         &self,
-        options: Self::SigningOptions,
+        options: EoaSigningOptions,
         message: &str,
         format: MessageFormat,
         credentials: &SigningCredential,
@@ -177,7 +175,7 @@ pub trait AccountSigner {
     /// Sign typed data
     fn sign_typed_data(
         &self,
-        options: Self::SigningOptions,
+        options: EoaSigningOptions,
         typed_data: &TypedData,
         credentials: &SigningCredential,
     ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
@@ -185,7 +183,7 @@ pub trait AccountSigner {
     /// Sign a transaction
     fn sign_transaction(
         &self,
-        options: Self::SigningOptions,
+        options: EoaSigningOptions,
         transaction: &TypedTransaction,
         credentials: &SigningCredential,
     ) -> impl std::future::Future<Output = Result<String, EngineError>> + Send;
@@ -193,7 +191,7 @@ pub trait AccountSigner {
     /// Sign EIP-7702 authorization
     fn sign_authorization(
         &self,
-        options: Self::SigningOptions,
+        options: EoaSigningOptions,
         chain_id: u64,
         address: Address,
         nonce: u64,
@@ -219,8 +217,6 @@ impl EoaSigner {
 }
 
 impl AccountSigner for EoaSigner {
-    type SigningOptions = EoaSigningOptions;
-
     async fn sign_message(
         &self,
         options: EoaSigningOptions,
@@ -299,6 +295,24 @@ impl AccountSigner for EoaSigner {
                 })?;
                 Ok(signature.to_string())
             }
+            SigningCredential::PrivateKey(signer) => {
+                let message_bytes = match format {
+                    MessageFormat::Text => message.to_string().into_bytes(),
+                    MessageFormat::Hex => {
+                        alloy::hex::decode(message).map_err(|_| EngineError::ValidationError {
+                            message: "Invalid hex string".to_string(),
+                        })?
+                    }
+                };
+
+                let signature = signer.sign_message(&message_bytes).await.map_err(|e| {
+                    tracing::error!("Error signing message with EOA (PrivateKey): {:?}", e);
+                    EngineError::ValidationError {
+                        message: format!("Failed to sign message: {}", e),
+                    }
+                })?;
+                Ok(signature.to_string())
+            }
         }
     }
 
@@ -356,6 +370,18 @@ impl AccountSigner for EoaSigner {
                     })?;
                 Ok(signature.to_string())
             }
+            SigningCredential::PrivateKey(signer) => {
+                let signature = signer
+                    .sign_dynamic_typed_data(typed_data)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing typed data with EOA (PrivateKey): {:?}", e);
+                        EngineError::ValidationError {
+                            message: format!("Failed to sign typed data: {}", e),
+                        }
+                    })?;
+                Ok(signature.to_string())
+            }
         }
     }
 
@@ -409,6 +435,19 @@ impl AccountSigner for EoaSigner {
                                     message: e.to_string(),
                                 },
                             },
+                        }
+                    })?;
+                Ok(signature.to_string())
+            }
+            SigningCredential::PrivateKey(signer) => {
+                let mut transaction = transaction.clone();
+                let signature = signer
+                    .sign_transaction(&mut transaction)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing transaction with EOA (PrivateKey): {:?}", e);
+                        EngineError::ValidationError {
+                            message: format!("Failed to sign transaction: {}", e),
                         }
                     })?;
                 Ok(signature.to_string())
@@ -472,6 +511,17 @@ impl AccountSigner for EoaSigner {
                                 message: e.to_string(),
                             },
                         },
+                    }
+                })?;
+
+                Ok(authorization.into_signed(signature))
+            }
+            SigningCredential::PrivateKey(signer) => {
+                let authorization_hash = authorization.signature_hash();
+                let signature = signer.sign_hash_sync(&authorization_hash).map_err(|e| {
+                    tracing::error!("Error signing authorization with EOA (PrivateKey): {:?}", e);
+                    EngineError::ValidationError {
+                        message: format!("Failed to sign authorization: {}", e),
                     }
                 })?;
 

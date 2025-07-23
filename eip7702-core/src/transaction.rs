@@ -12,24 +12,87 @@ use engine_core::{
     transaction::InnerTransaction,
 };
 use serde_json::Value;
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::delegated_account::DelegatedAccount;
 
 sol!(
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct Call {
         address target;
         uint256 value;
         bytes data;
     }
 
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct WrappedCalls {
         Call[] calls;
         bytes32 uid;
     }
 
     function execute(Call[] calldata calls) external payable;
+    function executeWithSig(WrappedCalls calldata wrappedCalls, bytes calldata signature) external payable;
+
+    #[derive(Serialize_repr, Deserialize_repr)]
+    enum LimitType {
+        Unlimited,
+        Lifetime,
+        Allowance,
+    }
+
+    #[derive(Serialize_repr, Deserialize_repr)]
+    enum Condition {
+        Unconstrained,
+        Equal,
+        Greater,
+        Less,
+        GreaterOrEqual,
+        LessOrEqual,
+        NotEqual,
+    }
+
+    #[derive(serde::Serialize)]
+    struct UsageLimit {
+        LimitType limitType;
+        uint256 limit; // ignored if limitType == Unlimited
+        uint256 period; // ignored if limitType != Allowance
+    }
+
+    #[derive(serde::Serialize)]
+    struct Constraint {
+        Condition condition;
+        uint64 index;
+        bytes32 refValue;
+        UsageLimit limit;
+    }
+
+    #[derive(serde::Serialize)]
+    struct CallSpec {
+        address target;
+        bytes4 selector;
+        uint256 maxValuePerUse;
+        UsageLimit valueLimit;
+        Constraint[] constraints;
+    }
+
+    #[derive(serde::Serialize)]
+    struct TransferSpec {
+        address target;
+        uint256 maxValuePerUse;
+        UsageLimit valueLimit;
+    }
+
+    #[derive(serde::Serialize)]
+    struct SessionSpec {
+        address signer;
+        bool isWildcard;
+        uint256 expiresAt;
+        CallSpec[] callPolicies;
+        TransferSpec[] transferPolicies;
+        bytes32 uid;
+    }
+
+    function createSessionWithSig(SessionSpec calldata sessionSpec, bytes calldata signature) external;
 );
 
 /// A transaction for a minimal account that supports signing and execution via bundler
@@ -126,9 +189,9 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         self.authorization = Some(authorization);
     }
 
-    pub async fn add_authorization_if_needed(
+    pub async fn add_authorization_if_needed<S: AccountSigner>(
         mut self,
-        signer: &EoaSigner,
+        signer: &S,
         credentials: &SigningCredential,
     ) -> Result<Self, EngineError> {
         if self.account.is_minimal_account().await? {
@@ -141,12 +204,12 @@ impl<C: Chain> MinimalAccountTransaction<C> {
     }
 
     /// Build the transaction data as JSON for bundler execution with automatic signing
-    pub async fn build(
+    pub async fn build<S: AccountSigner>(
         &self,
-        eoa_signer: &EoaSigner,
+        signer: &S,
         credentials: &SigningCredential,
     ) -> Result<(Value, String), EngineError> {
-        let signature = self.sign_wrapped_calls(eoa_signer, credentials).await?;
+        let signature = self.sign_wrapped_calls(signer, credentials).await?;
 
         // Serialize wrapped calls to JSON
         let wrapped_calls_json = serde_json::to_value(&self.wrapped_calls).map_err(|e| {
@@ -190,20 +253,19 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         self.authorization.as_ref()
     }
 
-    pub async fn sign_wrapped_calls(
+    pub async fn sign_wrapped_calls<S: AccountSigner>(
         &self,
-        eoa_signer: &EoaSigner,
+        signer: &S,
         credentials: &SigningCredential,
     ) -> Result<String, EngineError> {
         let typed_data = self.create_wrapped_calls_typed_data();
-        self.sign_typed_data(eoa_signer, credentials, &typed_data)
-            .await
+        self.sign_typed_data(signer, credentials, &typed_data).await
     }
 
     /// Sign typed data with EOA signer
-    async fn sign_typed_data(
+    async fn sign_typed_data<S: AccountSigner>(
         &self,
-        eoa_signer: &EoaSigner,
+        signer: &S,
         credentials: &SigningCredential,
         typed_data: &TypedData,
     ) -> Result<String, EngineError> {
@@ -212,7 +274,7 @@ impl<C: Chain> MinimalAccountTransaction<C> {
             chain_id: Some(self.account.chain().chain_id()),
         };
 
-        eoa_signer
+        signer
             .sign_typed_data(signing_options, typed_data, credentials)
             .await
     }

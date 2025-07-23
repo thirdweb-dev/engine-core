@@ -6,7 +6,7 @@ use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
     error::{AlloyRpcErrorToEngineError, EngineError},
-    signer::{AccountSigner, EoaSigner, EoaSigningOptions},
+    signer::{AccountSigner, EoaSigningOptions},
 };
 use rand::Rng;
 
@@ -99,9 +99,9 @@ impl<C: Chain> DelegatedAccount<C> {
     }
 
     /// Sign authorization for EIP-7702 delegation (automatically fetches nonce)
-    pub async fn sign_authorization(
+    pub async fn sign_authorization<S: AccountSigner>(
         &self,
-        eoa_signer: &EoaSigner,
+        eoa_signer: &S,
         credentials: &SigningCredential,
     ) -> Result<alloy::eips::eip7702::SignedAuthorization, EngineError> {
         let nonce = self.get_nonce().await?;

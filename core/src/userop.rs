@@ -144,6 +144,21 @@ impl UserOpSigner {
 
                 Ok(Bytes::copy_from_slice(&signature.as_bytes()))
             }
+            SigningCredential::PrivateKey(signer) => {
+                let userophash = params.userop.hash(params.chain_id).map_err(|e| {
+                    EngineError::ValidationError {
+                        message: format!("Failed to hash userop: {}", e),
+                    }
+                })?;
+
+                let signature = signer.sign_hash(&userophash).await.map_err(|e| {
+                    EngineError::ValidationError {
+                        message: format!("Failed to sign userop: {}", e),
+                    }
+                })?;
+
+                Ok(Bytes::copy_from_slice(&signature.as_bytes()))
+            }
         }
     }
 }

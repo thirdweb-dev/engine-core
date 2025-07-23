@@ -13,7 +13,7 @@ use engine_core::{
 use engine_eip7702_core::delegated_account::DelegatedAccount;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
 use twmq::{
     FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
     error::TwmqError,
@@ -227,52 +227,40 @@ where
                 Eip7702ExecutionOptions::SessionKey(s) => Some(s.account_address),
             });
 
-        let mut transactions = match session_key_target_address {
+        let transactions = match session_key_target_address {
             Some(target_address) => {
                 account.session_key_transaction(target_address, &job_data.transactions)
             }
             None => account.owner_transaction(&job_data.transactions),
         };
 
-        let is_authorization_needed = !transactions
-            .account()
-            .is_minimal_account()
+        let transactions = transactions
+            .add_authorization_if_needed(self.eoa_signer.deref(), &job_data.signing_credential)
             .await
-            .map_err(|e| Eip7702SendError::DelegationCheckFailed { inner_error: e })
-            .map_err_with_max_retries(
-                Some(Duration::from_secs(2)),
-                twmq::job::RequeuePosition::Last,
-                3,
-                job.attempts(),
-            )?;
-
-        if is_authorization_needed {
-            let authorization = transactions
-                .account()
-                .sign_authorization(&self.eoa_signer, &job_data.signing_credential)
-                .await
-                .map_err(|e| {
-                    let mapped_error = Eip7702SendError::SigningFailed {
+            .map_err(|e| {
+                let mapped_error = match e {
+                    EngineError::RpcError { .. } => Eip7702SendError::DelegationCheckFailed {
                         inner_error: e.clone(),
-                    };
+                    },
+                    _ => Eip7702SendError::SigningFailed {
+                        inner_error: e.clone(),
+                    },
+                };
 
-                    if is_build_error_retryable(&e) {
-                        mapped_error.nack_with_max_retries(
-                            Some(Duration::from_secs(2)),
-                            twmq::job::RequeuePosition::Last,
-                            3,
-                            job.attempts(),
-                        )
-                    } else {
-                        mapped_error.fail()
-                    }
-                })?;
-
-            transactions.set_authorization(authorization);
-        }
+                if is_build_error_retryable(&e) {
+                    mapped_error.nack_with_max_retries(
+                        Some(Duration::from_secs(2)),
+                        twmq::job::RequeuePosition::Last,
+                        3,
+                        job.attempts(),
+                    )
+                } else {
+                    mapped_error.fail()
+                }
+            })?;
 
         let (wrapped_calls, signature) = transactions
-            .build(&self.eoa_signer, &job_data.signing_credential)
+            .build(self.eoa_signer.deref(), &job_data.signing_credential)
             .await
             .map_err(|e| Eip7702SendError::SigningFailed { inner_error: e })
             .map_err_fail()?;

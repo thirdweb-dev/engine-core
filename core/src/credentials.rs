@@ -1,4 +1,5 @@
 use alloy::primitives::ChainId;
+use alloy::signers::local::PrivateKeySigner;
 use alloy_signer_aws::AwsSigner;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::provider::future::ProvideCredentials as ProvideCredentialsFuture;
@@ -10,6 +11,13 @@ use vault_types::enclave::auth::Auth as VaultAuth;
 
 use crate::error::EngineError;
 
+impl SigningCredential {
+    /// Create a random private key credential for testing
+    pub fn random_local() -> Self {
+        SigningCredential::PrivateKey(PrivateKeySigner::random())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SigningCredential {
     Vault(VaultAuth),
@@ -18,6 +26,10 @@ pub enum SigningCredential {
         thirdweb_auth: ThirdwebAuth,
     },
     AwsKms(AwsKmsCredential),
+    /// Private key signer for testing and development
+    /// Note: This should only be used in test environments
+    #[serde(skip)]
+    PrivateKey(PrivateKeySigner),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
