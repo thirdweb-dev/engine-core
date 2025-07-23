@@ -2176,6 +2176,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-eip7702-core"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "engine-core",
+ "rand 0.9.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "engine-executors"
 version = "0.1.0"
 dependencies = [
@@ -2184,6 +2198,7 @@ dependencies = [
  "engine-aa-core",
  "engine-aa-types",
  "engine-core",
+ "engine-eip7702-core",
  "futures",
  "hex",
  "hmac",

@@ -242,7 +242,7 @@ impl EoaExecutionError {
         success_factory: impl FnOnce() -> T,
         error_factory: impl FnOnce(String) -> E,
     ) -> twmq::job::JobResult<T, E> {
-        use twmq::job::{ToJobError, ToJobResult};
+        use twmq::job::ToJobError;
 
         if strategy.queue_confirmation {
             // Treat as success since we need to check confirmation

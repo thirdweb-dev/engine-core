@@ -3,6 +3,7 @@ members = [
   "aa-types",
   "aa-core",
   "core",
+  "eip7702-core",
   "executors",
   "server",
   "thirdweb-core",
