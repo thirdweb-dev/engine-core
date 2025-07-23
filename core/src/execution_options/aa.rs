@@ -1,13 +1,13 @@
-use crate::{
-    constants::{DEFAULT_FACTORY_ADDRESS_V0_6, ENTRYPOINT_ADDRESS_V0_6},
-    defs::AddressDef,
-    error::EngineError,
+use crate::{constants::DEFAULT_FACTORY_ADDRESS_V0_6, defs::AddressDef, error::EngineError};
+use alloy::{
+    hex::FromHex,
+    primitives::{Address, Bytes},
 };
-use alloy::{hex::FromHex, primitives::{Address, Bytes}};
+use engine_aa_types::{ENTRYPOINT_ADDRESS_V0_6, ENTRYPOINT_ADDRESS_V0_7};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::constants::{DEFAULT_FACTORY_ADDRESS_V0_7, ENTRYPOINT_ADDRESS_V0_7};
+use crate::constants::DEFAULT_FACTORY_ADDRESS_V0_7;
 
 #[derive(Deserialize, Serialize, Debug, JsonSchema, Clone, Copy, utoipa::ToSchema)]
 pub enum EntrypointVersion {

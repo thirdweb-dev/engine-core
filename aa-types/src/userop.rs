@@ -1,6 +1,6 @@
 use alloy::{
     core::sol_types::SolValue,
-    primitives::{Address, B256, Bytes, ChainId, U256, keccak256},
+    primitives::{Address, B256, Bytes, ChainId, U256, address, keccak256},
     rpc::types::{PackedUserOperation, UserOperation},
 };
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,9 @@ pub enum VersionedUserOp {
     V0_6(UserOperation),
     V0_7(PackedUserOperation),
 }
+
+pub const ENTRYPOINT_ADDRESS_V0_6: Address = address!("0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"); // v0.6
+pub const ENTRYPOINT_ADDRESS_V0_7: Address = address!("0x0000000071727De22E5E9d8BAf0edAc6f37da032"); // v0.7
 
 /// Error type for UserOp operations
 #[derive(
@@ -181,4 +184,35 @@ pub fn compute_user_op_v07_hash(
     let outer_encoded = outer_tuple.abi_encode();
     let final_hash = keccak256(&outer_encoded);
     Ok(final_hash)
+}
+
+impl VersionedUserOp {
+    pub fn hash(&self, chain_id: ChainId) -> Result<B256, UserOpError> {
+        match self {
+            VersionedUserOp::V0_6(op) => {
+                compute_user_op_v06_hash(op, ENTRYPOINT_ADDRESS_V0_6, chain_id)
+            }
+            VersionedUserOp::V0_7(op) => {
+                compute_user_op_v07_hash(op, ENTRYPOINT_ADDRESS_V0_7, chain_id)
+            }
+        }
+    }
+
+    pub fn hash_with_custom_entrypoint(
+        &self,
+        chain_id: ChainId,
+        entrypoint: Address,
+    ) -> Result<B256, UserOpError> {
+        match self {
+            VersionedUserOp::V0_6(op) => compute_user_op_v06_hash(op, entrypoint, chain_id),
+            VersionedUserOp::V0_7(op) => compute_user_op_v07_hash(op, entrypoint, chain_id),
+        }
+    }
+
+    pub fn default_entrypoint(&self) -> Address {
+        match self {
+            VersionedUserOp::V0_6(_) => ENTRYPOINT_ADDRESS_V0_6,
+            VersionedUserOp::V0_7(_) => ENTRYPOINT_ADDRESS_V0_7,
+        }
+    }
 }

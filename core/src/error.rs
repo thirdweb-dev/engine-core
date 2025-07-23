@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::defs::AddressDef;
 use alloy::{
     primitives::Address,
@@ -5,6 +7,8 @@ use alloy::{
         RpcError as AlloyRpcError, TransportErrorKind, http::reqwest::header::InvalidHeaderValue,
     },
 };
+use alloy_signer_aws::AwsSignerError;
+use aws_sdk_kms::error::SdkError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thirdweb_core::error::ThirdwebError;
@@ -242,9 +246,148 @@ pub enum EngineError {
     #[error("Thirdweb error: {message}")]
     ThirdwebError { message: String },
 
+    #[schema(title = "AWS KMS Error")]
+    #[error(transparent)]
+    #[serde(rename_all = "camelCase")]
+    AwsKmsSignerError {
+        #[serde(flatten)]
+        error: SerialisableAwsSignerError,
+    },
+
     #[schema(title = "Engine Internal Error")]
     #[error("Internal error: {message}")]
     InternalError { message: String },
+}
+
+#[derive(thiserror::Error, Debug, Serialize, Clone, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "type")]
+pub enum SerialisableAwsSdkError {
+    /// The request failed during construction. It was not dispatched over the network.
+    #[error("Construction failure: {message}")]
+    ConstructionFailure { message: String },
+
+    /// The request failed due to a timeout. The request MAY have been sent and received.
+    #[error("Timeout error: {message}")]
+    TimeoutError { message: String },
+
+    /// The request failed during dispatch. An HTTP response was not received. The request MAY
+    /// have been sent.
+    #[error("Dispatch failure: {message}")]
+    DispatchFailure { message: String },
+
+    /// A response was received but it was not parseable according the the protocol (for example
+    /// the server hung up without sending a complete response)
+    #[error("Response error: {message}")]
+    ResponseError { message: String },
+
+    /// An error response was received from the service
+    #[error("Service error: {message}")]
+    ServiceError { message: String },
+
+    #[error("Other error: {message}")]
+    Other { message: String },
+}
+
+#[derive(Error, Debug, Serialize, Clone, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "type")]
+pub enum SerialisableAwsSignerError {
+    /// Thrown when the AWS KMS API returns a signing error.
+    #[error(transparent)]
+    Sign {
+        aws_sdk_error: SerialisableAwsSdkError,
+    },
+
+    /// Thrown when the AWS KMS API returns an error.
+    #[error(transparent)]
+    GetPublicKey {
+        aws_sdk_error: SerialisableAwsSdkError,
+    },
+
+    /// [`ecdsa`] error.
+    #[error("ECDSA error: {message}")]
+    K256 { message: String },
+
+    /// [`spki`] error.
+    #[error("SPKI error: {message}")]
+    Spki { message: String },
+
+    /// [`hex`](mod@hex) error.
+    #[error("Hex error: {message}")]
+    Hex { message: String },
+
+    /// Thrown when the AWS KMS API returns a response without a signature.
+    #[error("signature not found in response")]
+    SignatureNotFound,
+
+    /// Thrown when the AWS KMS API returns a response without a public key.
+    #[error("public key not found in response")]
+    PublicKeyNotFound,
+
+    #[error("Unknown error: {message}")]
+    Unknown { message: String },
+}
+
+impl<T: Debug> From<SdkError<T>> for SerialisableAwsSdkError {
+    fn from(err: SdkError<T>) -> Self {
+        match err {
+            SdkError::ConstructionFailure(err) => SerialisableAwsSdkError::ConstructionFailure {
+                message: format!("{:?}", err),
+            },
+            SdkError::TimeoutError(err) => SerialisableAwsSdkError::TimeoutError {
+                message: format!("{:?}", err),
+            },
+            SdkError::DispatchFailure(err) => SerialisableAwsSdkError::DispatchFailure {
+                message: format!("{:?}", err),
+            },
+            SdkError::ResponseError(err) => SerialisableAwsSdkError::ResponseError {
+                message: format!("{:?}", err),
+            },
+            SdkError::ServiceError(err) => SerialisableAwsSdkError::ServiceError {
+                message: format!("{:?}", err),
+            },
+            _ => SerialisableAwsSdkError::Other {
+                message: format!("{:?}", err),
+            },
+        }
+    }
+}
+
+impl From<AwsSignerError> for EngineError {
+    fn from(err: AwsSignerError) -> Self {
+        match err {
+            AwsSignerError::Sign(err) => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::Sign {
+                    aws_sdk_error: err.into(),
+                },
+            },
+            AwsSignerError::GetPublicKey(err) => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::GetPublicKey {
+                    aws_sdk_error: err.into(),
+                },
+            },
+            AwsSignerError::K256(err) => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::K256 {
+                    message: err.to_string(),
+                },
+            },
+            AwsSignerError::Spki(err) => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::Spki {
+                    message: err.to_string(),
+                },
+            },
+            AwsSignerError::Hex(err) => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::Hex {
+                    message: err.to_string(),
+                },
+            },
+            AwsSignerError::SignatureNotFound => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::SignatureNotFound,
+            },
+            AwsSignerError::PublicKeyNotFound => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::PublicKeyNotFound,
+            },
+        }
+    }
 }
 
 impl From<vault_sdk::error::VaultError> for EngineError {

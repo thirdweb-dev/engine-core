@@ -1,6 +1,7 @@
 use alloy::{
     hex::FromHex,
     primitives::{Address, Bytes, ChainId},
+    signers::Signer,
 };
 use thirdweb_core::iaw::IAWClient;
 use vault_sdk::VaultClient;
@@ -9,7 +10,10 @@ use vault_types::{
     userop::{UserOperationV06Input, UserOperationV07Input},
 };
 
-use crate::{credentials::SigningCredential, error::EngineError};
+use crate::{
+    credentials::SigningCredential,
+    error::{EngineError, SerialisableAwsSdkError, SerialisableAwsSignerError},
+};
 
 // Re-export for convenience
 pub use engine_aa_types::VersionedUserOp;
@@ -119,6 +123,41 @@ impl UserOpSigner {
                         message: "Bad signature received from IAW".to_string(),
                     }
                 })?)
+            }
+            SigningCredential::AwsKms(creds) => {
+                let signer = creds.get_signer(Some(params.chain_id)).await?;
+                let userophash = params.userop.hash(params.chain_id).map_err(|e| {
+                    EngineError::ValidationError {
+                        message: format!("Failed to hash userop: {}", e),
+                    }
+                })?;
+
+                let signature = signer.sign_hash(&userophash).await.map_err(|e| {
+                    EngineError::AwsKmsSignerError {
+                        error: SerialisableAwsSignerError::Sign {
+                            aws_sdk_error: SerialisableAwsSdkError::Other {
+                                message: e.to_string(),
+                            },
+                        },
+                    }
+                })?;
+
+                Ok(Bytes::copy_from_slice(&signature.as_bytes()))
+            }
+            SigningCredential::PrivateKey(signer) => {
+                let userophash = params.userop.hash(params.chain_id).map_err(|e| {
+                    EngineError::ValidationError {
+                        message: format!("Failed to hash userop: {}", e),
+                    }
+                })?;
+
+                let signature = signer.sign_hash(&userophash).await.map_err(|e| {
+                    EngineError::ValidationError {
+                        message: format!("Failed to sign userop: {}", e),
+                    }
+                })?;
+
+                Ok(Bytes::copy_from_slice(&signature.as_bytes()))
             }
         }
     }

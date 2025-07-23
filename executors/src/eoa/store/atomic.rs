@@ -19,7 +19,7 @@ use crate::{
             },
             submitted::{
                 CleanAndGetRecycledNonces, CleanSubmittedTransactions, CleanupReport,
-                SubmittedNoopTransaction, SubmittedTransaction,
+                SubmittedNoopTransaction,
             },
         },
         worker::error::EoaExecutorWorkerError,

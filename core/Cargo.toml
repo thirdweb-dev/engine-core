@@ -19,3 +19,7 @@ thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
 uuid = { version = "1.17.0", features = ["v4"] }
 utoipa = { version = "5.4.0", features = ["preserve_order"] }
 serde_with = "3.13.0"
+alloy-signer-aws = { version = "1.0.23", features = ["eip712"] }
+aws-config = "1.8.2"
+aws-sdk-kms = "1.79.0"
+aws-credential-types = "1.2.4"

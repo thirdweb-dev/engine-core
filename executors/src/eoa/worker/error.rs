@@ -94,6 +94,17 @@ impl EoaExecutorWorkerError {
                 inner_error: TransactionStoreError::LockLost { .. },
                 ..
             } => JobError::Fail(self),
+            EoaExecutorWorkerError::RpcError { .. } => {
+                if is_retryable_preparation_error(&self) {
+                    JobError::Nack {
+                        error: self,
+                        delay: Some(Duration::from_secs(10)),
+                        position: RequeuePosition::Last,
+                    }
+                } else {
+                    JobError::Fail(self)
+                }
+            }
             _ => JobError::Nack {
                 error: self,
                 delay: Some(Duration::from_secs(10)),
@@ -219,6 +230,11 @@ pub fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
     match kind {
         RpcErrorKind::TransportHttpError { status, .. } if *status >= 400 && *status < 500 => false,
         RpcErrorKind::UnsupportedFeature { .. } => false,
+        RpcErrorKind::ErrorResp(resp) => {
+            let message = resp.message.to_lowercase();
+            // if the error message contains "invalid chain", it's not retryable
+            !message.contains("invalid chain")
+        }
         _ => true,
     }
 }

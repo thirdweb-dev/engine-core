@@ -66,7 +66,7 @@ impl ApiEngineError {
 
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
-            EngineError::VaultError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            EngineError::VaultError { .. } => StatusCode::BAD_GATEWAY,
             EngineError::IawError { error } => match error {
                 thirdweb_core::iaw::IAWError::ApiError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
                 thirdweb_core::iaw::IAWError::SerializationError { .. } => StatusCode::BAD_REQUEST,
@@ -83,6 +83,7 @@ impl ApiEngineError {
             EngineError::ValidationError { .. } => StatusCode::BAD_REQUEST,
             EngineError::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             EngineError::ThirdwebError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            EngineError::AwsKmsSignerError { .. } => StatusCode::BAD_GATEWAY,
         }
     }
 }
