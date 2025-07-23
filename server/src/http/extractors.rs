@@ -184,10 +184,7 @@ impl SigningCredentialsExtractor {
             .resource
             .path_split()
             .last()
-            .map(|id| {
-                dbg!(&id);
-                id.to_string()
-            })
+            .map(|id| id.to_string())
             .ok_or_else(|| {
                 ApiEngineError(EngineError::ValidationError {
                     message: "KMS ARN must contain a valid key ID in the resource part".to_string(),
@@ -200,8 +197,6 @@ impl SigningCredentialsExtractor {
                 message: "KMS ARN must contain a valid region".to_string(),
             })
         })?;
-
-        dbg!(&region);
 
         Ok((key_id, region.to_string()))
     }
