@@ -91,7 +91,7 @@ pub enum Eip7702Sender {
     #[serde(rename_all = "camelCase")]
     SessionKey {
         session_key_address: Address,
-        account_address: Address,
+        eoa_address: Address,
     },
 }
 
@@ -302,7 +302,7 @@ where
         let sender_details = match session_key_target_address {
             Some(target_address) => Eip7702Sender::SessionKey {
                 session_key_address: owner_address,
-                account_address: target_address,
+                eoa_address: target_address,
             },
             None => Eip7702Sender::Owner {
                 eoa_address: owner_address,

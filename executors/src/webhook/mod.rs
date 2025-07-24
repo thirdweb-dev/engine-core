@@ -6,6 +6,7 @@ use engine_core::execution_options::WebhookOptions;
 use hex;
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
@@ -285,7 +286,7 @@ impl DurableExecution for WebhookJobHandler {
                         body_preview: error_body_preview,
                     };
 
-                    if status.is_server_error() || status.as_u16() == 429 {
+                    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
                         if job.job.attempts < self.retry_config.max_attempts {
                             let delay_ms = self.retry_config.initial_delay_ms as f64
                                 * self

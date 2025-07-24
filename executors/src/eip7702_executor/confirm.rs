@@ -345,5 +345,3 @@ where
         }
     }
 }
-
-// --- Helper Functions ---
