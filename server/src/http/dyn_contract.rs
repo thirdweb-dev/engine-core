@@ -195,7 +195,9 @@ impl ContractCall {
         Ok(abi)
     }
 
-    /// Extracts function name from method string
+    /// Extracts the function name from a method string, handling optional "function" prefix and parameter lists.
+    ///
+    /// Returns the function name as a string, or an error if the format is invalid.
     fn extract_function_name(&self, method: &str) -> Result<String, EngineError> {
         let trimmed = method.trim();
 
@@ -214,6 +216,30 @@ impl ContractCall {
         })
     }
 
+    /// Converts a slice of JSON values into dynamic Solidity values according to ABI parameter definitions.
+    ///
+    /// Validates parameter count, recursively parses complex types (such as tuples), and coerces each JSON value into a `DynSolValue` matching the expected Solidity type. Returns an error if parameter counts do not match, if a value cannot be coerced, or if a type mismatch is detected.
+    ///
+    /// # Arguments
+    ///
+    /// * `json_values` - The JSON values representing function arguments.
+    /// * `json_abi_params` - The ABI parameter definitions describing expected Solidity types.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `DynSolValue` instances corresponding to the parsed and validated parameters, or an error message if parsing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde_json::json;
+    /// use alloy_sol_types::{DynSolValue, Param};
+    ///
+    /// let json_values = vec![json!("0x1234..."), json!(42)];
+    /// let abi_params = vec![Param { name: "to".into(), ty: "address".into(), components: vec![] }, Param { name: "amount".into(), ty: "uint256".into(), components: vec![] }];
+    /// let result = ContractCall::json_to_sol(&json_values, &abi_params);
+    /// assert!(result.is_ok());
+    /// ```
     fn json_to_sol(
         json_values: &[JsonValue],
         json_abi_params: &[Param],
@@ -262,7 +288,12 @@ impl ContractCall {
         Ok(parsed_params)
     }
 
-    /// Encodes parameters using serde to directly deserialize into DynSolValue
+    /// Encodes the contract call parameters for a given function using the contract's JSON parameters and ABI.
+    ///
+    /// Validates parameter count, converts JSON values to Solidity types, and ABI-encodes the input data for transaction submission.
+    ///
+    /// # Returns
+    /// Encoded function call data as a byte vector on success, or an `EngineError` if parameter validation or encoding fails.
     pub fn encode_parameters(
         &self,
         function: &Function,
