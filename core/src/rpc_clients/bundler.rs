@@ -72,10 +72,17 @@ pub struct TwExecuteResponse {
 
 /// Response from tw_getTransactionHash bundler method
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum TwGetTransactionHashResponse {
+    Pending,
+    Success { transaction_hash: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TwGetTransactionHashResponse {
-    /// The transaction hash
-    pub transaction_hash: Option<String>,
+pub enum TwGetTransactionHashStatus {
+    Pending,
+    Success,
 }
 
 impl BundlerClient {
@@ -152,12 +159,12 @@ impl BundlerClient {
     pub async fn tw_get_transaction_hash(
         &self,
         transaction_id: &str,
-    ) -> TransportResult<Option<String>> {
+    ) -> TransportResult<TwGetTransactionHashResponse> {
         let params = serde_json::json!([transaction_id]);
 
         let response: TwGetTransactionHashResponse =
             self.inner.request("tw_getTransactionHash", params).await?;
 
-        Ok(response.transaction_hash)
+        Ok(response)
     }
 }
