@@ -77,7 +77,6 @@ async fn main() -> anyhow::Result<()> {
     let execution_router = ExecutionRouter {
         namespace: config.queue.execution_namespace.clone(),
         redis: redis_client.get_connection_manager().await?,
-        eoa_signer: eoa_signer.clone(),
         authorization_cache: moka::future::Cache::builder()
             .max_capacity(1024 * 1024 * 1024)
             .time_to_live(Duration::from_secs(60 * 5))

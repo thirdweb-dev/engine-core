@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy::primitives::{Address, U256};
 use engine_aa_core::smart_account::{DeterminedSmartAccount, SmartAccount, SmartAccountFromSalt};
 use engine_core::{
-    chain::{Chain, ChainService, RpcCredentials},
+    chain::{ChainService, RpcCredentials},
     credentials::SigningCredential,
     error::EngineError,
     execution_options::{
@@ -11,7 +11,6 @@ use engine_core::{
         WebhookOptions, aa::Erc4337ExecutionOptions, eip7702::Eip7702ExecutionOptions,
         eoa::EoaExecutionOptions,
     },
-    signer::EoaSigner,
     transaction::InnerTransaction,
 };
 use engine_eip7702_core::delegated_account::DelegatedAccount;
@@ -30,7 +29,6 @@ use engine_executors::{
     transaction_registry::TransactionRegistry,
     webhook::WebhookJobHandler,
 };
-use serde::de;
 use twmq::{Queue, error::TwmqError, redis::aio::ConnectionManager};
 use vault_sdk::VaultClient;
 use vault_types::{
@@ -52,7 +50,6 @@ pub struct ExecutionRouter {
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
-    pub eoa_signer: Arc<EoaSigner>,
     pub chains: Arc<ThirdwebChainService>,
     pub authorization_cache: moka::future::Cache<AuthorizationCacheKey, bool>,
 }
@@ -392,15 +389,6 @@ impl ExecutionRouter {
         );
 
         Ok(())
-    }
-
-    async fn is_minimal_account(
-        &self,
-        eoa_address: Address,
-        chain: impl Chain,
-    ) -> Result<bool, EngineError> {
-        let delegated_account = DelegatedAccount::new(eoa_address, chain);
-        delegated_account.is_minimal_account().await
     }
 
     async fn execute_eoa(
