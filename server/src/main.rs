@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use engine_core::{signer::EoaSigner, userop::UserOpSigner};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
@@ -77,6 +77,12 @@ async fn main() -> anyhow::Result<()> {
     let execution_router = ExecutionRouter {
         namespace: config.queue.execution_namespace.clone(),
         redis: redis_client.get_connection_manager().await?,
+        eoa_signer: eoa_signer.clone(),
+        authorization_cache: moka::future::Cache::builder()
+            .max_capacity(1024 * 1024 * 1024)
+            .time_to_live(Duration::from_secs(60 * 5))
+            .time_to_idle(Duration::from_secs(60))
+            .build(),
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
