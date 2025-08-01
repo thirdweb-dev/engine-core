@@ -422,12 +422,12 @@ impl ExecutionRouter {
 
             let is_minimal_account =
                 is_minimal_account.map_err(|e| EngineError::InternalError {
-                    message: format!("Failed to check if delegated account is minimal: {}", e),
+                    message: format!("Failed to check 7702 delegation: {:?}", e),
                 })?;
 
             if !is_minimal_account {
                 return Err(EngineError::ValidationError {
-                    message: "Delegated account is not a minimal account".to_string(),
+                    message: "EOA is not a 7702 delegated account. Batching transactions requires 7702 delegation. Please send a 7702 transaction first to upgrade the EOA.".to_string(),
                 });
             }
 
