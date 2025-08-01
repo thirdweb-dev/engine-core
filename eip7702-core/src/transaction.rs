@@ -221,6 +221,14 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         Ok((wrapped_calls_json, signature))
     }
 
+    pub fn calldata_for_self_execution(&self) -> Vec<u8> {
+        let calls = self.wrapped_calls.calls.clone();
+
+        let execute_call = executeCall { calls };
+
+        execute_call.abi_encode()
+    }
+
     /// Execute the transaction directly via bundler client
     /// This builds the transaction and calls tw_execute on the bundler
     pub async fn execute(

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use engine_aa_core::smart_account::{DeterminedSmartAccount, SmartAccount, SmartAccountFromSalt};
 use engine_core::{
     chain::{ChainService, RpcCredentials},
@@ -13,6 +13,7 @@ use engine_core::{
     },
     transaction::InnerTransaction,
 };
+use engine_eip7702_core::delegated_account::DelegatedAccount;
 use engine_executors::{
     eip7702_executor::{
         confirm::Eip7702ConfirmationHandler,
@@ -50,6 +51,13 @@ pub struct ExecutionRouter {
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
     pub chains: Arc<ThirdwebChainService>,
+    pub authorization_cache: moka::future::Cache<AuthorizationCacheKey, bool>,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+pub struct AuthorizationCacheKey {
+    eoa_address: Address,
+    chain_id: u64,
 }
 
 impl ExecutionRouter {
@@ -391,14 +399,53 @@ impl ExecutionRouter {
         transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
-    ) -> Result<(), TwmqError> {
-        if transactions.len() != 1 {
-            return Err(TwmqError::Runtime {
-                message: "EOA execution currently supports only single transactions".to_string(),
-            });
-        }
+    ) -> Result<(), EngineError> {
+        let chain = self
+            .chains
+            .get_chain(base_execution_options.chain_id)
+            .map_err(|e| EngineError::InternalError {
+                message: format!("Failed to get chain: {}", e),
+            })?;
 
-        let transaction = &transactions[0];
+        let transaction = if transactions.len() > 1 {
+            let delegated_account = DelegatedAccount::new(eoa_execution_options.from, chain);
+            let is_minimal_account = self
+                .authorization_cache
+                .try_get_with(
+                    AuthorizationCacheKey {
+                        eoa_address: eoa_execution_options.from,
+                        chain_id: base_execution_options.chain_id,
+                    },
+                    delegated_account.is_minimal_account(),
+                )
+                .await;
+
+            let is_minimal_account =
+                is_minimal_account.map_err(|e| EngineError::InternalError {
+                    message: format!("Failed to check 7702 delegation: {:?}", e),
+                })?;
+
+            if !is_minimal_account {
+                return Err(EngineError::ValidationError {
+                    message: "EOA is not a 7702 delegated account. Batching transactions requires 7702 delegation. Please send a 7702 transaction first to upgrade the EOA.".to_string(),
+                });
+            }
+
+            let calldata = delegated_account
+                .owner_transaction(transactions)
+                .calldata_for_self_execution();
+
+            InnerTransaction {
+                to: Some(eoa_execution_options.from),
+                data: calldata.into(),
+                gas_limit: None,
+                transaction_type_data: None,
+                value: U256::ZERO,
+            }
+        } else {
+            transactions[0].clone()
+        };
+
         let eoa_transaction_request = EoaTransactionRequest {
             transaction_id: base_execution_options.idempotency_key.clone(),
             chain_id: base_execution_options.chain_id,
