@@ -341,7 +341,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         nonce = expected_nonce,
                         "Successfully sent gas bumped transaction"
                     );
-                    return Ok(true);
+                    Ok(true)
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -351,11 +351,18 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         "Failed to send gas bumped transaction"
                     );
                     // Don't fail the worker, just log the error
-                    return Ok(false);
+                    Ok(false)
                 }
             }
-        }
+        } else {
+            tracing::debug!(
+                nonce = expected_nonce,
+                "Successfully retrieved all transactions for this nonce, but failed to find newest transaction for gas bump, sending noop"
+            );
 
-        Ok(false)
+            let noop_tx = self.send_noop_transaction(expected_nonce).await?;
+            self.store.process_noop_transactions(&[noop_tx]).await?;
+            Ok(true)
+        }
     }
 }
