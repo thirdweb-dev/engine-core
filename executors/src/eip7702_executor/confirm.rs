@@ -32,11 +32,7 @@ pub struct Eip7702ConfirmationJobData {
     pub transaction_id: String,
     pub chain_id: u64,
     pub bundler_transaction_id: String,
-    /// ! Deprecated todo: remove this field after all jobs are processed
-    pub eoa_address: Option<Address>,
-
-    // TODO: make non-optional after all jobs are processed
-    pub sender_details: Option<Eip7702Sender>,
+    pub sender_details: Eip7702Sender,
 
     pub rpc_credentials: RpcCredentials,
     #[serde(default)]
@@ -266,25 +262,11 @@ where
             "Transaction confirmed successfully"
         );
 
-        // todo: remove this after all jobs are processed
-        let sender_details = job_data
-            .sender_details
-            .clone()
-            .or_else(|| {
-                job_data
-                    .eoa_address
-                    .map(|eoa_address| Eip7702Sender::Owner { eoa_address })
-            })
-            .ok_or_else(|| Eip7702ConfirmationError::InternalError {
-                message: "No sender details found".to_string(),
-            })
-            .map_err_fail()?;
-
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
             transaction_hash,
             receipt,
-            sender_details,
+            sender_details: job_data.sender_details.clone(),
         })
     }
 

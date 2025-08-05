@@ -446,7 +446,7 @@ impl<H: DurableExecution> Queue<H> {
                 // Process the cancellation through hook system
                 if let Err(e) = self.process_cancelled_job(job_id).await {
                     tracing::error!(
-                        job_id = %job_id,
+                        job_id = job_id,
                         error = ?e,
                         "Failed to process immediately cancelled job"
                     );
@@ -757,10 +757,10 @@ impl<H: DurableExecution> Queue<H> {
 
         // Log individual lease timeouts and cancellations
         for job_id in &timed_out_jobs {
-            tracing::warn!(job_id = %job_id, "Job lease expired, moved back to pending");
+            tracing::warn!(job_id = job_id, "Job lease expired, moved back to pending");
         }
         for job_id in &cancelled_jobs {
-            tracing::info!(job_id = %job_id, "Job cancelled by user request");
+            tracing::info!(job_id = job_id, "Job cancelled by user request");
         }
 
         let mut jobs = Vec::new();
@@ -841,7 +841,7 @@ impl<H: DurableExecution> Queue<H> {
             tokio::spawn(async move {
                 if let Err(e) = queue_clone.process_cancelled_job(&job_id).await {
                     tracing::error!(
-                        job_id = %job_id,
+                        job_id = job_id,
                         error = ?e,
                         "Failed to process cancelled job"
                     );
@@ -884,7 +884,7 @@ impl<H: DurableExecution> Queue<H> {
                 pipeline.query_async::<()>(&mut self.redis.clone()).await?;
 
                 tracing::info!(
-                    job_id = %job_id,
+                    job_id = job_id,
                     "Successfully processed job cancellation hooks"
                 );
 
@@ -892,7 +892,7 @@ impl<H: DurableExecution> Queue<H> {
             }
             None => {
                 tracing::warn!(
-                    job_id = %job_id,
+                    job_id = job_id,
                     "Cancelled job not found when trying to process hooks"
                 );
                 Ok(())
@@ -1190,7 +1190,7 @@ impl<H: DurableExecution> Queue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = %job.job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(job_id = job.job.id, "Lease no longer exists, job was cancelled or timed out");
                 return Ok(());
             }
 
@@ -1211,12 +1211,12 @@ impl<H: DurableExecution> Queue<H> {
                         Err(JobError::Fail(_)) => self.post_fail_completion().await?,
                     }
 
-                    tracing::debug!(job_id = %job.job.id, "Job completion successful");
+                    tracing::debug!(job_id = job.job.id, "Job completion successful");
                     return Ok(());
                 }
                 Err(_) => {
                     // WATCH failed (lease key changed), retry
-                    tracing::debug!(job_id = %job.job.id, "WATCH failed during completion, retrying");
+                    tracing::debug!(job_id = job.job.id, "WATCH failed during completion, retrying");
                     continue;
                 }
             }
@@ -1290,7 +1290,7 @@ impl<H: DurableExecution> Queue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = %job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(job_id = job.id, "Lease no longer exists, job was cancelled or timed out");
                 return Ok(());
             }
 
@@ -1306,12 +1306,12 @@ impl<H: DurableExecution> Queue<H> {
                 Ok(_) => {
                     // Success! Run post-completion
                     self.post_fail_completion().await?;
-                    tracing::debug!(job_id = %job.id, "Queue error job completion successful");
+                    tracing::debug!(job_id = job.id, "Queue error job completion successful");
                     return Ok(());
                 }
                 Err(_) => {
                     // WATCH failed (lease key changed), retry
-                    tracing::debug!(job_id = %job.id, "WATCH failed during queue error completion, retrying");
+                    tracing::debug!(job_id = job.id, "WATCH failed during queue error completion, retrying");
                     continue;
                 }
             }

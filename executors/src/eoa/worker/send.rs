@@ -118,11 +118,12 @@ impl<C: Chain> EoaExecutorWorker<C> {
             let prepared_results = futures::future::join_all(build_tasks).await;
             let prepared_results_with_pending = pending_txs
                 .iter()
+                .take(prepared_results.len())
                 .zip(prepared_results.into_iter())
                 .collect::<Vec<_>>();
 
             let cleaned_results = self
-                .clean_prepration_results(prepared_results_with_pending)
+                .clean_prepration_results(prepared_results_with_pending, false)
                 .await?;
 
             if cleaned_results.is_empty() {
@@ -217,23 +218,40 @@ impl<C: Chain> EoaExecutorWorker<C> {
         Ok(total_sent as u32)
     }
 
+    /// Clean preparation results to only contain successful transactions.
+    ///
+    /// If `should_break_on_failure` is true, the function will break on the first failure.
+    ///
+    /// Otherwise, it will continue to process all transactions.
+    ///
+    /// `should_break_on_failure` is used to handle incremented nonce processing
+    /// where we want to break on the first failure to maintain nonce continuity.
+    ///
+    /// Regardless of break condition, all errors are still processed for non-retryable errors, and cleaned up
     async fn clean_prepration_results(
         &self,
         results: Vec<(
             &PendingTransaction,
             Result<BorrowedTransaction, EoaExecutorWorkerError>,
         )>,
+        should_break_on_failure: bool,
     ) -> Result<Vec<BorrowedTransaction>, EoaExecutorWorkerError> {
         let mut cleaned_results = Vec::new();
         let mut balance_threshold_update_needed = false;
+        let mut failure_occurred = false;
 
         for (pending, result) in results.into_iter() {
-            match result {
-                Ok(borrowed_data) => {
+            match (failure_occurred, result) {
+                (false, Ok(borrowed_data)) => {
                     cleaned_results.push(borrowed_data);
                 }
-                Err(e) => {
+                (_, Err(e)) => {
                     // Track balance threshold issues
+
+                    if should_break_on_failure {
+                        failure_occurred = true;
+                    }
+
                     if let EoaExecutorWorkerError::TransactionSimulationFailed {
                         inner_error, ..
                     } = &e
@@ -249,17 +267,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
                     // For deterministic build failures, fail the transaction immediately
                     if !is_retryable_preparation_error(&e) {
+                        tracing::error!(
+                            error = ?e,
+                            transaction_id = pending.transaction_id,
+                            "Transaction permanently failed due to non-retryable preparation error",
+                        );
                         self.store
                             .fail_pending_transaction(pending, e, self.webhook_queue.clone())
                             .await?;
                     }
                 }
+                (true, Ok(_)) => continue,
             }
         }
 
         if balance_threshold_update_needed {
             if let Err(e) = self.update_balance_threshold().await {
-                tracing::error!("Failed to update balance threshold: {}", e);
+                tracing::error!(error = ?e, "Failed to update balance threshold");
             }
         }
 
@@ -322,7 +346,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
             // Clean preparation results (handles failures and removes bad transactions)
             let cleaned_results = self
-                .clean_prepration_results(prepared_results_with_pending)
+                .clean_prepration_results(prepared_results_with_pending, true)
                 .await?;
 
             if cleaned_results.is_empty() {
@@ -392,12 +416,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
             );
 
             total_sent += processing_report.moved_to_submitted;
-            remaining_budget = remaining_budget.saturating_sub(moved_count as u64);
 
-            // If we didn't use all our budget in this iteration, we're likely done
-            if moved_count < batch_size {
-                break;
-            }
+            // Update remaining budget by actual nonce consumption
+            remaining_budget =
+                remaining_budget.saturating_sub(processing_report.moved_to_submitted as u64);
         }
 
         Ok(total_sent as u32)

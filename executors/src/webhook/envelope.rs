@@ -270,11 +270,11 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         tx.queue_job(webhook_job)?;
 
         tracing::info!(
-            transaction_id = %job.job.transaction_id(),
-            executor = %Self::executor_name(),
-            stage = %Self::stage_name(),
+            transaction_id = job.job.transaction_id(),
+            executor = Self::executor_name(),
+            stage = Self::stage_name(),
             event = ?envelope.event_type,
-            notification_id = %envelope.notification_id,
+            notification_id = envelope.notification_id,
             "Queued webhook notification"
         );
 

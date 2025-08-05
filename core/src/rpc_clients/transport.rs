@@ -64,12 +64,12 @@ impl HeaderInjectingTransport {
             .map_err(TransportErrorKind::custom)?;
 
         let status = resp.status();
-        debug!(%status, "received response from server");
+        debug!(?status, "received response from server");
 
         // Get response body
         let body = resp.bytes().await.map_err(TransportErrorKind::custom)?;
         debug!(bytes = body.len(), "retrieved response body");
-        trace!(body = %String::from_utf8_lossy(&body), "response body");
+        trace!(body = ?String::from_utf8_lossy(&body), "response body");
 
         // Check for HTTP errors
         if !status.is_success() {
@@ -100,7 +100,7 @@ impl Service<RequestPacket> for HeaderInjectingTransport {
     #[inline]
     fn call(&mut self, req: RequestPacket) -> Self::Future {
         let this = self.clone(); // Clone is cheap - just clones the Arc inside Client
-        let span = debug_span!("HeaderInjectingTransport", url = %this.url);
+        let span = debug_span!("HeaderInjectingTransport", url = ?this.url);
         Box::pin(this.do_request(req).instrument(span))
     }
 }

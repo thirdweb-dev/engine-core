@@ -105,9 +105,9 @@ impl AtomicEoaExecutorStore {
         {
             Ok(()) => {
                 tracing::debug!(
-                    eoa = %self.eoa(),
-                    chain_id = %self.chain_id(),
-                    worker_id = %self.worker_id(),
+                    eoa = ?self.eoa(),
+                    chain_id = self.chain_id(),
+                    worker_id = self.worker_id(),
                     "Successfully released EOA lock"
                 );
                 Ok(self.store)
@@ -115,9 +115,9 @@ impl AtomicEoaExecutorStore {
             Err(TransactionStoreError::LockLost { .. }) => {
                 // Lock was already taken over, which is fine for release
                 tracing::debug!(
-                    eoa = %self.eoa(),
-                    chain_id = %self.chain_id(),
-                    worker_id = %self.worker_id(),
+                    eoa = ?self.eoa(),
+                    chain_id = self.chain_id(),
+                    worker_id = self.worker_id(),
                     "Lock already released or taken over by another worker"
                 );
                 Ok(self.store)
@@ -125,10 +125,10 @@ impl AtomicEoaExecutorStore {
             Err(e) => {
                 // Other errors shouldn't fail the worker, just log
                 tracing::warn!(
-                    eoa = %self.eoa(),
-                    chain_id = %self.chain_id(),
-                    worker_id = %self.worker_id(),
-                    error = %e,
+                    eoa = ?self.eoa(),
+                    chain_id = self.chain_id(),
+                    worker_id = self.worker_id(),
+                    error = ?e,
                     "Failed to release EOA lock"
                 );
                 Ok(self.store)
@@ -197,7 +197,7 @@ impl AtomicEoaExecutorStore {
                 tracing::debug!(
                     retry_count = retry_count,
                     delay_ms = delay_ms,
-                    eoa = %self.eoa(),
+                    eoa = ?self.eoa(),
                     chain_id = self.chain_id(),
                     "Retrying lock check operation"
                 );
@@ -312,7 +312,7 @@ impl AtomicEoaExecutorStore {
                 tracing::debug!(
                     retry_count = retry_count,
                     delay_ms = delay_ms,
-                    eoa = %self.eoa,
+                    eoa = ?self.eoa,
                     chain_id = self.chain_id,
                     operation = safe_tx.name(),
                     "Retrying atomic operation"

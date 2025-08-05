@@ -424,7 +424,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             "cancelled_immediately" => {
                 if let Err(e) = self.process_cancelled_job(job_id).await {
                     tracing::error!(
-                        job_id = %job_id,
+                        job_id = job_id,
                         error = ?e,
                         "Failed to process immediately cancelled job"
                     );
@@ -771,10 +771,18 @@ impl<H: DurableExecution> MultilaneQueue<H> {
 
         // Log lease timeouts and cancellations with lane context
         for (lane_id, job_id) in &timed_out_jobs {
-            tracing::warn!(job_id = %job_id, lane_id = %lane_id, "Job lease expired, moved back to pending");
+            tracing::warn!(
+                job_id = job_id,
+                lane_id = lane_id,
+                "Job lease expired, moved back to pending"
+            );
         }
         for (lane_id, job_id) in &cancelled_jobs {
-            tracing::info!(job_id = %job_id, lane_id = %lane_id, "Job cancelled by user request");
+            tracing::info!(
+                job_id = job_id,
+                lane_id = lane_id,
+                "Job cancelled by user request"
+            );
         }
 
         let mut jobs = Vec::new();
@@ -856,8 +864,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             tokio::spawn(async move {
                 if let Err(e) = queue_clone.process_cancelled_job(&job_id).await {
                     tracing::error!(
-                        job_id = %job_id,
-                        lane_id = %lane_id,
+                        job_id = job_id,
+                        lane_id = lane_id,
                         error = ?e,
                         "Failed to process cancelled job"
                     );
@@ -892,7 +900,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 pipeline.query_async::<()>(&mut self.redis.clone()).await?;
 
                 tracing::info!(
-                    job_id = %job_id,
+                    job_id = job_id,
                     "Successfully processed job cancellation hooks"
                 );
 
@@ -900,7 +908,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             }
             None => {
                 tracing::warn!(
-                    job_id = %job_id,
+                    job_id = job_id,
                     "Cancelled job not found when trying to process hooks"
                 );
                 Ok(())
@@ -1216,7 +1224,10 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = %job.job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(
+                    job_id = job.job.id,
+                    "Lease no longer exists, job was cancelled or timed out"
+                );
                 return Ok(());
             }
 
@@ -1234,11 +1245,18 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         Err(JobError::Fail(_)) => self.post_fail_completion().await?,
                     }
 
-                    tracing::debug!(job_id = %job.job.id, lane_id = %lane_id, "Job completion successful");
+                    tracing::debug!(
+                        job_id = job.job.id,
+                        lane_id = lane_id,
+                        "Job completion successful"
+                    );
                     return Ok(());
                 }
                 Err(_) => {
-                    tracing::debug!(job_id = %job.job.id, "WATCH failed during completion, retrying");
+                    tracing::debug!(
+                        job_id = job.job.id,
+                        "WATCH failed during completion, retrying"
+                    );
                     continue;
                 }
             }
@@ -1313,7 +1331,10 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = %job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(
+                    job_id = job.id,
+                    "Lease no longer exists, job was cancelled or timed out"
+                );
                 return Ok(());
             }
 
@@ -1326,11 +1347,18 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             {
                 Ok(_) => {
                     self.post_fail_completion().await?;
-                    tracing::debug!(job_id = %job.id, lane_id = %lane_id, "Queue error job completion successful");
+                    tracing::debug!(
+                        job_id = job.id,
+                        lane_id = lane_id,
+                        "Queue error job completion successful"
+                    );
                     return Ok(());
                 }
                 Err(_) => {
-                    tracing::debug!(job_id = %job.id, "WATCH failed during queue error completion, retrying");
+                    tracing::debug!(
+                        job_id = job.id,
+                        "WATCH failed during queue error completion, retrying"
+                    );
                     continue;
                 }
             }

@@ -47,9 +47,9 @@ pub async fn write_transaction(
     let executor_type = request.execution_options.executor_type();
 
     tracing::info!(
-        transaction_id = %transaction_id,
+        transaction_id = transaction_id,
         executor_type = ?executor_type,
-        chain_id = %request.execution_options.chain_id(),
+        chain_id = request.execution_options.chain_id(),
         "Processing transaction request"
     );
 
@@ -60,7 +60,7 @@ pub async fn write_transaction(
         .map_err(ApiEngineError)?;
 
     tracing::info!(
-        transaction_id = %transaction_id,
+        transaction_id = transaction_id,
         executor_type = ?executor_type,
         "Transaction queued successfully"
     );

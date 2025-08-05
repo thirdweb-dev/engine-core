@@ -547,16 +547,16 @@ where
 
         if let Err(e) = tx.queue_job(confirmation_job) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue confirmation job"
             );
         }
 
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue success webhook"
             );
         }
@@ -578,8 +578,8 @@ where
 
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue nack webhook"
             );
         }
@@ -605,8 +605,8 @@ where
 
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue fail webhook"
             );
         }

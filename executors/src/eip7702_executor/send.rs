@@ -38,19 +38,7 @@ pub struct Eip7702SendJobData {
     pub transaction_id: String,
     pub chain_id: u64,
     pub transactions: Vec<InnerTransaction>,
-
-    // !IMPORTANT TODO
-    // To preserve backwards compatibility with pre-existing queued jobs, we continue keeping the eoa_address field until the next release
-    // However, we make it optional now, and rely on the Eip7702ExecutionOptions instead
-    pub eoa_address: Option<Address>,
-
-    // We must also keep the execution_options as optional to prevent deserialization errors
-    // when we remove the eoa_address field, we can make execution_options required
-    // at runtime we resolve from both, with preference to execution_options
-    // if both are none, we return an error
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_options: Option<Eip7702ExecutionOptions>,
-
+    pub execution_options: Eip7702ExecutionOptions,
     pub signing_credential: SigningCredential,
     #[serde(default)]
     pub webhook_options: Vec<WebhookOptions>,
@@ -208,24 +196,17 @@ where
 
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
-        let owner_address = job_data
-            .eoa_address
-            .or(job_data.execution_options.as_ref().map(|e| match e {
-                Eip7702ExecutionOptions::Owner(o) => o.from,
-                Eip7702ExecutionOptions::SessionKey(s) => s.session_key_address,
-            }))
-            .ok_or(Eip7702SendError::InternalError {
-                message: "No owner address found".to_string(),
-            })
-            .map_err_fail()?;
+        let owner_address = match &job_data.execution_options {
+            Eip7702ExecutionOptions::Owner(o) => o.from,
+            Eip7702ExecutionOptions::SessionKey(s) => s.session_key_address,
+        };
 
         let account = DelegatedAccount::new(owner_address, chain);
 
-        let session_key_target_address =
-            job_data.execution_options.as_ref().and_then(|e| match e {
-                Eip7702ExecutionOptions::Owner(_) => None,
-                Eip7702ExecutionOptions::SessionKey(s) => Some(s.account_address),
-            });
+        let session_key_target_address = match &job_data.execution_options {
+            Eip7702ExecutionOptions::Owner(_) => None,
+            Eip7702ExecutionOptions::SessionKey(s) => Some(s.account_address),
+        };
 
         let transactions = match session_key_target_address {
             Some(target_address) => {
@@ -343,8 +324,7 @@ where
                 transaction_id: job.job.data.transaction_id.clone(),
                 chain_id: job.job.data.chain_id,
                 bundler_transaction_id: success_data.result.transaction_id.clone(),
-                eoa_address: None,
-                sender_details: Some(success_data.result.sender_details.clone()),
+                sender_details: success_data.result.sender_details.clone(),
                 rpc_credentials: job.job.data.rpc_credentials.clone(),
                 webhook_options: job.job.data.webhook_options.clone(),
             })

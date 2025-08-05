@@ -50,7 +50,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
 
                 tracing::debug!(
-                    transaction_id = %pending_transaction.transaction_id,
+                    transaction_id = ?pending_transaction.transaction_id,
                     attempt = attempt,
                     "Retrying transaction preparation"
                 );
@@ -64,9 +64,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 Err(error) => {
                     if is_retryable_preparation_error(&error) && attempt < MAX_PREPARATION_RETRIES {
                         tracing::warn!(
-                            transaction_id = %pending_transaction.transaction_id,
+                            transaction_id = ?pending_transaction.transaction_id,
                             attempt = attempt,
-                            error = %error,
+                            error = ?error,
                             "Retryable error during transaction preparation, will retry"
                         );
                         last_error = Some(error);

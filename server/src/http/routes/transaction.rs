@@ -53,7 +53,7 @@ pub async fn cancel_transaction(
     Path(transaction_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiEngineError> {
     tracing::info!(
-        transaction_id = %transaction_id,
+        transaction_id = transaction_id,
         "Processing transaction cancellation request"
     );
 
@@ -85,7 +85,7 @@ pub async fn cancel_transaction(
                         .map_err(|e| ApiEngineError(e.into()))?;
 
                     tracing::info!(
-                        transaction_id = %transaction_id,
+                        transaction_id = transaction_id,
                         "Transaction cancelled immediately"
                     );
 
@@ -93,7 +93,7 @@ pub async fn cancel_transaction(
                 }
                 TwmqCancelResult::CancellationPending => {
                     tracing::info!(
-                        transaction_id = %transaction_id,
+                        transaction_id = transaction_id,
                         "Transaction cancellation pending"
                     );
 
@@ -101,7 +101,7 @@ pub async fn cancel_transaction(
                 }
                 TwmqCancelResult::NotFound => {
                     tracing::warn!(
-                        transaction_id = %transaction_id,
+                        transaction_id = transaction_id,
                         "Transaction not found in send queue"
                     );
 
@@ -111,7 +111,7 @@ pub async fn cancel_transaction(
         }
         Some("userop_confirm") => {
             tracing::info!(
-                transaction_id = %transaction_id,
+                transaction_id = transaction_id,
                 "Cannot cancel transaction - already sent and waiting for mine"
             );
 
@@ -121,8 +121,8 @@ pub async fn cancel_transaction(
         }
         Some(other_queue) => {
             tracing::warn!(
-                transaction_id = %transaction_id,
-                queue = %other_queue,
+                transaction_id = transaction_id,
+                queue = other_queue,
                 "Transaction in unsupported queue for cancellation"
             );
 
@@ -132,7 +132,7 @@ pub async fn cancel_transaction(
         }
         None => {
             tracing::warn!(
-                transaction_id = %transaction_id,
+                transaction_id = transaction_id,
                 "Transaction not found in registry"
             );
 

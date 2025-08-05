@@ -404,9 +404,9 @@ impl EoaExecutorStore {
         }
         // Lock exists, forcefully take it over
         tracing::warn!(
-            eoa = %self.eoa,
-            chain_id = %self.chain_id,
-            worker_id = %worker_id,
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = worker_id,
             "Forcefully taking over EOA lock from stalled worker"
         );
         // Force set - no expiry, only released by explicit takeover
@@ -504,13 +504,32 @@ impl EoaExecutorStore {
         &self,
         limit: u64,
     ) -> Result<Vec<PendingTransaction>, TransactionStoreError> {
+        self.peek_pending_transactions_paginated(0, limit).await
+    }
+
+    /// Peek at pending transactions with pagination support
+    pub async fn peek_pending_transactions_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<PendingTransaction>, TransactionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let pending_key = self.pending_transactions_zset_name();
         let mut conn = self.redis.clone();
 
-        // Use ZRANGE to peek without removing
-        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> = conn
-            .zrange_withscores(&pending_key, 0, (limit - 1) as isize)
-            .await?;
+        // Use ZRANGE to peek without removing, with offset support
+        let start = offset as isize;
+        let stop = (offset + limit - 1) as isize;
+
+        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> =
+            conn.zrange_withscores(&pending_key, start, stop).await?;
+
+        if transaction_ids.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let mut pipe = twmq::redis::pipe();
 

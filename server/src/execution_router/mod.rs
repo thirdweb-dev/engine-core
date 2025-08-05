@@ -329,7 +329,7 @@ impl ExecutionRouter {
             .await?;
 
         tracing::debug!(
-            transaction_id = %base_execution_options.idempotency_key,
+            transaction_id = base_execution_options.idempotency_key,
             queue = "external_bundler_send",
             "Job queued successfully"
         );
@@ -350,8 +350,7 @@ impl ExecutionRouter {
             transaction_id: base_execution_options.idempotency_key.clone(),
             chain_id: base_execution_options.chain_id,
             transactions: transactions.to_vec(),
-            eoa_address: None,
-            execution_options: Some(eip7702_execution_options.clone()),
+            execution_options: eip7702_execution_options.clone(),
             signing_credential,
             webhook_options,
             rpc_credentials,
@@ -375,7 +374,7 @@ impl ExecutionRouter {
             .await?;
 
         tracing::debug!(
-            transaction_id = %base_execution_options.idempotency_key,
+            transaction_id = base_execution_options.idempotency_key,
             queue = "eip7702_send",
             "Job queued successfully"
         );
@@ -457,9 +456,9 @@ impl ExecutionRouter {
             .await?;
 
         tracing::debug!(
-            transaction_id = %base_execution_options.idempotency_key,
-            eoa = %eoa_execution_options.from,
-            chain_id = %base_execution_options.chain_id,
+            transaction_id = base_execution_options.idempotency_key,
+            eoa = ?eoa_execution_options.from,
+            chain_id = base_execution_options.chain_id,
             queue = "eoa_executor",
             "EOA transaction added to store and worker job ensured"
         );
