@@ -89,9 +89,11 @@ async fn test_permanent_idempotency_mode() {
     let queue_name = format!("test_perm_{}", nanoid::nanoid!(6));
     let processed_count = Arc::new(AtomicUsize::new(0));
 
-    let mut queue_options = QueueOptions::default();
-    queue_options.idempotency_mode = IdempotencyMode::Permanent;
-    queue_options.local_concurrency = 1;
+    let queue_options = QueueOptions {
+        idempotency_mode: IdempotencyMode::Permanent,
+        local_concurrency: 1,
+        ..Default::default()
+    };
 
     let handler = TestJobHandler {
         processed_count: processed_count.clone(),
@@ -174,9 +176,11 @@ async fn test_active_idempotency_mode() {
     let queue_name = format!("test_active_{}", nanoid::nanoid!(6));
     let processed_count = Arc::new(AtomicUsize::new(0));
 
-    let mut queue_options = QueueOptions::default();
-    queue_options.idempotency_mode = IdempotencyMode::Active;
-    queue_options.local_concurrency = 1;
+    let queue_options = QueueOptions {
+        idempotency_mode: IdempotencyMode::Active,
+        local_concurrency: 1,
+        ..Default::default()
+    };
 
     let handler = TestJobHandler {
         processed_count: processed_count.clone(),

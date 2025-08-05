@@ -122,10 +122,10 @@ where
     H: DurableExecution,
 {
     pub redis: ConnectionManager,
-    handler: Arc<H>,
-    options: QueueOptions,
+    pub handler: Arc<H>,
+    pub options: QueueOptions,
     // concurrency: usize,
-    name: String,
+    pub name: String,
 }
 
 impl<H: DurableExecution> Queue<H> {
