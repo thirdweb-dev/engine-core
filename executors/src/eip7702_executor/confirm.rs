@@ -2,6 +2,7 @@ use alloy::primitives::{Address, TxHash};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionReceipt;
 use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
+use engine_core::rpc_clients::TwGetTransactionHashResponse;
 use engine_core::{
     chain::{Chain, ChainService, RpcCredentials},
     execution_options::WebhookOptions,
@@ -31,11 +32,7 @@ pub struct Eip7702ConfirmationJobData {
     pub transaction_id: String,
     pub chain_id: u64,
     pub bundler_transaction_id: String,
-    /// ! Deprecated todo: remove this field after all jobs are processed
-    pub eoa_address: Option<Address>,
-
-    // TODO: make non-optional after all jobs are processed
-    pub sender_details: Option<Eip7702Sender>,
+    pub sender_details: Eip7702Sender,
 
     pub rpc_credentials: RpcCredentials,
     #[serde(default)]
@@ -189,7 +186,7 @@ where
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
         // 2. Get transaction hash from bundler
-        let transaction_hash_str = chain
+        let transaction_hash_res = chain
             .bundler_client()
             .tw_get_transaction_hash(&job_data.bundler_transaction_id)
             .await
@@ -198,16 +195,19 @@ where
             })
             .map_err_fail()?;
 
-        let transaction_hash = match transaction_hash_str {
-            Some(hash) => hash.parse::<TxHash>().map_err(|e| {
-                Eip7702ConfirmationError::TransactionHashError {
-                    message: format!("Invalid transaction hash format: {}", e),
-                }
-                .fail()
-            })?,
-            None => {
+        let transaction_hash = match transaction_hash_res {
+            TwGetTransactionHashResponse::Success { transaction_hash } => {
+                transaction_hash.parse::<TxHash>().map_err(|e| {
+                    Eip7702ConfirmationError::TransactionHashError {
+                        message: format!("Invalid transaction hash format: {}", e),
+                    }
+                    .fail()
+                })?
+            }
+
+            TwGetTransactionHashResponse::Pending => {
                 return Err(Eip7702ConfirmationError::TransactionHashError {
-                    message: "Transaction not found".to_string(),
+                    message: "Transaction not yet confirmed".to_string(),
                 })
                 .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
             }
@@ -262,25 +262,11 @@ where
             "Transaction confirmed successfully"
         );
 
-        // todo: remove this after all jobs are processed
-        let sender_details = job_data
-            .sender_details
-            .clone()
-            .or_else(|| {
-                job_data
-                    .eoa_address
-                    .map(|eoa_address| Eip7702Sender::Owner { eoa_address })
-            })
-            .ok_or_else(|| Eip7702ConfirmationError::InternalError {
-                message: "No sender details found".to_string(),
-            })
-            .map_err_fail()?;
-
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
             transaction_hash,
             receipt,
-            sender_details,
+            sender_details: job_data.sender_details.clone(),
         })
     }
 

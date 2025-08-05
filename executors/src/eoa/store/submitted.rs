@@ -475,6 +475,8 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
             .zrange(self.keys.recycled_nonces_zset_name(), 0, -1)
             .await?;
 
+        // filter out nonces that are higher than the highest submitted nonce
+        // these don't need to be recycled, they'll be used up by incrementing the nonce
         let recycled_nonces = recycled_nonces
             .into_iter()
             .filter(|nonce| *nonce < highest_submitted_nonce)

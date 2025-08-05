@@ -113,9 +113,9 @@ pub async fn write_contract(
     let executor_type = request.execution_options.executor_type();
 
     tracing::info!(
-        transaction_id = %transaction_id,
+        transaction_id = transaction_id,
         executor_type = ?executor_type,
-        chain_id = %chain_id,
+        chain_id = chain_id,
         "Processing contract write request"
     );
 
@@ -186,7 +186,7 @@ pub async fn write_contract(
         .map_err(ApiEngineError)?;
 
     tracing::info!(
-        transaction_id = %transaction_id,
+        transaction_id = transaction_id,
         executor_type = ?executor_type,
         "Contract write transaction queued successfully"
     );

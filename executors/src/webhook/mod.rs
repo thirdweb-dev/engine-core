@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use engine_core::execution_options::WebhookOptions;
 use hex;
 use hmac::{Hmac, Mac};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::StatusCode;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use twmq::error::TwmqError;
 use twmq::hooks::TransactionContext;
@@ -237,10 +237,10 @@ impl DurableExecution for WebhookJobHandler {
             .body(payload.body.clone());
 
         tracing::debug!(
-            job_id = %job.job.id,
-            url = %payload.url,
-            method = %http_method_str,
-            attempt = %job.job.attempts,
+            job_id = job.job.id,
+            url = payload.url,
+            method = http_method_str,
+            attempt = job.job.attempts,
             "Sending webhook request"
         );
 
@@ -259,13 +259,18 @@ impl DurableExecution for WebhookJobHandler {
                             ));
                             return Err(err).map_err_fail();
                         }
-                        tracing::warn!(job_id = %job.job.id, "Failed to read response body for error status {}: {}", status, e);
+                        tracing::warn!(
+                            job_id = job.job.id,
+                            "Failed to read response body for error status {}: {}",
+                            status,
+                            e
+                        );
                         None
                     }
                 };
 
                 if status.is_success() {
-                    tracing::info!(job_id = %job.job.id, status = %status, "Webhook delivered successfully");
+                    tracing::info!(job_id = job.job.id, status = ?status, "Webhook delivered successfully");
                     Ok(WebhookJobOutput {
                         status_code: status.as_u16(),
                         response_body: response_body_text,
@@ -298,11 +303,11 @@ impl DurableExecution for WebhookJobHandler {
                             let delay = Duration::from_millis(delay_ms);
 
                             tracing::warn!(
-                                job_id = %job.job.id,
-                                status = %status,
-                                attempt = %job.job.attempts,
-                                max_attempts = %self.retry_config.max_attempts,
-                                delay_ms = %delay.as_millis(),
+                                job_id = job.job.id,
+                                status = ?status,
+                                attempt = job.job.attempts,
+                                max_attempts = self.retry_config.max_attempts,
+                                delay_ms = delay.as_millis(),
                                 "Webhook failed with retryable status, NACKing."
                             );
                             Err(JobError::Nack {
@@ -312,17 +317,17 @@ impl DurableExecution for WebhookJobHandler {
                             })
                         } else {
                             tracing::error!(
-                                job_id = %job.job.id,
-                                status = %status,
-                                attempt = %job.job.attempts,
+                                job_id = job.job.id,
+                                status = ?status,
+                                attempt = job.job.attempts,
                                 "Webhook failed after max attempts, FAILING."
                             );
                             Err(JobError::Fail(webhook_error))
                         }
                     } else {
                         tracing::error!(
-                            job_id = %job.job.id,
-                            status = %status,
+                            job_id = job.job.id,
+                            status = ?status,
                             "Webhook failed with non-retryable client error, FAILING."
                         );
                         Err(JobError::Fail(webhook_error))
@@ -342,7 +347,7 @@ impl DurableExecution for WebhookJobHandler {
                     && !e.is_connect()
                     && !e.is_timeout()
                 {
-                    tracing::error!(job_id = %job.job.id, error = %webhook_error, "Webhook construction error, FAILING.");
+                    tracing::error!(job_id = job.job.id, error = ?webhook_error, "Webhook construction error, FAILING.");
                     return Err(JobError::Fail(webhook_error));
                 }
 
@@ -356,11 +361,11 @@ impl DurableExecution for WebhookJobHandler {
                     let delay = Duration::from_millis(delay_ms);
 
                     tracing::warn!(
-                        job_id = %job.job.id,
-                        error = %webhook_error,
-                        attempt = %job.job.attempts,
-                        max_attempts = %self.retry_config.max_attempts,
-                        delay_ms = %delay.as_millis(),
+                        job_id = job.job.id,
+                        error = ?webhook_error,
+                        attempt = job.job.attempts,
+                        max_attempts = self.retry_config.max_attempts,
+                        delay_ms = delay.as_millis(),
                         "Webhook request failed, NACKing."
                     );
 
@@ -371,9 +376,9 @@ impl DurableExecution for WebhookJobHandler {
                     })
                 } else {
                     tracing::error!(
-                        job_id = %job.job.id,
-                        error = %webhook_error,
-                        attempt = %job.job.attempts,
+                        job_id = job.job.id,
+                        error = ?webhook_error,
+                        attempt = job.job.attempts,
                         "Webhook request failed after max attempts, FAILING."
                     );
                     Err(JobError::Fail(webhook_error))
@@ -390,9 +395,9 @@ impl DurableExecution for WebhookJobHandler {
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::info!(
-            job_id = %job.job.id,
-            url = %job.job.data.url,
-            status = %d.result.status_code,
+            job_id = job.job.id,
+            url = job.job.data.url,
+            status = d.result.status_code,
             "Webhook successfully processed (on_success hook)."
         );
     }
@@ -405,11 +410,11 @@ impl DurableExecution for WebhookJobHandler {
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::warn!(
-            job_id = %job.job.id,
-            url = %job.job.data.url,
-            attempt = %job.job.attempts,
+            job_id = job.job.id,
+            url = job.job.data.url,
+            attempt = job.job.attempts,
             error = ?d.error,
-            delay_ms = %d.delay.map_or(0, |dur| dur.as_millis()),
+            delay_ms = d.delay.map_or(0, |dur| dur.as_millis()),
             "Webhook NACKed (on_nack hook)."
         );
     }
@@ -422,9 +427,9 @@ impl DurableExecution for WebhookJobHandler {
         _tx: &mut TransactionContext<'_>,
     ) {
         tracing::error!(
-            job_id = %job.job.id,
-            url = %job.job.data.url,
-            attempt = %job.job.attempts,
+            job_id = job.job.id,
+            url = job.job.data.url,
+            attempt = job.job.attempts,
             error = ?d.error,
             "Webhook FAILED permanently (on_fail hook)."
         );
@@ -442,9 +447,12 @@ pub fn queue_webhook_envelopes<T: Serialize + Clone>(
         webhook_options
             .iter()
             .map(|webhook_option| {
-                let webhook_notification_envelope = envelope
-                    .clone()
-                    .into_webhook_notification_envelope(now, webhook_option.url.clone(), webhook_option.user_metadata.clone());
+                let webhook_notification_envelope =
+                    envelope.clone().into_webhook_notification_envelope(
+                        now,
+                        webhook_option.url.clone(),
+                        webhook_option.user_metadata.clone(),
+                    );
                 let serialised_envelope = serde_json::to_string(&webhook_notification_envelope)?;
                 Ok((
                     serialised_envelope,
@@ -493,11 +501,11 @@ pub fn queue_webhook_envelopes<T: Serialize + Clone>(
 
         tx.queue_job(webhook_job)?;
         tracing::info!(
-            transaction_id = %webhook_notification_envelope.transaction_id,
-            executor = %webhook_notification_envelope.executor_name,
-            stage = %webhook_notification_envelope.stage_name,
+            transaction_id = webhook_notification_envelope.transaction_id,
+            executor = webhook_notification_envelope.executor_name,
+            stage = webhook_notification_envelope.stage_name,
             event = ?webhook_notification_envelope.event_type,
-            notification_id = %webhook_notification_envelope.notification_id,
+            notification_id = webhook_notification_envelope.notification_id,
             "Queued webhook notification"
         );
     }

@@ -127,7 +127,7 @@ where
     type ErrorData = EoaExecutorWorkerError;
     type JobData = EoaExecutorWorkerJobData;
 
-    #[tracing::instrument(skip_all, fields(eoa = %job.job.data.eoa_address, chain_id = job.job.data.chain_id))]
+    #[tracing::instrument(name = "eoa_executor_worker", skip_all, fields(eoa = ?job.job.data.eoa_address, chain_id = job.job.data.chain_id))]
     async fn process(
         &self,
         job: &BorrowedJob<Self::JobData>,
@@ -170,7 +170,7 @@ where
 
         let result = worker.execute_main_workflow().await?;
         if let Err(e) = worker.release_eoa_lock().await {
-            tracing::error!("Error releasing EOA lock: {}", e);
+            tracing::error!(error = ?e, "Error releasing EOA lock");
         }
 
         if result.is_work_remaining() {
@@ -232,9 +232,9 @@ where
         let mut conn = self.redis.clone();
         if let Err(e) = conn.del::<&str, ()>(&lock_key).await {
             tracing::error!(
-                eoa = %job_data.eoa_address,
-                chain_id = %job_data.chain_id,
-                error = %e,
+                eoa = ?job_data.eoa_address,
+                chain_id = job_data.chain_id,
+                error = ?e,
                 "Failed to release EOA lock"
             );
         }
@@ -276,7 +276,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .confirm_flow()
             .await
             .map_err(|e| {
-                tracing::error!("Error in confirm flow: {}", e);
+                tracing::error!(error = ?e, "Error in confirm flow");
                 e
             })
             .map_err(|e| e.handle())?;
@@ -286,7 +286,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .send_flow()
             .await
             .map_err(|e| {
-                tracing::error!("Error in send_flow: {}", e);
+                tracing::error!(error = ?e, "Error in send_flow");
                 e
             })
             .map_err(|e| e.handle())?;
@@ -297,7 +297,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .peek_pending_transactions(1000)
             .await
             .map_err(|e| {
-                tracing::error!("Error in peek_pending_transactions: {}", e);
+                tracing::error!(error = ?e, "Error in peek_pending_transactions");
                 e
             })
             .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
@@ -308,7 +308,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .peek_borrowed_transactions()
             .await
             .map_err(|e| {
-                tracing::error!("Error in peek_borrowed_transactions: {}", e);
+                tracing::error!(error = ?e, "Error in peek_borrowed_transactions");
                 e
             })
             .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
@@ -319,7 +319,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .peek_recycled_nonces()
             .await
             .map_err(|e| {
-                tracing::error!("Error in peek_recycled_nonces: {}", e);
+                tracing::error!(error = ?e, "Error in peek_recycled_nonces");
                 e
             })
             .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
@@ -330,7 +330,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .get_submitted_transactions_count()
             .await
             .map_err(|e| {
-                tracing::error!("Error in get_submitted_transactions_count: {}", e);
+                tracing::error!(error = ?e, "Error in get_submitted_transactions_count");
                 e
             })
             .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
@@ -376,7 +376,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 let transaction_id = borrowed.transaction_id.clone();
 
                 tracing::info!(
-                    transaction_id = %transaction_id,
+                    transaction_id = ?transaction_id,
                     nonce = nonce,
                     "Recovering borrowed transaction"
                 );
@@ -475,7 +475,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(eoa = %self.eoa, chain_id = %self.chain.chain_id()))]
+    #[tracing::instrument(skip_all, fields(eoa = ?self.eoa, chain_id = self.chain.chain_id()))]
     async fn update_balance_threshold(&self) -> Result<(), EoaExecutorWorkerError> {
         let mut health = self.get_eoa_health().await?;
 

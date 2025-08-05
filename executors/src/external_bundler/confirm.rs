@@ -204,10 +204,10 @@ where
         // 3. We got a receipt - that's confirmation success!
         // Whether it reverted or not is just information in the receipt
         tracing::info!(
-            transaction_id = %job_data.transaction_id,
+            transaction_id = job_data.transaction_id,
             user_op_hash = ?job_data.user_op_hash,
             transaction_hash = ?receipt.receipt.transaction_hash,
-            success = %receipt.success,
+            success = ?receipt.success,
             "User operation confirmed on-chain"
         );
 
@@ -240,7 +240,7 @@ where
                 );
 
             tracing::info!(
-                transaction_id = %job.job.data.transaction_id,
+                transaction_id = job.job.data.transaction_id,
                 account_address = ?job.job.data.account_address,
                 "Added atomic lock release and cache update to transaction pipeline"
             );
@@ -249,8 +249,8 @@ where
         // Queue success webhook
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue success webhook"
             );
         }
@@ -266,15 +266,15 @@ where
         // Just queue webhook with current status
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue nack webhook"
             );
         }
 
         tracing::debug!(
-            transaction_id = %job.job.data.transaction_id,
-            attempt = %job.job.attempts,
+            transaction_id = job.job.data.transaction_id,
+            attempt = job.job.attempts,
             "Confirmation job NACKed, retaining lock for retry"
         );
     }
@@ -305,9 +305,9 @@ where
             };
 
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
+                transaction_id = job.job.data.transaction_id,
                 account_address = ?job.job.data.account_address,
-                reason = %failure_reason,
+                reason = failure_reason,
                 "Added lock release to transaction pipeline due to permanent failure"
             );
         }
@@ -315,8 +315,8 @@ where
         // Queue failure webhook
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
-                transaction_id = %job.job.data.transaction_id,
-                error = %e,
+                transaction_id = job.job.data.transaction_id,
+                error = ?e,
                 "Failed to queue fail webhook"
             );
         }

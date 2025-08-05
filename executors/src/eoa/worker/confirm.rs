@@ -80,7 +80,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     .await
                 {
                     tracing::warn!(
-                        error = %e,
+                        error = ?e,
                         "Failed to attempt gas bump for stalled nonce"
                     );
                 }
@@ -122,9 +122,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     Ok(receipt_json) => receipt_json,
                     Err(e) => {
                         tracing::warn!(
-                            transaction_id = %tx.transaction_id,
-                            hash = %tx.transaction_hash,
-                            error = %e,
+                            transaction_id = ?tx.transaction_id,
+                            hash = tx.transaction_hash,
+                            error = ?e,
                             "Failed to serialize receipt as JSON, using debug format"
                         );
                         format!("{:?}", tx.receipt)
@@ -132,9 +132,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 };
 
                 tracing::info!(
-                    transaction_id = %tx.transaction_id,
+                    transaction_id = ?tx.transaction_id,
                     nonce = tx.nonce,
-                    hash = %tx.transaction_hash,
+                    hash = tx.transaction_hash,
                     "Transaction confirmed"
                 );
 
@@ -262,7 +262,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
         if let Some((transaction_id, tx_data)) = newest_transaction {
             tracing::info!(
-                transaction_id = %transaction_id,
+                transaction_id = ?transaction_id,
                 nonce = expected_nonce,
                 "Found newest transaction for gas bump"
             );
@@ -294,9 +294,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     }
 
                     tracing::warn!(
-                        transaction_id = %transaction_id,
+                        transaction_id = ?transaction_id,
                         nonce = expected_nonce,
-                        error = %e,
+                        error = ?e,
                         "Failed to build typed transaction for gas bump"
                     );
                     return Ok(false);
@@ -310,9 +310,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 Ok(tx) => tx,
                 Err(e) => {
                     tracing::warn!(
-                        transaction_id = %transaction_id,
+                        transaction_id = ?transaction_id,
                         nonce = expected_nonce,
-                        error = %e,
+                        error = ?e,
                         "Failed to sign transaction for gas bump"
                     );
                     return Ok(false);
@@ -337,7 +337,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             match self.chain.provider().send_tx_envelope(tx_envelope).await {
                 Ok(_) => {
                     tracing::info!(
-                        transaction_id = %transaction_id,
+                        transaction_id = ?transaction_id,
                         nonce = expected_nonce,
                         "Successfully sent gas bumped transaction"
                     );
@@ -345,9 +345,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        transaction_id = %transaction_id,
+                        transaction_id = ?transaction_id,
                         nonce = expected_nonce,
-                        error = %e,
+                        error = ?e,
                         "Failed to send gas bumped transaction"
                     );
                     // Don't fail the worker, just log the error

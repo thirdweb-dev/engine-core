@@ -42,7 +42,7 @@ pub async fn empty_queue_idempotency_set(
     Path(queue_name): Path<String>,
 ) -> Result<impl IntoResponse, ApiEngineError> {
     tracing::info!(
-        queue_name = %queue_name,
+        queue_name = queue_name,
         "Processing empty idempotency set request"
     );
 
@@ -100,7 +100,7 @@ pub async fn empty_queue_idempotency_set(
     match result {
         Ok(()) => {
             tracing::info!(
-                queue_name = %queue_name,
+                queue_name = queue_name,
                 "Successfully emptied idempotency set"
             );
 
@@ -117,8 +117,8 @@ pub async fn empty_queue_idempotency_set(
         }
         Err(e) => {
             tracing::error!(
-                queue_name = %queue_name,
-                error = %e,
+                queue_name = queue_name,
+                error = ?e,
                 "Failed to empty idempotency set"
             );
 

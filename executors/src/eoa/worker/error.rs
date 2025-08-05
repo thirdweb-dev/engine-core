@@ -150,7 +150,7 @@ pub enum SendContext {
     InitialBroadcast,
 }
 
-#[tracing::instrument(skip_all, fields(error = %error, context = ?context))]
+#[tracing::instrument(skip_all, fields(error = ?error, context = ?context))]
 pub fn classify_send_error(
     error: &RpcError<TransportErrorKind>,
     context: SendContext,

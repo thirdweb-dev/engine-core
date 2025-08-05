@@ -81,8 +81,8 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                 valid_results.push(result.clone());
             } else {
                 tracing::warn!(
-                    transaction_id = %transaction_id,
-                    nonce = %result.transaction.nonce,
+                    transaction_id = ?transaction_id,
+                    nonce = result.transaction.nonce,
                     "Submission result not found in borrowed state, ignoring"
                 );
             }
@@ -174,6 +174,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Update transaction data status
                     let tx_data_key = self.keys.transaction_data_key_name(transaction_id);
                     pipeline.hset(&tx_data_key, "status", "pending");
+                    pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
                     // Queue webhook event using user_request from SubmissionResult
                     let event = EoaExecutorEvent {
@@ -206,6 +207,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     pipeline.hset(&tx_data_key, "status", "failed");
                     pipeline.hset(&tx_data_key, "completed_at", now);
                     pipeline.hset(&tx_data_key, "failure_reason", err.to_string());
+                    pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
                     // Queue webhook event using user_request from SubmissionResult
                     let event = EoaExecutorEvent {
