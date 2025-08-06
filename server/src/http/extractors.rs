@@ -169,7 +169,7 @@ impl SigningCredentialsExtractor {
     fn parse_kms_arn(arn: &str) -> Result<(String, String), ApiEngineError> {
         let parsed_arn: aws_arn::ResourceName = arn.parse().map_err(|e| {
             ApiEngineError(EngineError::ValidationError {
-                message: format!("Invalid AWS ARN format: {}", e),
+                message: format!("Invalid AWS ARN format: {e}"),
             })
         })?;
 
@@ -275,14 +275,14 @@ where
             Ok(Json(data)) => Ok(EngineJson(data)),
             Err(rejection) => {
                 let message = match rejection {
-                    JsonRejection::JsonDataError(err) => format!("Invalid JSON data: {}", err),
-                    JsonRejection::JsonSyntaxError(err) => format!("JSON syntax error: {}", err),
+                    JsonRejection::JsonDataError(err) => format!("Invalid JSON data: {err}"),
+                    JsonRejection::JsonSyntaxError(err) => format!("JSON syntax error: {err}"),
                     JsonRejection::MissingJsonContentType(_) => {
                         "Missing or invalid Content-Type header. Expected application/json"
                             .to_string()
                     }
                     JsonRejection::BytesRejection(err) => {
-                        format!("Failed to read request body: {}", err)
+                        format!("Failed to read request body: {err}")
                     }
                     _ => "Invalid JSON request".to_string(),
                 };

@@ -23,7 +23,7 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 // Helper to clean up Redis keys
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{}:*", queue_name);
+    let keys_pattern = format!("twmq:{queue_name}:*");
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)
@@ -109,7 +109,7 @@ async fn test_job_delay_basic() {
         .init();
 
     let test_id = nanoid::nanoid!();
-    let queue_name = format!("test_delay_{}", test_id);
+    let queue_name = format!("test_delay_{test_id}");
     let job_id = "delay_job_001";
     let delay_duration = Duration::from_secs(2);
 
@@ -269,9 +269,7 @@ async fn test_job_delay_basic() {
 
     assert!(
         actual_delay >= expected_delay && actual_delay <= expected_delay + 2,
-        "Actual delay ({}) should be close to expected delay ({})",
-        actual_delay,
-        expected_delay
+        "Actual delay ({actual_delay}) should be close to expected delay ({expected_delay})"
     );
 
     tracing::info!("✅ Basic delay mechanism works correctly!");
@@ -281,7 +279,7 @@ async fn test_job_delay_basic() {
 
     // Clean up test-specific keys
     let _: () = redis_conn_direct
-        .del(format!("test:{}:processing_order", test_id))
+        .del(format!("test:{test_id}:processing_order"))
         .await
         .unwrap_or(());
 }
@@ -291,7 +289,7 @@ async fn test_delay_position_ordering() {
     // Test that delayed jobs respect RequeuePosition when they expire
 
     let test_id = nanoid::nanoid!();
-    let queue_name = format!("test_delay_order_{}", test_id);
+    let queue_name = format!("test_delay_order_{test_id}");
 
     tracing::info!(
         "\n=== Testing delay position ordering (test_id: {}) ===",
@@ -410,7 +408,7 @@ async fn test_delay_position_ordering() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Check processing order from Redis
-    let order_key = format!("test:{}:processing_order", test_id);
+    let order_key = format!("test:{test_id}:processing_order");
     let mut redis_conn_direct = redis_conn.as_ref().clone();
     let processing_order: Vec<String> = redis_conn_direct
         .lrange(&order_key, 0, -1)

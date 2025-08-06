@@ -331,22 +331,22 @@ impl<T: Debug> From<SdkError<T>> for SerialisableAwsSdkError {
     fn from(err: SdkError<T>) -> Self {
         match err {
             SdkError::ConstructionFailure(err) => SerialisableAwsSdkError::ConstructionFailure {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
             SdkError::TimeoutError(err) => SerialisableAwsSdkError::TimeoutError {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
             SdkError::DispatchFailure(err) => SerialisableAwsSdkError::DispatchFailure {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
             SdkError::ResponseError(err) => SerialisableAwsSdkError::ResponseError {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
             SdkError::ServiceError(err) => SerialisableAwsSdkError::ServiceError {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
             _ => SerialisableAwsSdkError::Other {
-                message: format!("{:?}", err),
+                message: format!("{err:?}"),
             },
         }
     }
@@ -398,11 +398,8 @@ impl From<vault_sdk::error::VaultError> for EngineError {
                 message,
                 details,
             } => match details {
-                Some(details) => format!(
-                    "Enclave error: {} - {} - details: {}",
-                    code, message, details
-                ),
-                None => format!("Enclave error: {} - {}", code, message),
+                Some(details) => format!("Enclave error: {code} - {message} - details: {details}"),
+                None => format!("Enclave error: {code} - {message}"),
             },
             _ => err.to_string(),
         };
@@ -536,15 +533,15 @@ impl ContractErrorToEngineError for alloy::contract::Error {
     fn to_engine_error(self, chain_id: u64, contract_address: Option<Address>) -> EngineError {
         let (message, kind) = match self {
             alloy::contract::Error::UnknownFunction(name) => (
-                format!("Unknown function: {}", name),
+                format!("Unknown function: {name}"),
                 ContractInteractionErrorKind::UnknownFunction {
                     function_name: name,
                 },
             ),
             alloy::contract::Error::UnknownSelector(selector) => (
-                format!("Unknown selector: {:?}", selector),
+                format!("Unknown selector: {selector:?}"),
                 ContractInteractionErrorKind::UnknownSelector {
-                    function_selector: format!("{:?}", selector),
+                    function_selector: format!("{selector:?}"),
                 },
             ),
             alloy::contract::Error::NotADeploymentTransaction => (
@@ -556,26 +553,26 @@ impl ContractErrorToEngineError for alloy::contract::Error {
                 ContractInteractionErrorKind::ContractNotDeployed,
             ),
             alloy::contract::Error::ZeroData(function, err) => (
-                format!("Zero data returned from contract call to {}", function),
+                format!("Zero data returned from contract call to {function}"),
                 ContractInteractionErrorKind::ZeroData {
                     function,
                     message: err.to_string(),
                 },
             ),
             alloy::contract::Error::AbiError(err) => (
-                format!("ABI error: {}", err),
+                format!("ABI error: {err}"),
                 ContractInteractionErrorKind::AbiError {
                     message: err.to_string(),
                 },
             ),
             alloy::contract::Error::TransportError(err) => (
-                format!("Transport error: {}", err),
+                format!("Transport error: {err}"),
                 ContractInteractionErrorKind::TransportError {
                     message: err.to_string(),
                 },
             ),
             alloy::contract::Error::PendingTransactionError(err) => (
-                format!("Pending transaction error: {}", err),
+                format!("Pending transaction error: {err}"),
                 ContractInteractionErrorKind::PendingTransactionError {
                     message: err.to_string(),
                 },

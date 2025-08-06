@@ -91,12 +91,12 @@ impl Erc4337ExecutionOptions {
     pub fn get_salt_data(&self) -> Result<Bytes, EngineError> {
         if self.account_salt.starts_with("0x") {
             Bytes::from_hex(&self.account_salt).map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to parse hex salt: {}", e),
+                message: format!("Failed to parse hex salt: {e}"),
             })
         } else {
             let hex_string = alloy::hex::encode(&self.account_salt);
             Bytes::from_hex(hex_string).map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to encode salt as hex: {}", e),
+                message: format!("Failed to encode salt as hex: {e}"),
             })
         }
     }

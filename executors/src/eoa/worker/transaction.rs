@@ -211,8 +211,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             }
                             Err(legacy_error) => Err(EoaExecutorWorkerError::RpcError {
                                 message: format!(
-                                    "Failed to get legacy gas price: {}",
-                                    legacy_error
+                                    "Failed to get legacy gas price: {legacy_error}"
                                 ),
                                 inner_error: legacy_error.to_engine_error(&self.chain),
                             }),
@@ -225,7 +224,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 } else {
                     // Other EIP-1559 error
                     Err(EoaExecutorWorkerError::RpcError {
-                        message: format!("Failed to estimate EIP-1559 fees: {}", eip1559_error),
+                        message: format!("Failed to estimate EIP-1559 fees: {eip1559_error}"),
                         inner_error: eip1559_error.to_engine_error(&self.chain),
                     })
                 }
@@ -333,7 +332,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     // Not a revert - could be RPC issue, this should nack the worker
                     let engine_error = e.to_engine_error(&self.chain);
                     return Err(EoaExecutorWorkerError::RpcError {
-                        message: format!("Gas estimation failed: {}", engine_error),
+                        message: format!("Gas estimation failed: {engine_error}"),
                         inner_error: engine_error,
                     });
                 }
@@ -344,7 +343,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         tx_request
             .build_typed_tx()
             .map_err(|e| EoaExecutorWorkerError::TransactionBuildFailed {
-                message: format!("Failed to build typed transaction: {:?}", e),
+                message: format!("Failed to build typed transaction: {e:?}"),
             })
     }
 
@@ -363,13 +362,13 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .sign_transaction(signing_options, &typed_tx, credential)
             .await
             .map_err(|engine_error| EoaExecutorWorkerError::SigningError {
-                message: format!("Failed to sign transaction: {}", engine_error),
+                message: format!("Failed to sign transaction: {engine_error}"),
                 inner_error: engine_error,
             })?;
 
         let signature = signature.parse::<Signature>().map_err(|e| {
             EoaExecutorWorkerError::SignatureParsingFailed {
-                message: format!("Failed to parse signature: {}", e),
+                message: format!("Failed to parse signature: {e}"),
             }
         })?;
 

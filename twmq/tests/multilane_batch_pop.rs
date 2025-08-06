@@ -165,7 +165,7 @@ impl Drop for MultilaneTestHarness {
 
         tokio::spawn(async move {
             let mut conn = redis;
-            let keys_pattern = format!("twmq_multilane:{}:*", queue_id);
+            let keys_pattern = format!("twmq_multilane:{queue_id}:*");
             let keys: Vec<String> = redis::cmd("KEYS")
                 .arg(&keys_pattern)
                 .query_async(&mut conn)
@@ -198,7 +198,7 @@ async fn multilane_test_batch_pop_single_lane_with_100k_empty_lanes() {
     for i in 0..100 {
         jobs.push(TestJob {
             id: i,
-            data: format!("job_{}", i),
+            data: format!("job_{i}"),
         });
     }
     jobs_per_lane.insert(active_lane.clone(), jobs);
@@ -207,7 +207,7 @@ async fn multilane_test_batch_pop_single_lane_with_100k_empty_lanes() {
     // We do this by adding empty lanes to the zset directly
     let mut conn = harness.queue.redis.clone();
     for i in 0..99_999 {
-        let lane_id = format!("empty_lane_{}", i);
+        let lane_id = format!("empty_lane_{i}");
         // Add lane to lanes zset with score 0 (never processed)
         redis::cmd("ZADD")
             .arg(harness.queue.lanes_zset_name())
@@ -245,7 +245,7 @@ async fn multilane_test_batch_pop_single_lane_with_100k_empty_lanes() {
         .expect("Batch pop should complete within 10 seconds");
 
     let duration = start.elapsed();
-    println!("✅ Batch pop completed in {:?}", duration);
+    println!("✅ Batch pop completed in {duration:?}");
 
     // Verify results
     assert_eq!(result.len(), 1, "Should get jobs from exactly 1 lane");
@@ -289,10 +289,10 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
     // Create 200 jobs distributed across 200 different lanes (1 job per lane)
     let mut jobs_per_lane = HashMap::new();
     for i in 0..200 {
-        let lane_id = format!("lane_{}", i);
+        let lane_id = format!("lane_{i}");
         let job = TestJob {
             id: i,
-            data: format!("job_{}", i),
+            data: format!("job_{i}"),
         };
         jobs_per_lane.insert(lane_id, vec![job]);
     }
@@ -300,7 +300,7 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
     // Add 99,800 empty lanes to reach 100,000 total
     let mut conn = harness.queue.redis.clone();
     for i in 200..100_000 {
-        let lane_id = format!("empty_lane_{}", i);
+        let lane_id = format!("empty_lane_{i}");
         redis::cmd("ZADD")
             .arg(harness.queue.lanes_zset_name())
             .arg("NX")
@@ -328,14 +328,12 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
         .expect("First batch pop should complete within 10 seconds");
     let duration1 = start.elapsed();
     println!(
-        "[200 jobs - 200/100k lanes] ✅ First batch pop completed in {:?}",
-        duration1
+        "[200 jobs - 200/100k lanes] ✅ First batch pop completed in {duration1:?}"
     );
 
     let new_lanes_count = harness.queue.lanes_count().await.unwrap();
     println!(
-        "[200 jobs - 200/100k lanes] New lanes count after initial batch pop: {}",
-        new_lanes_count
+        "[200 jobs - 200/100k lanes] New lanes count after initial batch pop: {new_lanes_count}"
     );
 
     let total_jobs_1: usize = result1.values().map(|jobs| jobs.len()).sum();
@@ -358,8 +356,7 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
         .expect("Second batch pop should complete within 10 seconds");
     let duration2 = start.elapsed();
     println!(
-        "[200 jobs - 200/100k lanes] ✅ Second batch pop completed in {:?}",
-        duration2
+        "[200 jobs - 200/100k lanes] ✅ Second batch pop completed in {duration2:?}"
     );
 
     let total_jobs_2: usize = result2.values().map(|jobs| jobs.len()).sum();
@@ -381,7 +378,7 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
         .await
         .expect("Third batch pop should complete within 10 seconds");
     let duration3 = start.elapsed();
-    println!("✅ Third batch pop completed in {:?}", duration3);
+    println!("✅ Third batch pop completed in {duration3:?}");
 
     let total_jobs_3: usize = result3.values().map(|jobs| jobs.len()).sum();
     assert_eq!(total_jobs_3, 0, "Third batch should return 0 jobs");
@@ -429,12 +426,12 @@ async fn multilane_test_batch_pop_fairness_across_lanes() {
     // Create 10 lanes, each with 10 jobs (100 total)
     let mut jobs_per_lane = HashMap::new();
     for lane_num in 0..10 {
-        let lane_id = format!("lane_{}", lane_num);
+        let lane_id = format!("lane_{lane_num}");
         let mut jobs = Vec::new();
         for job_num in 0..10 {
             jobs.push(TestJob {
                 id: lane_num * 10 + job_num,
-                data: format!("job_{}_{}", lane_num, job_num),
+                data: format!("job_{lane_num}_{job_num}"),
             });
         }
         jobs_per_lane.insert(lane_id, jobs);
@@ -448,17 +445,15 @@ async fn multilane_test_batch_pop_fairness_across_lanes() {
     assert_eq!(result.len(), 10, "Should get jobs from all 10 lanes");
 
     for lane_num in 0..10 {
-        let lane_id = format!("lane_{}", lane_num);
+        let lane_id = format!("lane_{lane_num}");
         assert!(
             result.contains_key(&lane_id),
-            "Should have job from lane {}",
-            lane_num
+            "Should have job from lane {lane_num}"
         );
         assert_eq!(
             result[&lane_id].len(),
             1,
-            "Should get exactly 1 job from lane {}",
-            lane_num
+            "Should get exactly 1 job from lane {lane_num}"
         );
     }
 

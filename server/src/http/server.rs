@@ -176,9 +176,8 @@ impl EngineServer {
                 }
                 Err(e) => {
                     tracing::error!("Failed to join HTTP server task: {}", e);
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Task join error: {}", e),
+                    return Err(std::io::Error::other(
+                        format!("Task join error: {e}"),
                     ));
                 }
             }

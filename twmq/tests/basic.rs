@@ -18,7 +18,7 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 // Helper to clean up Redis keys for a given queue name pattern
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{}:*", queue_name);
+    let keys_pattern = format!("twmq:{queue_name}:*");
 
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
@@ -32,7 +32,7 @@ async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) 
             .await
             .unwrap_or_default();
     }
-    println!("Cleaned up keys for pattern: {}", keys_pattern);
+    println!("Cleaned up keys for pattern: {keys_pattern}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -51,7 +51,7 @@ async fn test_queue_push_and_process_job() {
     // Reset the flag before each test run
     TEST_JOB_PROCESSED_SUCCESSFULLY.store(false, Ordering::SeqCst);
 
-    println!("Creating queue: {}", queue_name);
+    println!("Creating queue: {queue_name}");
 
     let basic_handler = TestJobHandler;
 
@@ -74,7 +74,7 @@ async fn test_queue_push_and_process_job() {
         id_to_check: test_job_id.clone(),
     };
 
-    println!("Pushing job with ID: {}", test_job_id);
+    println!("Pushing job with ID: {test_job_id}");
     let job_options = JobOptions {
         data: job_payload,
         id: test_job_id.clone(),
@@ -93,7 +93,7 @@ async fn test_queue_push_and_process_job() {
         "There should be 1 job in the pending list"
     );
 
-    println!("Starting worker for queue: {}", queue_name);
+    println!("Starting worker for queue: {queue_name}");
 
     let worker_queue_ref = Arc::clone(&queue);
     let worker_handle = worker_queue_ref.work();

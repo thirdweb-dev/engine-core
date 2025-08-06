@@ -145,7 +145,7 @@ pub enum ExternalBundlerSendError {
 impl From<TwmqError> for ExternalBundlerSendError {
     fn from(error: TwmqError) -> Self {
         ExternalBundlerSendError::InternalError {
-            message: format!("Deserialization error for job data: {}", error),
+            message: format!("Deserialization error for job data: {error}"),
         }
     }
 }
@@ -260,7 +260,7 @@ where
             .get_chain(job_data.chain_id)
             .map_err(|e| ExternalBundlerSendError::ChainServiceError {
                 chain_id: job_data.chain_id,
-                message: format!("Failed to get chain instance: {}", e),
+                message: format!("Failed to get chain instance: {e}"),
             })
             .map_err_fail()?;
 
@@ -329,7 +329,7 @@ where
                     EngineError::RpcError { kind: k, .. } => {
                         let mapped_error = ExternalBundlerSendError::ChainServiceError {
                             chain_id: chain.chain_id(),
-                            message: format!("Deployment manager error: {}", e),
+                            message: format!("Deployment manager error: {e}"),
                         };
                         if is_retryable_rpc_error(k) {
                             mapped_error.nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
@@ -338,7 +338,7 @@ where
                         }
                     }
                     _ => ExternalBundlerSendError::InternalError {
-                        message: format!("Deployment manager error: {}", e),
+                        message: format!("Deployment manager error: {e}"),
                     }
                     .nack(Some(Duration::from_secs(10)), RequeuePosition::Last),
                 }
@@ -350,8 +350,7 @@ where
                 return Err(ExternalBundlerSendError::DeploymentLocked {
                     account_address: smart_account.address,
                     message: format!(
-                        "Deployment in progress (stale: {}, lock_id: {})",
-                        stale, lock_id
+                        "Deployment in progress (stale: {stale}, lock_id: {lock_id})"
                     ),
                 })
                 .map_err_nack(
@@ -366,7 +365,7 @@ where
                     .await
                     .map_err(|e| ExternalBundlerSendError::DeploymentLocked {
                         account_address: smart_account.address,
-                        message: format!("Failed to acquire deployment lock: {}", e),
+                        message: format!("Failed to acquire deployment lock: {e}"),
                     })
                     .map_err_nack(Some(Duration::from_secs(15)), RequeuePosition::Last)?
                 {
@@ -378,7 +377,7 @@ where
                         // Someone else has the lock, NACK and retry later
                         return Err(ExternalBundlerSendError::DeploymentLocked {
                             account_address: smart_account.address,
-                            message: format!("Lock held by another process: {}", lock_id),
+                            message: format!("Lock held by another process: {lock_id}"),
                         })
                         .map_err_nack(Some(Duration::from_secs(15)), RequeuePosition::Last);
                     }

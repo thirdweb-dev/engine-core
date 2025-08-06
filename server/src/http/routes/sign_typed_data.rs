@@ -182,7 +182,7 @@ async fn sign_single_typed_data(
                     signed_data,
                 }),
                 Err(e) => BatchResultItem::failure(EngineError::ValidationError {
-                    message: format!("Failed to serialize typed data: {}", e),
+                    message: format!("Failed to serialize typed data: {e}"),
                 }),
             }
         }

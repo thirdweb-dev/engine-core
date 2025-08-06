@@ -131,7 +131,7 @@ impl ThirdwebChainConfig<'_> {
             // For local anvil, use localhost URLs
             let local_rpc_url = "http://127.0.0.1:8545";
             let rpc_url = Url::parse(local_rpc_url).map_err(|e| EngineError::RpcConfigError {
-                message: format!("Failed to parse local anvil RPC URL: {}", e),
+                message: format!("Failed to parse local anvil RPC URL: {e}"),
             })?;
 
             // For bundler and paymaster, use the same local RPC URL
@@ -149,7 +149,7 @@ impl ThirdwebChainConfig<'_> {
                 client_id = self.client_id,
             ))
             .map_err(|e| EngineError::RpcConfigError {
-                message: format!("Failed to parse RPC URL: {}", e),
+                message: format!("Failed to parse RPC URL: {e}"),
             })?;
 
             let bundler_url = Url::parse(&format!(
@@ -158,7 +158,7 @@ impl ThirdwebChainConfig<'_> {
                 base_url = self.bundler_base_url,
             ))
             .map_err(|e| EngineError::RpcConfigError {
-                message: format!("Failed to parse Bundler URL: {}", e),
+                message: format!("Failed to parse Bundler URL: {e}"),
             })?;
 
             let paymaster_url = Url::parse(&format!(
@@ -167,7 +167,7 @@ impl ThirdwebChainConfig<'_> {
                 base_url = self.paymaster_base_url,
             ))
             .map_err(|e| EngineError::RpcConfigError {
-                message: format!("Failed to parse Paymaster URL: {}", e),
+                message: format!("Failed to parse Paymaster URL: {e}"),
             })?;
 
             (rpc_url, bundler_url, paymaster_url)

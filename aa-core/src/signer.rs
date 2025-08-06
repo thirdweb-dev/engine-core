@@ -85,7 +85,7 @@ impl<C: Chain + Clone> SmartAccountSignerBuilder<C> {
             .to_determined_smart_account()
             .await
             .map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to determine smart account: {}", e),
+                message: format!("Failed to determine smart account: {e}"),
             })?,
         };
 

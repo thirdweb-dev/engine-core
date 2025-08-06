@@ -81,7 +81,7 @@ pub enum UserOpConfirmationError {
 impl From<TwmqError> for UserOpConfirmationError {
     fn from(error: TwmqError) -> Self {
         UserOpConfirmationError::InternalError {
-            message: format!("Deserialization error for job data: {}", error),
+            message: format!("Deserialization error for job data: {error}"),
         }
     }
 }
@@ -153,7 +153,7 @@ where
             .get_chain(job_data.chain_id)
             .map_err(|e| UserOpConfirmationError::ChainServiceError {
                 chain_id: job_data.chain_id,
-                message: format!("Failed to get chain instance: {}", e),
+                message: format!("Failed to get chain instance: {e}"),
             })
             .map_err_fail()?;
 

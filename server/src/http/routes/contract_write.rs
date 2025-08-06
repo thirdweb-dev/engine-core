@@ -154,7 +154,7 @@ pub async fn write_contract(
     if !preparation_errors.is_empty() {
         let error_details: Vec<String> = preparation_errors
             .iter()
-            .map(|(index, error)| format!("Parameter {}: {}", index, error))
+            .map(|(index, error)| format!("Parameter {index}: {error}"))
             .collect();
 
         return Err(ApiEngineError(EngineError::ValidationError {

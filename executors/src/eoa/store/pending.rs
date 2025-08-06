@@ -78,8 +78,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
             if nonce != expected_nonce {
                 return Err(TransactionStoreError::InternalError {
                     message: format!(
-                        "Non-sequential nonces detected: expected {}, found {} at position {}",
-                        expected_nonce, nonce, i
+                        "Non-sequential nonces detected: expected {expected_nonce}, found {nonce} at position {i}"
                     ),
                 });
             }
@@ -110,7 +109,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         for tx in self.transactions {
             let borrowed_json =
                 serde_json::to_string(tx).map_err(|e| TransactionStoreError::InternalError {
-                    message: format!("Failed to serialize borrowed transaction: {}", e),
+                    message: format!("Failed to serialize borrowed transaction: {e}"),
                 })?;
             serialized_transactions.push(borrowed_json);
         }
@@ -224,7 +223,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonces<'_> {
         for tx in self.transactions {
             let borrowed_json =
                 serde_json::to_string(tx).map_err(|e| TransactionStoreError::InternalError {
-                    message: format!("Failed to serialize borrowed transaction: {}", e),
+                    message: format!("Failed to serialize borrowed transaction: {e}"),
                 })?;
             serialized_transactions.push(borrowed_json);
         }

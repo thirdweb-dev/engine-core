@@ -20,7 +20,7 @@ pub trait Dehydrated<R> {
 #[derive(Debug, Clone)]
 pub enum SubmittedTransactionHydrator {
     Noop,
-    Real(EoaTransactionRequest),
+    Real(Box<EoaTransactionRequest>),
 }
 
 impl Dehydrated<SubmittedTransactionHydrator> for SubmittedTransactionDehydrated {
@@ -41,7 +41,7 @@ impl Dehydrated<SubmittedTransactionHydrator> for SubmittedTransactionDehydrated
             SubmittedTransactionHydrator::Real(request) => {
                 SubmittedTransactionHydrated::Real(SubmittedTransaction {
                     data: self,
-                    user_request: request,
+                    user_request: *request,
                 })
             }
         }
@@ -149,7 +149,9 @@ impl EoaExecutorStore {
                         transaction_id: id.to_string(),
                     })?;
 
-            hydrated.push(d.hydrate(SubmittedTransactionHydrator::Real(request.clone())));
+            hydrated.push(d.hydrate(SubmittedTransactionHydrator::Real(Box::new(
+                request.clone(),
+            ))));
         }
 
         Ok(hydrated)

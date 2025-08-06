@@ -23,7 +23,7 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 // Helper to clean up Redis keys
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{}:*", queue_name);
+    let keys_pattern = format!("twmq:{queue_name}:*");
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)
@@ -329,7 +329,7 @@ async fn test_multiple_job_lease_expiry() {
     for job_id in job_ids {
         let sleep_job = SleepForeverJobData {
             id_to_check: job_id.to_string(),
-            message: format!("Multi-job test: {}", job_id),
+            message: format!("Multi-job test: {job_id}"),
         };
 
         queue

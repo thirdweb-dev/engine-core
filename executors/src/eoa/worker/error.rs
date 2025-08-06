@@ -117,7 +117,7 @@ impl EoaExecutorWorkerError {
 impl From<TwmqError> for EoaExecutorWorkerError {
     fn from(error: TwmqError) -> Self {
         EoaExecutorWorkerError::InternalError {
-            message: format!("Queue error: {}", error),
+            message: format!("Queue error: {error}"),
         }
     }
 }
@@ -296,7 +296,7 @@ impl SubmissionResult {
                         // Transaction failed, should be retried
                         let engine_error = rpc_error.to_engine_error(chain);
                         let error = EoaExecutorWorkerError::TransactionSendError {
-                            message: format!("Transaction send failed: {}", rpc_error),
+                            message: format!("Transaction send failed: {rpc_error}"),
                             inner_error: engine_error,
                         };
                         SubmissionResult {

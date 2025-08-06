@@ -97,14 +97,14 @@ pub fn get_config() -> EngineConfig {
         .add_source(config::Environment::with_prefix("app").separator("__"))
         .build()
         .unwrap_or_else(|e| {
-            eprintln!("Configuration error: {}", e);
+            eprintln!("Configuration error: {e}");
             panic!("Failed to build configuration");
         });
 
     // Deserialize the configuration
     config.try_deserialize::<EngineConfig>()
         .unwrap_or_else(|e| {
-            eprintln!("Configuration error: {}", e);
+            eprintln!("Configuration error: {e}");
             eprintln!("Make sure all required fields are set correctly in your configuration files or environment variables.");
             panic!("Failed to deserialize configuration");
         })
@@ -136,8 +136,7 @@ impl TryFrom<String> for Environment {
             "development" => Ok(Self::Development),
             "production" => Ok(Self::Production),
             other => Err(format!(
-                "{} is not a supported environment. Use either `local`, `development`, or `production`.",
-                other
+                "{other} is not a supported environment. Use either `local`, `development`, or `production`."
             )),
         }
     }

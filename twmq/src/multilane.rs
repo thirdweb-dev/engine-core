@@ -434,7 +434,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             "cancellation_pending" => Ok(CancelResult::CancellationPending),
             "not_found" => Ok(CancelResult::NotFound),
             _ => Err(TwmqError::Runtime {
-                message: format!("Unexpected cancel result: {}", result),
+                message: format!("Unexpected cancel result: {result}"),
             }),
         }
     }
@@ -522,7 +522,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| TwmqError::Runtime {
-                    message: format!("Failed to acquire permits during shutdown: {}", e),
+                    message: format!("Failed to acquire permits during shutdown: {e}"),
                 })?;
 
             tracing::info!(

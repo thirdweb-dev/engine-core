@@ -140,7 +140,7 @@ where
             .get_chain(data.chain_id)
             .map_err(|e| EoaExecutorWorkerError::ChainServiceError {
                 chain_id: data.chain_id,
-                message: format!("Failed to get chain: {}", e),
+                message: format!("Failed to get chain: {e}"),
             })
             .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
 
@@ -460,8 +460,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         let engine_error = e.to_engine_error(&self.chain);
                         EoaExecutorWorkerError::RpcError {
                             message: format!(
-                                "Failed to get balance during initialization: {}",
-                                engine_error
+                                "Failed to get balance during initialization: {engine_error}"
                             ),
                             inner_error: engine_error,
                         }
@@ -496,7 +495,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .map_err(|e| {
                 let engine_error = e.to_engine_error(&self.chain);
                 EoaExecutorWorkerError::RpcError {
-                    message: format!("Failed to get balance: {}", engine_error),
+                    message: format!("Failed to get balance: {engine_error}"),
                     inner_error: engine_error,
                 }
             })?;

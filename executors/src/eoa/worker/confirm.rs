@@ -36,7 +36,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .map_err(|e| {
                 let engine_error = e.to_engine_error(&self.chain);
                 EoaExecutorWorkerError::RpcError {
-                    message: format!("Failed to get transaction count: {}", engine_error),
+                    message: format!("Failed to get transaction count: {engine_error}"),
                     inner_error: engine_error,
                 }
             })?;

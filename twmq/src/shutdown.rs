@@ -63,7 +63,7 @@ impl<Q: QueueIdentifier> WorkerHandle<Q> {
                     self.queue.queue_name(),
                     e
                 );
-                Err(TwmqError::Runtime { message: format!("Worker panic: {}", e) })
+                Err(TwmqError::Runtime { message: format!("Worker panic: {e}") })
             }
         }
     }
@@ -117,7 +117,7 @@ impl ShutdownHandle {
                     errors.push(e);
                 }
                 Err(e) => {
-                    let runtime_error = TwmqError::Runtime { message: format!("Worker {} panic: {}", i, e) };
+                    let runtime_error = TwmqError::Runtime { message: format!("Worker {i} panic: {e}") };
                     tracing::error!("Worker {} task panicked during shutdown: {:?}", i, e);
                     errors.push(runtime_error);
                 }
