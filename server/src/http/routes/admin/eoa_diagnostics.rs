@@ -49,6 +49,8 @@ pub struct PendingTransactionsResponse {
     pub transactions: Vec<PendingTransactionResponse>,
     pub total_count: u64,
     pub has_more: bool,
+    pub offset: u64,
+    pub limit: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,6 +269,8 @@ pub async fn get_pending_transactions(
         transactions,
         total_count,
         has_more,
+        offset,
+        limit,
     };
 
     Ok((StatusCode::OK, Json(SuccessResponse::new(response))))
