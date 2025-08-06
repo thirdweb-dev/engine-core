@@ -75,7 +75,10 @@ pub struct TwExecuteResponse {
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum TwGetTransactionHashResponse {
     Pending,
-    Success { transaction_hash: String },
+    #[serde(rename_all = "camelCase")]
+    Success {
+        transaction_hash: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
