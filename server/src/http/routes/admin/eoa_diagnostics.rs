@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
-use engine_executors::eoa::store::{EoaExecutorStore, TransactionData};
+use engine_executors::eoa::store::{EoaExecutorStore, EoaHealth, TransactionData};
 use serde::{Deserialize, Serialize};
 
 use crate::http::{
@@ -27,6 +27,7 @@ pub struct EoaStateResponse {
     pub borrowed_count: u64,
     pub recycled_nonces_count: u64,
     pub recycled_nonces: Vec<u64>,
+    pub health: Option<EoaHealth>,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +140,12 @@ pub async fn get_eoa_state(
     })?;
     let recycled_nonces_count = recycled_nonces.len() as u64;
 
+    let health = store.get_eoa_health().await.map_err(|e| {
+        ApiEngineError(engine_core::error::EngineError::InternalError {
+            message: format!("Failed to get EOA health: {e}"),
+        })
+    })?;
+
     let response = EoaStateResponse {
         eoa: eoa_address.to_string(),
         chain_id,
@@ -149,6 +156,7 @@ pub async fn get_eoa_state(
         borrowed_count,
         recycled_nonces_count,
         recycled_nonces,
+        health,
     };
 
     Ok((StatusCode::OK, Json(SuccessResponse::new(response))))
