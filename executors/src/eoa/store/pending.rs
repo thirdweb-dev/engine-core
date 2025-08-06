@@ -59,7 +59,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         let current_optimistic: Option<u64> = conn
             .get(self.keys.optimistic_transaction_count_key_name())
             .await?;
-        let current_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
+        let current_optimistic_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
             eoa: self.eoa,
             chain_id: self.chain_id,
         })?;
@@ -74,7 +74,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
 
         // Check that nonces are sequential with no gaps
         for (i, &nonce) in nonces.iter().enumerate() {
-            let expected_nonce = current_nonce + i as u64;
+            let expected_nonce = current_optimistic_nonce + i as u64;
             if nonce != expected_nonce {
                 return Err(TransactionStoreError::InternalError {
                     message: format!(

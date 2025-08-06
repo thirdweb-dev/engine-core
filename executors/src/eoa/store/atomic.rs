@@ -401,6 +401,7 @@ impl AtomicEoaExecutorStore {
 
         // First, read current health data
         let current_health = self.get_eoa_health().await?;
+        let optimistic_nonce = self.get_optimistic_transaction_count().await?;
 
         // Prepare health update if health data exists
         let health_update = if let Some(mut health) = current_health {
@@ -416,6 +417,18 @@ impl AtomicEoaExecutorStore {
 
             // Update cached transaction count
             pipeline.set(&tx_count_key, current_chain_tx_count);
+
+            if current_chain_tx_count + 1 > optimistic_nonce {
+                tracing::warn!(
+                    current_chain_tx_count = current_chain_tx_count,
+                    optimistic_nonce = optimistic_nonce,
+                    "Optimistic nonce was behind fresh chain transaction count, updating to match"
+                );
+                pipeline.set(
+                    self.optimistic_transaction_count_key_name(),
+                    current_chain_tx_count + 1,
+                );
+            }
 
             // Update health data only if it exists
             if let Some(ref health_json) = health_update {
