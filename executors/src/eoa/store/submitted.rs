@@ -48,6 +48,13 @@ impl SubmittedNoopTransaction {
             self.nonce,
         )
     }
+
+    pub fn to_legacy_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
+        (
+            format!("{}:{}:0", self.transaction_hash, NO_OP_TRANSACTION_ID),
+            self.nonce,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +89,13 @@ impl SubmittedTransactionHydrated {
         match self {
             SubmittedTransactionHydrated::Noop(tx) => tx.to_redis_string_with_nonce(),
             SubmittedTransactionHydrated::Real(tx) => tx.to_redis_string_with_nonce(),
+        }
+    }
+
+    pub fn to_legacy_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
+        match self {
+            SubmittedTransactionHydrated::Noop(tx) => tx.to_legacy_redis_string_with_nonce(),
+            SubmittedTransactionHydrated::Real(tx) => tx.to_legacy_redis_string_with_nonce(),
         }
     }
 }
@@ -162,6 +176,16 @@ impl SubmittedTransactionDehydrated {
             format!(
                 "{}:{}:{}:{}",
                 self.transaction_hash, self.transaction_id, self.queued_at, self.submitted_at
+            ),
+            self.nonce,
+        )
+    }
+
+    pub fn to_legacy_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
+        (
+            format!(
+                "{}:{}:{}",
+                self.transaction_hash, self.transaction_id, self.queued_at
             ),
             self.nonce,
         )
@@ -277,6 +301,13 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                 self.keys.submitted_transactions_zset_name(),
                 &submitted_tx_redis_string,
             );
+
+            // Also remove the legacy formmated key if present
+            pipeline.zrem(
+                self.keys.submitted_transactions_zset_name(),
+                tx.to_legacy_redis_string_with_nonce(),
+            );
+
             pipeline.del(self.keys.transaction_hash_to_id_key_name(tx.hash()));
 
             // Process each unique transaction_id once
