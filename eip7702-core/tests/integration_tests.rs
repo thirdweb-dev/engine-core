@@ -2,11 +2,9 @@ use std::time::Duration;
 
 use alloy::{
     consensus::{SignableTransaction, TypedTransaction},
-    eips::{BlockNumberOrTag, eip7702::SignedAuthorization},
-    hex,
+    eips::eip7702::SignedAuthorization,
     network::{EthereumWallet, TransactionBuilder, TransactionBuilder7702, TxSigner},
-    node_bindings::{Anvil, AnvilInstance},
-    primitives::{Address, BlockNumber, Bytes, TxHash, U256},
+    primitives::{Address, Bytes, U256},
     providers::{
         DynProvider, Identity, Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
@@ -25,7 +23,7 @@ use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
     error::EngineError,
-    signer::{AccountSigner, EoaSigner, EoaSigningOptions},
+    signer::{AccountSigner, EoaSigningOptions},
     transaction::InnerTransaction,
 };
 use engine_eip7702_core::{
@@ -35,8 +33,6 @@ use engine_eip7702_core::{
 };
 use serde_json::Value;
 use tokio::time::sleep;
-
-use crate::MockERC20::{MockERC20Calls, MockERC20Instance};
 
 // Mock ERC20 contract
 sol! {

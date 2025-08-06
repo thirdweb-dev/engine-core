@@ -10,7 +10,8 @@ use utoipa_scalar::{Scalar, Servable};
 use vault_sdk::VaultClient;
 
 use crate::{
-    chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager,
+    chains::ThirdwebChainService, execution_router::ExecutionRouter,
+    http::routes::admin::eoa_diagnostics::eoa_diagnostics_router, queue::manager::QueueManager,
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -71,10 +72,9 @@ impl EngineServer {
             ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
-            .with_state(state);
+            .with_state(state.clone());
 
-        let eoa_diagnostics_router =
-            crate::http::routes::admin::eoa_diagnostics::eoa_diagnostics_router().with_state(state);
+        let eoa_diagnostics_router = eoa_diagnostics_router().with_state(state);
 
         let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
             .nest("/v1", v1_router)
