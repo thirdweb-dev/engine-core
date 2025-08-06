@@ -5,7 +5,7 @@ use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
-    eoa::EoaExecutorJobHandler,
+    eoa::{authorization_cache::EoaAuthorizationCache, EoaExecutorJobHandler},
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
@@ -49,6 +49,7 @@ impl QueueManager {
         chain_service: Arc<ThirdwebChainService>,
         userop_signer: Arc<engine_core::userop::UserOpSigner>,
         eoa_signer: Arc<engine_core::signer::EoaSigner>,
+        authorization_cache: EoaAuthorizationCache,
     ) -> Result<Self, EngineError> {
         // Create transaction registry
         let transaction_registry = Arc::new(TransactionRegistry::new(
@@ -212,6 +213,7 @@ impl QueueManager {
             webhook_queue: webhook_queue.clone(),
             namespace: queue_config.execution_namespace.clone(),
             redis: redis_client.get_connection_manager().await?,
+            authorization_cache,
             max_inflight: 100,
             max_recycled_nonces: 50,
         };

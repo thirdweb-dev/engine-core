@@ -260,5 +260,5 @@ impl ThirdwebChainConfig<'_> {
 }
 
 pub trait ChainService {
-    fn get_chain(&self, chain_id: u64) -> Result<impl Chain, EngineError>;
+    fn get_chain(&self, chain_id: u64) -> Result<impl Chain + Clone, EngineError>;
 }

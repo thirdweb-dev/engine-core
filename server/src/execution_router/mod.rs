@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use engine_aa_core::smart_account::{DeterminedSmartAccount, SmartAccount, SmartAccountFromSalt};
 use engine_core::{
     chain::{ChainService, RpcCredentials},
@@ -21,6 +21,7 @@ use engine_executors::{
     },
     eoa::{
         EoaExecutorJobHandler, EoaExecutorStore, EoaExecutorWorkerJobData, EoaTransactionRequest,
+        authorization_cache::EoaAuthorizationCache,
     },
     external_bundler::{
         confirm::UserOpConfirmationHandler,
@@ -51,13 +52,7 @@ pub struct ExecutionRouter {
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
     pub chains: Arc<ThirdwebChainService>,
-    pub authorization_cache: moka::future::Cache<AuthorizationCacheKey, bool>,
-}
-
-#[derive(Hash, Eq, PartialEq)]
-pub struct AuthorizationCacheKey {
-    eoa_address: Address,
-    chain_id: u64,
+    pub authorization_cache: EoaAuthorizationCache,
 }
 
 impl ExecutionRouter {
@@ -410,17 +405,9 @@ impl ExecutionRouter {
             let delegated_account = DelegatedAccount::new(eoa_execution_options.from, chain);
             let is_minimal_account = self
                 .authorization_cache
-                .try_get_with(
-                    AuthorizationCacheKey {
-                        eoa_address: eoa_execution_options.from,
-                        chain_id: base_execution_options.chain_id,
-                    },
-                    delegated_account.is_minimal_account(),
-                )
-                .await;
-
-            let is_minimal_account =
-                is_minimal_account.map_err(|e| EngineError::InternalError {
+                .is_minimal_account(&delegated_account)
+                .await
+                .map_err(|e| EngineError::InternalError {
                     message: format!("Failed to check 7702 delegation: {e:?}"),
                 })?;
 

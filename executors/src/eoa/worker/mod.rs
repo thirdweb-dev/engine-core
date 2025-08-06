@@ -7,6 +7,7 @@ use engine_core::{
     error::AlloyRpcErrorToEngineError,
     signer::EoaSigner,
 };
+use engine_eip7702_core::delegated_account::DelegatedAccount;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::Queue;
@@ -18,6 +19,7 @@ use twmq::{
     job::{BorrowedJob, JobResult, RequeuePosition, ToJobResult},
 };
 
+use crate::eoa::authorization_cache::EoaAuthorizationCache;
 use crate::eoa::store::{
     AtomicEoaExecutorStore, EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, SubmissionResult,
 };
@@ -110,6 +112,7 @@ where
 {
     pub chain_service: Arc<CS>,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
+    pub authorization_cache: EoaAuthorizationCache,
 
     pub redis: ConnectionManager,
     pub namespace: Option<String>,
@@ -155,6 +158,19 @@ where
         .await
         .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
+        let delegated_account = DelegatedAccount::new(data.eoa_address, chain.clone());
+
+        // if there's an error checking 7702 delegation here, we'll just assume it's not a minimal account for the pursposes of max in flight
+        let is_minimal_account = self
+            .authorization_cache
+            .is_minimal_account(&delegated_account)
+            .await
+            .inspect_err(|e| {
+                tracing::error!(error = ?e, "Error checking 7702 delegation");
+            })
+            .ok()
+            .unwrap_or(false);
+
         let worker = EoaExecutorWorker {
             store: scoped,
             chain,
@@ -162,7 +178,11 @@ where
             chain_id: data.chain_id,
             noop_signing_credential: data.noop_signing_credential.clone(),
 
-            max_inflight: self.max_inflight,
+            max_inflight: if is_minimal_account {
+                1
+            } else {
+                self.max_inflight
+            },
             max_recycled_nonces: self.max_recycled_nonces,
             webhook_queue: self.webhook_queue.clone(),
             signer: self.eoa_signer.clone(),

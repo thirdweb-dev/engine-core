@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use engine_core::{signer::EoaSigner, userop::UserOpSigner};
+use engine_executors::eoa::authorization_cache::EoaAuthorizationCache;
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
@@ -53,12 +54,21 @@ async fn main() -> anyhow::Result<()> {
     let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
     let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
+    let authorization_cache = EoaAuthorizationCache::new(
+        moka::future::Cache::builder()
+            .max_capacity(1024 * 1024 * 1024)
+            .time_to_live(Duration::from_secs(60 * 5))
+            .time_to_idle(Duration::from_secs(60))
+            .build(),
+    );
+
     let queue_manager = QueueManager::new(
         redis_client.clone(),
         &config.queue,
         chains.clone(),
         signer.clone(),
         eoa_signer.clone(),
+        authorization_cache.clone(),
     )
     .await?;
 
@@ -77,11 +87,7 @@ async fn main() -> anyhow::Result<()> {
     let execution_router = ExecutionRouter {
         namespace: config.queue.execution_namespace.clone(),
         redis: redis_client.get_connection_manager().await?,
-        authorization_cache: moka::future::Cache::builder()
-            .max_capacity(1024 * 1024 * 1024)
-            .time_to_live(Duration::from_secs(60 * 5))
-            .time_to_idle(Duration::from_secs(60))
-            .build(),
+        authorization_cache,
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
         userop_confirm_queue: queue_manager.userop_confirm_queue.clone(),
