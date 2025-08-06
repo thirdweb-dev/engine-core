@@ -112,7 +112,7 @@ pub async fn get_eoa_state(
     let optimistic_nonce = store.get_optimistic_transaction_count().await.ok();
     let pending_count = store.get_pending_transactions_count().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get pending count: {}", e),
+            message: format!("Failed to get pending count: {e}"),
         })
     })?;
     let submitted_count = store
@@ -120,19 +120,19 @@ pub async fn get_eoa_state(
         .await
         .map_err(|e| {
             ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get submitted count: {}", e),
+                message: format!("Failed to get submitted count: {e}"),
             })
         })?;
     let borrowed_count = store.get_borrowed_transactions_count().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get borrowed count: {}", e),
+            message: format!("Failed to get borrowed count: {e}"),
         })
     })?;
 
     // Get recycled nonces using store methods
     let recycled_nonces = store.get_recycled_nonces().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get recycled nonces: {}", e),
+            message: format!("Failed to get recycled nonces: {e}"),
         })
     })?;
     let recycled_nonces_count = recycled_nonces.len() as u64;
@@ -183,7 +183,7 @@ pub async fn get_transaction_detail(
         .await
         .map_err(|e| {
             ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get transaction data: {}", e),
+                message: format!("Failed to get transaction data: {e}"),
             })
         })?;
 
@@ -193,7 +193,7 @@ pub async fn get_transaction_detail(
         .await
         .map_err(|e| {
             ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get attempts count: {}", e),
+                message: format!("Failed to get attempts count: {e}"),
             })
         })?;
 
@@ -244,13 +244,13 @@ pub async fn get_pending_transactions(
         .await
         .map_err(|e| {
             ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get pending transactions: {}", e),
+                message: format!("Failed to get pending transactions: {e}"),
             })
         })?;
 
     let total_count = store.get_pending_transactions_count().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get pending count: {}", e),
+            message: format!("Failed to get pending count: {e}"),
         })
     })?;
 
@@ -304,7 +304,7 @@ pub async fn get_submitted_transactions(
     // Use store method to get submitted transactions
     let submitted_txs = store.get_all_submitted_transactions().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get submitted transactions: {}", e),
+            message: format!("Failed to get submitted transactions: {e}"),
         })
     })?;
 
@@ -353,7 +353,7 @@ pub async fn get_borrowed_transactions(
     // Use store method to get borrowed transactions
     let borrowed_txs = store.peek_borrowed_transactions().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {
-            message: format!("Failed to get borrowed transactions: {}", e),
+            message: format!("Failed to get borrowed transactions: {e}"),
         })
     })?;
 
