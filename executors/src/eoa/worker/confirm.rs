@@ -8,12 +8,11 @@ use crate::eoa::{
         TransactionData, TransactionStoreError,
     },
     worker::{
-        EoaExecutorWorker,
-        error::{EoaExecutorWorkerError, should_update_balance_threshold},
-    },
+        error::{should_update_balance_threshold, EoaExecutorWorkerError}, EoaExecutorWorker
+    }, EoaExecutorStore,
 };
 
-const NONCE_STALL_TIMEOUT: u64 = 300_000; // 5 minutes in milliseconds - after this time, attempt gas bump
+const NONCE_STALL_LIMIT_MS: u64 = 300_000; // 5 minutes in milliseconds - after this time, attempt gas bump
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,7 +45,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             Err(e) => match e {
                 TransactionStoreError::NonceSyncRequired { .. } => {
                     self.store
-                        .reset_nonces(current_chain_transaction_count)
+                        .update_cached_transaction_count(current_chain_transaction_count)
                         .await?;
                     current_chain_transaction_count
                 }
@@ -60,15 +59,15 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // no nonce progress
         if current_chain_transaction_count <= cached_transaction_count {
             let current_health = self.get_eoa_health().await?;
-            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            let now = EoaExecutorStore::now();
             // No nonce progress - check if we should attempt gas bumping for stalled nonce
             let time_since_movement = now.saturating_sub(current_health.last_nonce_movement_at);
 
             // if there are waiting transactions, we can attempt a gas bump
-            if time_since_movement > NONCE_STALL_TIMEOUT && submitted_count > 0 {
+            if time_since_movement > NONCE_STALL_LIMIT_MS && submitted_count > 0 {
                 tracing::info!(
                     time_since_movement = time_since_movement,
-                    stall_timeout = NONCE_STALL_TIMEOUT,
+                    stall_timeout = NONCE_STALL_LIMIT_MS,
                     current_chain_nonce = current_chain_transaction_count,
                     cached_transaction_count = cached_transaction_count,
                     "Nonce has been stalled, attempting gas bump"
@@ -155,6 +154,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 self.webhook_queue.clone(),
             )
             .await?;
+
+        if current_chain_transaction_count != cached_transaction_count {
+            if current_chain_transaction_count < cached_transaction_count {
+                tracing::error!(
+                    current_chain_transaction_count = current_chain_transaction_count,
+                    cached_transaction_count = cached_transaction_count,
+                    "Fresh fetched chain transaction count is lower than cached transaction count. \
+                    This indicates a re-org or RPC block lag. Engine will use the newest fetched transaction count from now (assuming re-org).\
+                    Transactions already confirmed will not be attempted again, even if their nonce was higher than the new chain transaction count.
+                    In case this is RPC misbehaviour not reflective of actual chain state, Engine's nonce management might be affected."
+                );
+            }
+
+            self.store
+                .update_cached_transaction_count(current_chain_transaction_count)
+                .await?;
+        }
 
         Ok(report)
     }
