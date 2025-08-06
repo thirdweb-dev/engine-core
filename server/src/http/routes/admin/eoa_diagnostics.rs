@@ -28,6 +28,7 @@ pub struct EoaStateResponse {
     pub recycled_nonces_count: u64,
     pub recycled_nonces: Vec<u64>,
     pub health: Option<EoaHealth>,
+    pub manual_reset_scheduled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,6 +147,12 @@ pub async fn get_eoa_state(
         })
     })?;
 
+    let manual_reset_scheduled = store.is_manual_reset_scheduled().await.map_err(|e| {
+        ApiEngineError(engine_core::error::EngineError::InternalError {
+            message: format!("Failed to check if manual reset is scheduled: {e}"),
+        })
+    })?;
+
     let response = EoaStateResponse {
         eoa: eoa_address.to_string(),
         chain_id,
@@ -156,6 +163,7 @@ pub async fn get_eoa_state(
         borrowed_count,
         recycled_nonces_count,
         recycled_nonces,
+        manual_reset_scheduled,
         health,
     };
 
@@ -369,6 +377,37 @@ pub async fn get_borrowed_transactions(
     Ok((StatusCode::OK, Json(SuccessResponse::new(transactions))))
 }
 
+/// Schedule a manual reset for the EOA
+
+#[debug_handler]
+pub async fn schedule_manual_reset(
+    _auth: DiagnosticAuthExtractor,
+    State(state): State<EngineServerState>,
+    Path(eoa_chain): Path<String>,
+) -> Result<impl IntoResponse, ApiEngineError> {
+    let (eoa, chain_id) = parse_eoa_chain(&eoa_chain)?;
+    let eoa_address: Address = eoa.parse().map_err(|_| {
+        ApiEngineError(engine_core::error::EngineError::ValidationError {
+            message: "Invalid EOA address format".to_string(),
+        })
+    })?;
+
+    let eoa_queue = &state.queue_manager.eoa_executor_queue;
+    let redis_conn = eoa_queue.handler.redis.clone();
+
+    let namespace = eoa_queue.handler.namespace.clone();
+
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+
+    store.schedule_manual_reset().await.map_err(|e| {
+        ApiEngineError(engine_core::error::EngineError::InternalError {
+            message: format!("Failed to schedule manual reset: {e}"),
+        })
+    })?;
+
+    Ok((StatusCode::OK, Json(SuccessResponse::new(()))))
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Parse eoa:chain_id format
@@ -414,5 +453,9 @@ pub fn eoa_diagnostics_router() -> Router<EngineServerState> {
         .route(
             "/admin/executors/eoa/{eoa_chain}/borrowed",
             axum::routing::get(get_borrowed_transactions),
+        )
+        .route(
+            "/admin/executors/eoa/{eoa_chain}/reset",
+            axum::routing::post(schedule_manual_reset),
         )
 }

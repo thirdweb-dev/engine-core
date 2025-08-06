@@ -274,6 +274,19 @@ impl EoaExecutorStoreKeys {
             None => format!("eoa_executor:health:{}:{}", self.chain_id, self.eoa),
         }
     }
+
+    /// Manual reset key name.
+    ///
+    /// This holds a timestamp if a manual reset is scheduled.
+    pub fn manual_reset_key_name(&self) -> String {
+        match &self.namespace {
+            Some(ns) => format!(
+                "{ns}:eoa_executor:pending_manual_reset:{}:{}",
+                self.chain_id, self.eoa
+            ),
+            None => format!("eoa_executor:pending_manual_reset:{}:{}", self.chain_id, self.eoa),
+        }
+    }
 }
 
 impl EoaExecutorStore {
@@ -722,6 +735,15 @@ impl EoaExecutorStore {
         Ok(())
     }
 
+    /// Schedule a manual reset for the EOA
+    pub async fn schedule_manual_reset(&self) -> Result<(), TransactionStoreError> {
+        let manual_reset_key = self.manual_reset_key_name();
+        let mut conn = self.redis.clone();
+        conn.set::<_, _, ()>(&manual_reset_key, EoaExecutorStore::now())
+            .await?;
+        Ok(())
+    }
+
     /// Get count of submitted transactions awaiting confirmation
     pub async fn get_submitted_transactions_count(&self) -> Result<u64, TransactionStoreError> {
         let submitted_key = self.submitted_transactions_zset_name();
@@ -753,7 +775,7 @@ impl EoaExecutorStore {
     }
 
     /// Get the current time in milliseconds
-    /// 
+    ///
     /// Used as the canonical time representation for this store
     pub fn now() -> u64 {
         chrono::Utc::now().timestamp_millis().max(0) as u64
@@ -796,11 +818,13 @@ impl EoaExecutorStore {
     }
 
     /// Get all submitted transactions (raw data)
-    pub async fn get_all_submitted_transactions(&self) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
+    pub async fn get_all_submitted_transactions(
+        &self,
+    ) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
         let submitted_key = self.submitted_transactions_zset_name();
         let mut conn = self.redis.clone();
 
-        let submitted_data: Vec<SubmittedTransactionStringWithNonce> = 
+        let submitted_data: Vec<SubmittedTransactionStringWithNonce> =
             conn.zrange_withscores(&submitted_key, 0, -1).await?;
 
         let submitted_txs: Vec<SubmittedTransactionDehydrated> =
@@ -810,7 +834,10 @@ impl EoaExecutorStore {
     }
 
     /// Get attempts count for a specific transaction
-    pub async fn get_transaction_attempts_count(&self, transaction_id: &str) -> Result<u64, TransactionStoreError> {
+    pub async fn get_transaction_attempts_count(
+        &self,
+        transaction_id: &str,
+    ) -> Result<u64, TransactionStoreError> {
         let attempts_key = self.transaction_attempts_list_name(transaction_id);
         let mut conn = self.redis.clone();
 
@@ -819,12 +846,15 @@ impl EoaExecutorStore {
     }
 
     /// Get all transaction attempts for a specific transaction
-    pub async fn get_transaction_attempts(&self, transaction_id: &str) -> Result<Vec<TransactionAttempt>, TransactionStoreError> {
+    pub async fn get_transaction_attempts(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Vec<TransactionAttempt>, TransactionStoreError> {
         let attempts_key = self.transaction_attempts_list_name(transaction_id);
         let mut conn = self.redis.clone();
 
         let attempts_data: Vec<String> = conn.lrange(&attempts_key, 0, -1).await?;
-        
+
         let mut attempts = Vec::new();
         for attempt_json in attempts_data {
             let attempt: TransactionAttempt = serde_json::from_str(&attempt_json)?;
@@ -832,6 +862,14 @@ impl EoaExecutorStore {
         }
 
         Ok(attempts)
+    }
+
+    pub async fn is_manual_reset_scheduled(&self) -> Result<bool, TransactionStoreError> {
+        let manual_reset_key = self.manual_reset_key_name();
+        let mut conn = self.redis.clone();
+
+        let manual_reset: Option<u64> = conn.get(&manual_reset_key).await?;
+        Ok(manual_reset.is_some())
     }
 }
 

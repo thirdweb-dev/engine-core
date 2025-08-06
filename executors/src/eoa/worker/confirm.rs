@@ -1,6 +1,7 @@
 use alloy::{primitives::B256, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
+use twmq::redis::AsyncCommands;
 
 use crate::eoa::{
     EoaExecutorStore,
@@ -42,6 +43,13 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     inner_error: engine_error,
                 }
             })?;
+
+        if self.store.is_manual_reset_scheduled().await? {
+            tracing::info!("Manual reset scheduled, executing now");
+            self.store
+                .reset_nonces(current_chain_transaction_count)
+                .await?;
+        }
 
         let cached_transaction_count = match self.store.get_cached_transaction_count().await {
             Err(e) => match e {

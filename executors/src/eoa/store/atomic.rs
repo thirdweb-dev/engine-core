@@ -506,6 +506,7 @@ impl AtomicEoaExecutorStore {
             let optimistic_key = self.optimistic_transaction_count_key_name();
             let cached_nonce_key = self.last_transaction_count_key_name();
             let recycled_key = self.recycled_nonces_zset_name();
+            let manual_reset_key = self.manual_reset_key_name();
 
             // Update health data only if it exists
             if let Some(ref health_json) = health_update {
@@ -521,6 +522,9 @@ impl AtomicEoaExecutorStore {
 
             // Reset the recycled nonces
             pipeline.del(recycled_key);
+
+            // Delete the manual reset key
+            pipeline.del(&manual_reset_key);
         })
         .await
     }
