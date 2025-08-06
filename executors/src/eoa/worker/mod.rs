@@ -294,36 +294,33 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // 4. CHECK FOR REMAINING WORK
         let pending_count = self
             .store
-            .peek_pending_transactions(1000)
+            .get_pending_transactions_count()
             .await
             .map_err(|e| {
                 tracing::error!(error = ?e, "Error in peek_pending_transactions");
                 e
             })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
-            .len();
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
         let borrowed_count = self
             .store
-            .peek_borrowed_transactions()
+            .get_borrowed_transactions_count()
             .await
             .map_err(|e| {
                 tracing::error!(error = ?e, "Error in peek_borrowed_transactions");
                 e
             })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
-            .len();
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
-        let recycled_count = self
+        let recycled_nonces_count = self
             .store
-            .peek_recycled_nonces()
+            .get_recycled_nonces_count()
             .await
             .map_err(|e| {
                 tracing::error!(error = ?e, "Error in peek_recycled_nonces");
                 e
             })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?
-            .len();
+            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
         let submitted_count = self
             .store
@@ -335,6 +332,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
             })
             .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
+        tracing::info!(
+            recovered = recovered,
+            confirmed = confirmations_report.moved_to_success,
+            temp_failed = confirmations_report.moved_to_pending,
+            replacements = confirmations_report.moved_to_pending,
+            currently_submitted = submitted_count,
+            currently_pending = pending_count,
+            currently_borrowed = borrowed_count,
+            currently_recycled = recycled_nonces_count,
+        );
+
         Ok(EoaExecutorWorkerResult {
             recovered_transactions: recovered,
             confirmed_transactions: confirmations_report.moved_to_success as u32,
@@ -345,7 +353,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             submitted_transactions: submitted_count as u32,
             pending_transactions: pending_count as u32,
             borrowed_transactions: borrowed_count as u32,
-            recycled_nonces: recycled_count as u32,
+            recycled_nonces: recycled_nonces_count as u32,
         })
     }
 
