@@ -1,7 +1,7 @@
 use alloy::transports::{RpcError, TransportErrorKind};
 use engine_core::{
     chain::Chain,
-    error::{AlloyRpcErrorToEngineError, EngineError, RpcErrorKind},
+    error::{AlloyRpcErrorToEngineError, EngineError},
 };
 use std::time::Duration;
 use twmq::job::RequeuePosition;
@@ -128,7 +128,7 @@ impl EoaErrorMapper {
             _ => {
                 // Not an actionable error code
                 EoaExecutionError::RpcError {
-                    message: format!("RPC error code {}: {}", code, message),
+                    message: format!("RPC error code {code}: {message}"),
                     inner_error: Some(EngineError::InternalError {
                         message: message.to_string(),
                     }),

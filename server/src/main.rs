@@ -101,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         chains,
         execution_router: Arc::new(execution_router),
         queue_manager: Arc::new(queue_manager),
+        diagnostic_access_password: config.server.diagnostic_access_password,
     })
     .await;
 

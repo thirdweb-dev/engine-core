@@ -37,6 +37,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub log_format: LogFormat,
+    pub diagnostic_access_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,10 +70,12 @@ impl Default for ServerConfig {
             port: 3000,
             host: "0.0.0.0".into(),
             log_format: LogFormat::Pretty,
+            diagnostic_access_password: None,
         }
     }
 }
 
+/// EngineConfig is cached, it only loads once
 pub fn get_config() -> EngineConfig {
     let base_path = env::current_dir().expect("Failed to determine the current directory");
     let configuration_directory = base_path.join("configuration");
@@ -94,14 +97,14 @@ pub fn get_config() -> EngineConfig {
         .add_source(config::Environment::with_prefix("app").separator("__"))
         .build()
         .unwrap_or_else(|e| {
-            eprintln!("Configuration error: {}", e);
+            eprintln!("Configuration error: {e}");
             panic!("Failed to build configuration");
         });
 
     // Deserialize the configuration
     config.try_deserialize::<EngineConfig>()
         .unwrap_or_else(|e| {
-            eprintln!("Configuration error: {}", e);
+            eprintln!("Configuration error: {e}");
             eprintln!("Make sure all required fields are set correctly in your configuration files or environment variables.");
             panic!("Failed to deserialize configuration");
         })
@@ -133,8 +136,7 @@ impl TryFrom<String> for Environment {
             "development" => Ok(Self::Development),
             "production" => Ok(Self::Production),
             other => Err(format!(
-                "{} is not a supported environment. Use either `local`, `development`, or `production`.",
-                other
+                "{other} is not a supported environment. Use either `local`, `development`, or `production`."
             )),
         }
     }

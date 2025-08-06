@@ -98,8 +98,7 @@ impl<'de> Deserialize<'de> for MulticallConfig {
                 match addr_str.parse::<Address>() {
                     Ok(address) => Ok(MulticallConfig::CustomAddress(address)),
                     Err(_) => Err(D::Error::custom(format!(
-                        "Invalid address format: {}. Expected valid Ethereum address or boolean value",
-                        addr_str
+                        "Invalid address format: {addr_str}. Expected valid Ethereum address or boolean value"
                     ))),
                 }
             }
@@ -475,7 +474,7 @@ async fn execute_direct_contract_calls<C: engine_core::chain::Chain>(
                                     EngineError::contract_decoding_error(
                                         Some(prepared_call.target),
                                         chain.chain_id(),
-                                        format!("Failed to decode result: {}", e),
+                                        format!("Failed to decode result: {e}"),
                                     ),
                                 ));
                             }
@@ -513,13 +512,13 @@ async fn execute_multicall(
         .input(multicall_call.abi_encode().into());
 
     let result = provider.call(call_request).await.map_err(|e| {
-        EngineError::contract_multicall_error(chain_id, format!("Multicall failed: {}", e))
+        EngineError::contract_multicall_error(chain_id, format!("Multicall failed: {e}"))
     })?;
 
     let decoded = aggregate3Call::abi_decode_returns(&result).map_err(|e| {
         EngineError::contract_multicall_error(
             chain_id,
-            format!("Failed to decode multicall result: {}", e),
+            format!("Failed to decode multicall result: {e}"),
         )
     })?;
 
@@ -589,7 +588,7 @@ fn process_multicall_result(
             BatchResultItem::failure(EngineError::contract_decoding_error(
                 Some(prepared_call.target),
                 0, // Chain ID not available here
-                format!("Failed to decode result: {}", e),
+                format!("Failed to decode result: {e}"),
             ))
         }
     }

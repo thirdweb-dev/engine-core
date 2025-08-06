@@ -88,8 +88,7 @@ pub async fn empty_queue_idempotency_set(
             return Err(ApiEngineError(
                 engine_core::error::EngineError::ValidationError {
                     message: format!(
-                        "Invalid queue name '{}'. Valid options are: webhook, external_bundler_send, userop_confirm, eoa_executor, eip7702_send, eip7702_confirm",
-                        queue_name
+                        "Invalid queue name '{queue_name}'. Valid options are: webhook, external_bundler_send, userop_confirm, eoa_executor, eip7702_send, eip7702_confirm"
                     ),
                 },
             ));
@@ -109,8 +108,7 @@ pub async fn empty_queue_idempotency_set(
                 Json(SuccessResponse::new(EmptyIdempotencySetResponse {
                     queue_name: queue_name.clone(),
                     message: format!(
-                        "Successfully emptied idempotency set for queue '{}'",
-                        queue_name
+                        "Successfully emptied idempotency set for queue '{queue_name}'"
                     ),
                 })),
             ))
@@ -125,8 +123,7 @@ pub async fn empty_queue_idempotency_set(
             Err(ApiEngineError(
                 engine_core::error::EngineError::InternalError {
                     message: format!(
-                        "Failed to empty idempotency set for queue '{}': {}",
-                        queue_name, e
+                        "Failed to empty idempotency set for queue '{queue_name}': {e}"
                     ),
                 },
             ))

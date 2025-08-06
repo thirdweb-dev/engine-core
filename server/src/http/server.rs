@@ -10,7 +10,8 @@ use utoipa_scalar::{Scalar, Servable};
 use vault_sdk::VaultClient;
 
 use crate::{
-    chains::ThirdwebChainService, execution_router::ExecutionRouter, queue::manager::QueueManager,
+    chains::ThirdwebChainService, execution_router::ExecutionRouter,
+    http::routes::admin::eoa_diagnostics::eoa_diagnostics_router, queue::manager::QueueManager,
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -27,6 +28,8 @@ pub struct EngineServerState {
 
     pub execution_router: Arc<ExecutionRouter>,
     pub queue_manager: Arc<QueueManager>,
+
+    pub diagnostic_access_password: Option<String>,
 }
 
 pub struct EngineServer {
@@ -69,11 +72,16 @@ impl EngineServer {
             ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
-            .with_state(state);
+            .with_state(state.clone());
+
+        let eoa_diagnostics_router = eoa_diagnostics_router().with_state(state);
 
         let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
             .nest("/v1", v1_router)
             .split_for_parts();
+
+        // Merge the hidden diagnostic routes after OpenAPI split
+        let router = router.merge(eoa_diagnostics_router);
 
         let api_clone = api.clone();
         let router = router
@@ -168,9 +176,8 @@ impl EngineServer {
                 }
                 Err(e) => {
                     tracing::error!("Failed to join HTTP server task: {}", e);
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Task join error: {}", e),
+                    return Err(std::io::Error::other(
+                        format!("Task join error: {e}"),
                     ));
                 }
             }

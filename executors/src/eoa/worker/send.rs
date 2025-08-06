@@ -34,7 +34,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     .map_err(|e| {
                         let engine_error = e.to_engine_error(&self.chain);
                         EoaExecutorWorkerError::RpcError {
-                            message: format!("Failed to get balance: {}", engine_error),
+                            message: format!("Failed to get balance: {engine_error}"),
                             inner_error: engine_error,
                         }
                     })?;
@@ -293,6 +293,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
     /// Process new transactions with fixed iterations and simple sequential nonces
     async fn process_new_transactions(&self, budget: u64) -> Result<u32, EoaExecutorWorkerError> {
         if budget == 0 {
+            tracing::warn!("No budget to process new transactions");
             return Ok(0);
         }
 

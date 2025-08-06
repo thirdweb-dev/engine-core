@@ -122,10 +122,10 @@ where
     H: DurableExecution,
 {
     pub redis: ConnectionManager,
-    handler: Arc<H>,
-    options: QueueOptions,
+    pub handler: Arc<H>,
+    pub options: QueueOptions,
     // concurrency: usize,
-    name: String,
+    pub name: String,
 }
 
 impl<H: DurableExecution> Queue<H> {
@@ -456,7 +456,7 @@ impl<H: DurableExecution> Queue<H> {
             "cancellation_pending" => Ok(CancelResult::CancellationPending),
             "not_found" => Ok(CancelResult::NotFound),
             _ => Err(TwmqError::Runtime {
-                message: format!("Unexpected cancel result: {}", result),
+                message: format!("Unexpected cancel result: {result}"),
             }),
         }
     }
@@ -552,7 +552,7 @@ impl<H: DurableExecution> Queue<H> {
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| TwmqError::Runtime {
-                    message: format!("Failed to acquire permits during shutdown: {}", e),
+                    message: format!("Failed to acquire permits during shutdown: {e}"),
                 })?;
 
             tracing::info!(

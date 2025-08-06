@@ -30,7 +30,7 @@ pub struct QueueManager {
 
 fn get_queue_name_for_namespace(namespace: &Option<String>, name: &str) -> String {
     match namespace {
-        Some(namespace) => format!("{}_{}", namespace, name),
+        Some(namespace) => format!("{namespace}_{name}"),
         None => name.to_owned(),
     }
 }

@@ -141,15 +141,13 @@ impl DurableExecution for WebhookJobHandler {
             for (key, value) in custom_headers {
                 let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
                     JobError::Fail(WebhookError::RequestConstruction(format!(
-                        "Invalid header name '{}': {}",
-                        key, e
+                        "Invalid header name '{key}': {e}"
                     )))
                 })?;
 
                 let header_value = HeaderValue::from_str(value).map_err(|e| {
                     JobError::Fail(WebhookError::RequestConstruction(format!(
-                        "Invalid header value for '{}': {}",
-                        key, e
+                        "Invalid header value for '{key}': {e}"
                     )))
                 })?;
 
@@ -169,8 +167,7 @@ impl DurableExecution for WebhookJobHandler {
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| {
                     JobError::Fail(WebhookError::RequestConstruction(format!(
-                        "Failed to get system time for timestamp: {}",
-                        e
+                        "Failed to get system time for timestamp: {e}"
                     )))
                 })?
                 .as_secs();
@@ -184,7 +181,7 @@ impl DurableExecution for WebhookJobHandler {
             type HmacSha256 = Hmac<sha2::Sha256>;
             let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
                 .map_err(|e| {
-                    WebhookError::HmacGeneration(format!("Failed to initialize HMAC: {}", e))
+                    WebhookError::HmacGeneration(format!("Failed to initialize HMAC: {e}"))
                 })
                 .map_err_fail()?;
 
@@ -195,8 +192,7 @@ impl DurableExecution for WebhookJobHandler {
             let signature_header_value = HeaderValue::from_str(&signature_hex)
                 .map_err(|e| {
                     WebhookError::RequestConstruction(format!(
-                        "Invalid header value for '{}': {}",
-                        SIGNATURE_HEADER_NAME, e
+                        "Invalid header value for '{SIGNATURE_HEADER_NAME}': {e}"
                     ))
                 })
                 .map_err_fail()?;
@@ -204,8 +200,7 @@ impl DurableExecution for WebhookJobHandler {
             let timestamp_header_value = HeaderValue::from_str(&timestamp_str)
                 .map_err(|e| {
                     WebhookError::RequestConstruction(format!(
-                        "Invalid header value for '{}': {}",
-                        TIMESTAMP_HEADER_NAME, e
+                        "Invalid header value for '{TIMESTAMP_HEADER_NAME}': {e}"
                     ))
                 })
                 .map_err_fail()?;
@@ -254,8 +249,7 @@ impl DurableExecution for WebhookJobHandler {
                     Err(e) => {
                         if status.is_success() {
                             let err = WebhookError::ResponseReadError(format!(
-                                "Failed to read response body: {}",
-                                e
+                                "Failed to read response body: {e}"
                             ));
                             return Err(err).map_err_fail();
                         }

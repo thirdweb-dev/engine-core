@@ -97,7 +97,7 @@ impl ExecutionRouter {
         // Get chain and encode calldata properly
         let chain = self.chains.get_chain(base_options.chain_id).map_err(|e| {
             EngineError::InternalError {
-                message: format!("Failed to get chain: {}", e),
+                message: format!("Failed to get chain: {e}"),
             }
         })?;
 
@@ -128,10 +128,10 @@ impl ExecutionRouter {
 
         // Create rules for UserOp restrictions
         let nonce_rule = Rule::Regex(RegexRule {
-            pattern: format!("^{}$", preallocated_nonce),
+            pattern: format!("^{preallocated_nonce}$"),
         });
         let calldata_rule = Rule::Regex(RegexRule {
-            pattern: format!("(?i)^{}$", encoded_calldata),
+            pattern: format!("(?i)^{encoded_calldata}$"),
         });
 
         let userop_v06_rules = UserOperationV06Rules {
@@ -187,7 +187,7 @@ impl ExecutionRouter {
             .vault_client
             .create_signed_access_token(access_token.clone(), additional_policies, expiry_timestamp)
             .map_err(|e| EngineError::VaultError {
-                message: format!("Failed to create signed access token: {}", e),
+                message: format!("Failed to create signed access token: {e}"),
             })?;
 
         let converted_credential = SigningCredential::Vault(Auth::AccessToken {
@@ -300,7 +300,7 @@ impl ExecutionRouter {
         &self,
         base_execution_options: &BaseExecutionOptions,
         erc4337_execution_options: &Erc4337ExecutionOptions,
-        webhook_options: &Vec<WebhookOptions>,
+        webhook_options: &[WebhookOptions],
         transactions: &[InnerTransaction],
         rpc_credentials: RpcCredentials,
         signing_credential: SigningCredential,
@@ -312,7 +312,7 @@ impl ExecutionRouter {
             transactions: transactions.to_vec(),
             execution_options: erc4337_execution_options.clone(),
             signing_credential,
-            webhook_options: webhook_options.clone(),
+            webhook_options: webhook_options.to_owned(),
             rpc_credentials,
             pregenerated_nonce,
         };
@@ -325,7 +325,7 @@ impl ExecutionRouter {
             )
             .await
             .map_err(|e| TwmqError::Runtime {
-                message: format!("Failed to register transaction: {}", e),
+                message: format!("Failed to register transaction: {e}"),
             })?;
 
         // Create job with transaction ID as the job ID for idempotency
@@ -370,7 +370,7 @@ impl ExecutionRouter {
             .set_transaction_queue(&base_execution_options.idempotency_key, "eip7702_send")
             .await
             .map_err(|e| TwmqError::Runtime {
-                message: format!("Failed to register transaction: {}", e),
+                message: format!("Failed to register transaction: {e}"),
             })?;
 
         // Create job with transaction ID as the job ID for idempotency
@@ -403,7 +403,7 @@ impl ExecutionRouter {
             .chains
             .get_chain(base_execution_options.chain_id)
             .map_err(|e| EngineError::InternalError {
-                message: format!("Failed to get chain: {}", e),
+                message: format!("Failed to get chain: {e}"),
             })?;
 
         let transaction = if transactions.len() > 1 {
@@ -421,7 +421,7 @@ impl ExecutionRouter {
 
             let is_minimal_account =
                 is_minimal_account.map_err(|e| EngineError::InternalError {
-                    message: format!("Failed to check 7702 delegation: {:?}", e),
+                    message: format!("Failed to check 7702 delegation: {e:?}"),
                 })?;
 
             if !is_minimal_account {
@@ -471,7 +471,7 @@ impl ExecutionRouter {
             .add_transaction(eoa_transaction_request)
             .await
             .map_err(|e| TwmqError::Runtime {
-                message: format!("Failed to add transaction to EOA store: {}", e),
+                message: format!("Failed to add transaction to EOA store: {e}"),
             })?;
 
         // Register transaction in registry
@@ -479,7 +479,7 @@ impl ExecutionRouter {
             .set_transaction_queue(&base_execution_options.idempotency_key, "eoa_executor")
             .await
             .map_err(|e| TwmqError::Runtime {
-                message: format!("Failed to register transaction: {}", e),
+                message: format!("Failed to register transaction: {e}"),
             })?;
 
         // Ensure an idempotent job exists for this EOA:chain combination

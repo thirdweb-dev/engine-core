@@ -168,7 +168,7 @@ async fn load_test_throughput(
     nack_percentage: f64,
 ) -> (u64, f64, f64, bool) {
     let test_id = nanoid::nanoid!(8);
-    let queue_name = format!("bench_queue_{}", test_id);
+    let queue_name = format!("bench_queue_{test_id}");
 
     let metrics = BenchmarkMetrics::new();
 
@@ -201,7 +201,7 @@ async fn load_test_throughput(
     // Clean up any existing data
     let mut redis_conn = queue.redis.clone();
     let keys: Vec<String> = redis::cmd("KEYS")
-        .arg(format!("{}:*", queue_name))
+        .arg(format!("{queue_name}:*"))
         .query_async(&mut redis_conn)
         .await
         .unwrap_or_default();
@@ -241,7 +241,7 @@ async fn load_test_throughput(
                 if queue
                     .clone()
                     .job(job)
-                    .with_id(format!("job_{}", job_counter))
+                    .with_id(format!("job_{job_counter}"))
                     .push()
                     .await
                     .is_ok()
@@ -289,21 +289,20 @@ async fn load_test_throughput(
     let avg_processing_time = metrics.avg_processing_time_ms();
 
     println!(
-        "Load Test Results - {}jobs/s for {}s:",
-        jobs_per_second, duration_seconds
+        "Load Test Results - {jobs_per_second}jobs/s for {duration_seconds}s:"
     );
-    println!("  Jobs pushed: {}", jobs_pushed);
-    println!("  Jobs processed: {}", total_processed);
+    println!("  Jobs pushed: {jobs_pushed}");
+    println!("  Jobs processed: {total_processed}");
     println!("  Simulated success rate: {:.1}%", success_rate * 100.0);
-    println!("  Avg processing time: {:.2}ms", avg_processing_time);
-    println!("  Max queue depth: {}", max_depth);
+    println!("  Avg processing time: {avg_processing_time:.2}ms");
+    println!("  Max queue depth: {max_depth}");
     println!("  Final backlog: {}", final_pending + final_active);
-    println!("  Sustainable: {}", is_sustainable);
+    println!("  Sustainable: {is_sustainable}");
 
     // Cleanup
     worker_handle.shutdown().await.unwrap();
     let _: () = redis::cmd("DEL")
-        .arg(format!("{}:*", queue_name))
+        .arg(format!("{queue_name}:*"))
         .query_async(&mut redis_conn)
         .await
         .unwrap_or(());

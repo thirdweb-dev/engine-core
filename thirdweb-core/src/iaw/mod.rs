@@ -126,22 +126,22 @@ impl SignAuthorizationApiResponse {
             .chain_id
             .parse()
             .map_err(|e| IAWError::SerializationError {
-                message: format!("Invalid chainId: {}", e),
+                message: format!("Invalid chainId: {e}"),
             })?;
 
         let nonce: u64 = self
             .nonce
             .parse()
             .map_err(|e| IAWError::SerializationError {
-                message: format!("Invalid nonce: {}", e),
+                message: format!("Invalid nonce: {e}"),
             })?;
 
         let r: U256 = self.r.parse().map_err(|e| IAWError::SerializationError {
-            message: format!("Invalid r value: {}", e),
+            message: format!("Invalid r value: {e}"),
         })?;
 
         let s: U256 = self.s.parse().map_err(|e| IAWError::SerializationError {
-            message: format!("Invalid s value: {}", e),
+            message: format!("Invalid s value: {e}"),
         })?;
 
         let y_parity: bool = match self.y_parity.as_str() {
@@ -225,8 +225,7 @@ impl IAWClient {
         headers.insert(
             "Authorization",
             reqwest::header::HeaderValue::from_str(&format!(
-                "Bearer embedded-wallet-token:{}",
-                auth_token
+                "Bearer embedded-wallet-token:{auth_token}"
             ))
             .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
@@ -305,8 +304,7 @@ impl IAWClient {
         headers.insert(
             "Authorization",
             reqwest::header::HeaderValue::from_str(&format!(
-                "Bearer embedded-wallet-token:{}",
-                auth_token
+                "Bearer embedded-wallet-token:{auth_token}"
             ))
             .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
@@ -373,8 +371,7 @@ impl IAWClient {
         headers.insert(
             "Authorization",
             reqwest::header::HeaderValue::from_str(&format!(
-                "Bearer embedded-wallet-token:{}",
-                auth_token
+                "Bearer embedded-wallet-token:{auth_token}"
             ))
             .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
@@ -444,8 +441,7 @@ impl IAWClient {
         headers.insert(
             "Authorization",
             reqwest::header::HeaderValue::from_str(&format!(
-                "Bearer embedded-wallet-token:{}",
-                auth_token
+                "Bearer embedded-wallet-token:{auth_token}"
             ))
             .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );
@@ -492,7 +488,7 @@ impl IAWClient {
         // Parse the API response into our custom type
         let api_response: SignAuthorizationApiResponse = serde_json::from_value(signed_response)
             .map_err(|e| IAWError::SerializationError {
-                message: format!("Failed to parse sign authorization response: {}", e),
+                message: format!("Failed to parse sign authorization response: {e}"),
             })?;
 
         // Convert to SignedAuthorization
@@ -528,8 +524,7 @@ impl IAWClient {
         headers.insert(
             "Authorization",
             reqwest::header::HeaderValue::from_str(&format!(
-                "Bearer embedded-wallet-token:{}",
-                auth_token
+                "Bearer embedded-wallet-token:{auth_token}"
             ))
             .map_err(|_| IAWError::AuthError("Invalid auth token format".to_string()))?,
         );

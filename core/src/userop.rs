@@ -115,7 +115,7 @@ impl UserOpSigner {
                     )
                     .await
                     .map_err(|e| EngineError::ValidationError {
-                        message: format!("Failed to sign userop: {}", e),
+                        message: format!("Failed to sign userop: {e}"),
                     })?;
 
                 Ok(Bytes::from_hex(&result.signature).map_err(|_| {
@@ -128,7 +128,7 @@ impl UserOpSigner {
                 let signer = creds.get_signer(Some(params.chain_id)).await?;
                 let userophash = params.userop.hash(params.chain_id).map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to hash userop: {}", e),
+                        message: format!("Failed to hash userop: {e}"),
                     }
                 })?;
 
@@ -147,13 +147,13 @@ impl UserOpSigner {
             SigningCredential::PrivateKey(signer) => {
                 let userophash = params.userop.hash(params.chain_id).map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to hash userop: {}", e),
+                        message: format!("Failed to hash userop: {e}"),
                     }
                 })?;
 
                 let signature = signer.sign_hash(&userophash).await.map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to sign userop: {}", e),
+                        message: format!("Failed to sign userop: {e}"),
                     }
                 })?;
 

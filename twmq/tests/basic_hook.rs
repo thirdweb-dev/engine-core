@@ -23,7 +23,7 @@ use twmq::{
 // Helper to clean up Redis keys for a given queue name pattern
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{}:*", queue_name);
+    let keys_pattern = format!("twmq:{queue_name}:*");
 
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
@@ -37,7 +37,7 @@ async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) 
             .await
             .unwrap_or_default();
     }
-    println!("Cleaned up keys for pattern: {}", keys_pattern);
+    println!("Cleaned up keys for pattern: {keys_pattern}");
 }
 
 // Define webhook job types
@@ -174,10 +174,10 @@ async fn test_cross_queue_job_scheduling() {
     MAIN_JOB_PROCESSED.store(false, Ordering::SeqCst);
     WEBHOOK_JOB_PROCESSED.store(false, Ordering::SeqCst);
 
-    println!("Creating main queue: {}", main_queue_name);
-    println!("Creating webhook queue: {}", webhook_queue_name);
+    println!("Creating main queue: {main_queue_name}");
+    println!("Creating webhook queue: {webhook_queue_name}");
 
-    let mut queue_options = QueueOptions {
+    let queue_options = QueueOptions {
         local_concurrency: 1,
         ..Default::default()
     };
@@ -257,8 +257,7 @@ async fn test_cross_queue_job_scheduling() {
     let webhook_success = webhook_queue.count(JobStatus::Success).await.unwrap();
 
     println!(
-        "Webhook queue - Pending: {}, Success: {}",
-        webhook_pending, webhook_success
+        "Webhook queue - Pending: {webhook_pending}, Success: {webhook_success}"
     );
 
     // Either the webhook job is still pending or already succeeded

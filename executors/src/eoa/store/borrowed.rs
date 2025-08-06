@@ -174,6 +174,8 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Update transaction data status
                     let tx_data_key = self.keys.transaction_data_key_name(transaction_id);
                     pipeline.hset(&tx_data_key, "status", "pending");
+                    
+                    // ask for this nonce to be recycled because we did not consume the nonce
                     pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
                     // Queue webhook event using user_request from SubmissionResult
@@ -207,6 +209,8 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     pipeline.hset(&tx_data_key, "status", "failed");
                     pipeline.hset(&tx_data_key, "completed_at", now);
                     pipeline.hset(&tx_data_key, "failure_reason", err.to_string());
+
+                    // ask for this nonce to be recycled because we did not consume the nonce
                     pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
                     // Queue webhook event using user_request from SubmissionResult

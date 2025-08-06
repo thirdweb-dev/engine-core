@@ -116,7 +116,7 @@ pub enum Eip7702SendError {
 impl From<TwmqError> for Eip7702SendError {
     fn from(error: TwmqError) -> Self {
         Eip7702SendError::InternalError {
-            message: format!("Deserialization error for job data: {}", error),
+            message: format!("Deserialization error for job data: {error}"),
         }
     }
 }
@@ -182,7 +182,7 @@ where
             .get_chain(job_data.chain_id)
             .map_err(|e| Eip7702SendError::ChainServiceError {
                 chain_id: job_data.chain_id,
-                message: format!("Failed to get chain instance: {}", e),
+                message: format!("Failed to get chain instance: {e}"),
             })
             .map_err_fail()?;
 
@@ -295,7 +295,7 @@ where
             transaction_id: transaction_id.clone(),
             wrapped_calls: serde_json::to_value(&wrapped_calls)
                 .map_err(|e| Eip7702SendError::InternalError {
-                    message: format!("Failed to serialize wrapped calls: {}", e),
+                    message: format!("Failed to serialize wrapped calls: {e}"),
                 })
                 .map_err_fail()?,
             signature,

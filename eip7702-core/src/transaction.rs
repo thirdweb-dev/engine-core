@@ -214,7 +214,7 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         // Serialize wrapped calls to JSON
         let wrapped_calls_json = serde_json::to_value(&self.wrapped_calls).map_err(|e| {
             EngineError::ValidationError {
-                message: format!("Failed to serialize wrapped calls: {}", e),
+                message: format!("Failed to serialize wrapped calls: {e}"),
             }
         })?;
 

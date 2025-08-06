@@ -2,11 +2,9 @@ use std::time::Duration;
 
 use alloy::{
     consensus::{SignableTransaction, TypedTransaction},
-    eips::{BlockNumberOrTag, eip7702::SignedAuthorization},
-    hex,
+    eips::eip7702::SignedAuthorization,
     network::{EthereumWallet, TransactionBuilder, TransactionBuilder7702, TxSigner},
-    node_bindings::{Anvil, AnvilInstance},
-    primitives::{Address, BlockNumber, Bytes, TxHash, U256},
+    primitives::{Address, Bytes, U256},
     providers::{
         DynProvider, Identity, Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
@@ -25,7 +23,7 @@ use engine_core::{
     chain::Chain,
     credentials::SigningCredential,
     error::EngineError,
-    signer::{AccountSigner, EoaSigner, EoaSigningOptions},
+    signer::{AccountSigner, EoaSigningOptions},
     transaction::InnerTransaction,
 };
 use engine_eip7702_core::{
@@ -35,8 +33,6 @@ use engine_eip7702_core::{
 };
 use serde_json::Value;
 use tokio::time::sleep;
-
-use crate::MockERC20::{MockERC20Calls, MockERC20Instance};
 
 // Mock ERC20 contract
 sol! {
@@ -185,7 +181,7 @@ impl AccountSigner for MockEoaSigner {
                 let message_bytes = _message.as_bytes();
                 let signature = signer.sign_message(message_bytes).await.map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to sign message: {}", e),
+                        message: format!("Failed to sign message: {e}"),
                     }
                 })?;
                 Ok(signature.to_string())
@@ -208,7 +204,7 @@ impl AccountSigner for MockEoaSigner {
                     .sign_dynamic_typed_data(typed_data)
                     .await
                     .map_err(|e| EngineError::ValidationError {
-                        message: format!("Failed to sign typed data: {}", e),
+                        message: format!("Failed to sign typed data: {e}"),
                     })?;
                 Ok(signature.to_string())
             }
@@ -229,7 +225,7 @@ impl AccountSigner for MockEoaSigner {
                 let mut tx = transaction.clone();
                 let signature = signer.sign_transaction(&mut tx).await.map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to sign transaction: {}", e),
+                        message: format!("Failed to sign transaction: {e}"),
                     }
                 })?;
                 Ok(signature.to_string())
@@ -258,7 +254,7 @@ impl AccountSigner for MockEoaSigner {
                 let authorization_hash = authorization.signature_hash();
                 let signature = signer.sign_hash(&authorization_hash).await.map_err(|e| {
                     EngineError::ValidationError {
-                        message: format!("Failed to sign authorization: {}", e),
+                        message: format!("Failed to sign authorization: {e}"),
                     }
                 })?;
                 Ok(authorization.into_signed(signature))
@@ -374,7 +370,7 @@ impl TestSetup {
         let _: () = chain
             .provider()
             .client()
-            .request("anvil_setBalance", (address, format!("0x{:x}", balance)))
+            .request("anvil_setBalance", (address, format!("0x{balance:x}")))
             .await?;
 
         Ok(())
@@ -395,8 +391,7 @@ impl TestSetup {
             .await?;
 
         println!(
-            "Set bytecode for minimal account implementation at {}",
-            MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS
+            "Set bytecode for minimal account implementation at {MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS}"
         );
 
         Ok(())

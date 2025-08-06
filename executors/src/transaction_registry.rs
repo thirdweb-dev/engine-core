@@ -29,7 +29,7 @@ impl TransactionRegistry {
 
     fn registry_key(&self) -> String {
         match &self.namespace {
-            Some(ns) => format!("{}:tx_registry", ns),
+            Some(ns) => format!("{ns}:tx_registry"),
             None => "tx_registry".to_string(),
         }
     }

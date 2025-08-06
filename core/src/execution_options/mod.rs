@@ -211,9 +211,8 @@ mod tests {
             r#"{{
             "url": "https://example.com/webhook", 
             "secret": "test_secret",
-            "userMetadata": "{}"
-        }}"#,
-            large_metadata
+            "userMetadata": "{large_metadata}"
+        }}"#
         );
 
         let webhook_options: Result<WebhookOptions, _> = serde_json::from_str(&invalid_json);

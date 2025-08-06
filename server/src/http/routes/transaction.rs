@@ -127,7 +127,7 @@ pub async fn cancel_transaction(
             );
 
             CancelResult::CannotCancel {
-                reason: format!("Transaction in unsupported queue: {}", other_queue),
+                reason: format!("Transaction in unsupported queue: {other_queue}"),
             }
         }
         None => {

@@ -117,7 +117,7 @@ impl ContractCall {
             return Err(EngineError::contract_preparation_error(
                 Some(self.contract_address),
                 chain_id,
-                format!("Function '{}' not found in contract ABI", function_name),
+                format!("Function '{function_name}' not found in contract ABI"),
             ));
         }
 
@@ -210,7 +210,7 @@ impl ContractCall {
         }
 
         Err(EngineError::ValidationError {
-            message: format!("Invalid method format: {}", method),
+            message: format!("Invalid method format: {method}"),
         })
     }
 
@@ -245,7 +245,7 @@ impl ContractCall {
 
                 let parsed_value: DynSolValue = sol_type
                     .coerce_json(json_value)
-                    .map_err(|e| format!("Failed to parse parameter as DynSolValue: {}", e))?;
+                    .map_err(|e| format!("Failed to parse parameter as DynSolValue: {e}"))?;
 
                 if !parsed_value.matches(&sol_type) {
                     return Err(format!(
@@ -288,7 +288,7 @@ impl ContractCall {
             EngineError::contract_preparation_error(
                 Some(self.contract_address),
                 chain_id,
-                format!("Failed to encode function call: {}", e),
+                format!("Failed to encode function call: {e}"),
             )
         })
     }
@@ -342,7 +342,7 @@ impl ContractCall {
 /// Converts DynSolValue back to JSON for response
 pub fn dyn_sol_value_to_json(value: &DynSolValue) -> JsonValue {
     match value {
-        DynSolValue::Address(addr) => JsonValue::String(format!("{:#x}", addr)),
+        DynSolValue::Address(addr) => JsonValue::String(format!("{addr:#x}")),
         DynSolValue::Uint(val, _) => JsonValue::String(val.to_string()),
         DynSolValue::Int(val, _) => JsonValue::String(val.to_string()),
         DynSolValue::Bool(b) => JsonValue::Bool(*b),

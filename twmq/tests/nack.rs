@@ -26,7 +26,7 @@ const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 // Helper to clean up Redis keys
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{}:*", queue_name);
+    let keys_pattern = format!("twmq:{queue_name}:*");
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)
@@ -107,7 +107,7 @@ impl DurableExecution for RetryJobHandler {
 
             Ok(RetryJobOutput {
                 final_attempt: current_attempt,
-                message: format!("Succeeded after {} attempts", current_attempt),
+                message: format!("Succeeded after {current_attempt} attempts"),
             })
         }
     }
@@ -271,8 +271,7 @@ async fn test_job_retry_attempts() {
 
     assert_eq!(
         job_output.final_attempt, desired_attempts,
-        "Job result should show final attempt as {}",
-        desired_attempts
+        "Job result should show final attempt as {desired_attempts}"
     );
 
     tracing::info!("✅ Retry mechanism works correctly!");
@@ -296,7 +295,7 @@ async fn test_different_retry_counts() {
         tracing::info!("\n=== Testing {} attempts ===", desired_attempts);
 
         let queue_name = format!("test_retry_{}_{}", desired_attempts, nanoid::nanoid!(4));
-        let job_id = format!("retry_job_{}", desired_attempts);
+        let job_id = format!("retry_job_{desired_attempts}");
 
         // Reset counters
         RETRY_JOB_FINAL_SUCCESS.store(false, Ordering::SeqCst);

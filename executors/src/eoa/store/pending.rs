@@ -59,7 +59,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         let current_optimistic: Option<u64> = conn
             .get(self.keys.optimistic_transaction_count_key_name())
             .await?;
-        let current_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
+        let current_optimistic_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
             eoa: self.eoa,
             chain_id: self.chain_id,
         })?;
@@ -74,12 +74,11 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
 
         // Check that nonces are sequential with no gaps
         for (i, &nonce) in nonces.iter().enumerate() {
-            let expected_nonce = current_nonce + i as u64;
+            let expected_nonce = current_optimistic_nonce + i as u64;
             if nonce != expected_nonce {
                 return Err(TransactionStoreError::InternalError {
                     message: format!(
-                        "Non-sequential nonces detected: expected {}, found {} at position {}",
-                        expected_nonce, nonce, i
+                        "Non-sequential nonces detected: expected {expected_nonce}, found {nonce} at position {i}"
                     ),
                 });
             }
@@ -110,7 +109,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         for tx in self.transactions {
             let borrowed_json =
                 serde_json::to_string(tx).map_err(|e| TransactionStoreError::InternalError {
-                    message: format!("Failed to serialize borrowed transaction: {}", e),
+                    message: format!("Failed to serialize borrowed transaction: {e}"),
                 })?;
             serialized_transactions.push(borrowed_json);
         }
@@ -224,7 +223,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonces<'_> {
         for tx in self.transactions {
             let borrowed_json =
                 serde_json::to_string(tx).map_err(|e| TransactionStoreError::InternalError {
-                    message: format!("Failed to serialize borrowed transaction: {}", e),
+                    message: format!("Failed to serialize borrowed transaction: {e}"),
                 })?;
             serialized_transactions.push(borrowed_json);
         }

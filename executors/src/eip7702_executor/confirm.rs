@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, TxHash};
+use alloy::primitives::TxHash;
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionReceipt;
 use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
@@ -107,7 +107,7 @@ pub enum Eip7702ConfirmationError {
 impl From<TwmqError> for Eip7702ConfirmationError {
     fn from(error: TwmqError) -> Self {
         Eip7702ConfirmationError::InternalError {
-            message: format!("Deserialization error for job data: {}", error),
+            message: format!("Deserialization error for job data: {error}"),
         }
     }
 }
@@ -171,7 +171,7 @@ where
             .get_chain(job_data.chain_id)
             .map_err(|e| Eip7702ConfirmationError::ChainServiceError {
                 chain_id: job_data.chain_id,
-                message: format!("Failed to get chain instance: {}", e),
+                message: format!("Failed to get chain instance: {e}"),
             })
             .map_err_fail()?;
 
@@ -199,7 +199,7 @@ where
             TwGetTransactionHashResponse::Success { transaction_hash } => {
                 transaction_hash.parse::<TxHash>().map_err(|e| {
                     Eip7702ConfirmationError::TransactionHashError {
-                        message: format!("Invalid transaction hash format: {}", e),
+                        message: format!("Invalid transaction hash format: {e}"),
                     }
                     .fail()
                 })?
@@ -227,7 +227,7 @@ where
             .map_err(|e| {
                 // If transaction not found, nack and retry
                 Eip7702ConfirmationError::ConfirmationError {
-                    message: format!("Failed to get transaction receipt: {}", e),
+                    message: format!("Failed to get transaction receipt: {e}"),
                     inner_error: Some(e.to_engine_error(&chain)),
                 }
                 .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)

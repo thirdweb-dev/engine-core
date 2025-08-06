@@ -102,12 +102,12 @@ impl Erc4337SigningOptions {
     pub fn get_salt_data(&self) -> Result<Bytes, EngineError> {
         if self.account_salt.starts_with("0x") {
             Bytes::from_hex(&self.account_salt).map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to parse hex salt: {}", e),
+                message: format!("Failed to parse hex salt: {e}"),
             })
         } else {
             let hex_string = alloy::hex::encode(&self.account_salt);
             Bytes::from_hex(hex_string).map_err(|e| EngineError::ValidationError {
-                message: format!("Failed to encode salt as hex: {}", e),
+                message: format!("Failed to encode salt as hex: {e}"),
             })
         }
     }
@@ -308,7 +308,7 @@ impl AccountSigner for EoaSigner {
                 let signature = signer.sign_message(&message_bytes).await.map_err(|e| {
                     tracing::error!("Error signing message with EOA (PrivateKey): {:?}", e);
                     EngineError::ValidationError {
-                        message: format!("Failed to sign message: {}", e),
+                        message: format!("Failed to sign message: {e}"),
                     }
                 })?;
                 Ok(signature.to_string())
@@ -377,7 +377,7 @@ impl AccountSigner for EoaSigner {
                     .map_err(|e| {
                         tracing::error!("Error signing typed data with EOA (PrivateKey): {:?}", e);
                         EngineError::ValidationError {
-                            message: format!("Failed to sign typed data: {}", e),
+                            message: format!("Failed to sign typed data: {e}"),
                         }
                     })?;
                 Ok(signature.to_string())
@@ -447,7 +447,7 @@ impl AccountSigner for EoaSigner {
                     .map_err(|e| {
                         tracing::error!("Error signing transaction with EOA (PrivateKey): {:?}", e);
                         EngineError::ValidationError {
-                            message: format!("Failed to sign transaction: {}", e),
+                            message: format!("Failed to sign transaction: {e}"),
                         }
                     })?;
                 Ok(signature.to_string())
@@ -521,7 +521,7 @@ impl AccountSigner for EoaSigner {
                 let signature = signer.sign_hash_sync(&authorization_hash).map_err(|e| {
                     tracing::error!("Error signing authorization with EOA (PrivateKey): {:?}", e);
                     EngineError::ValidationError {
-                        message: format!("Failed to sign authorization: {}", e),
+                        message: format!("Failed to sign authorization: {e}"),
                     }
                 })?;
 
