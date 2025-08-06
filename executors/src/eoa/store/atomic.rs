@@ -418,7 +418,7 @@ impl AtomicEoaExecutorStore {
             // Update cached transaction count
             pipeline.set(&tx_count_key, current_chain_tx_count);
 
-            if current_chain_tx_count + 1 > optimistic_nonce {
+            if current_chain_tx_count > optimistic_nonce {
                 tracing::warn!(
                     current_chain_tx_count = current_chain_tx_count,
                     optimistic_nonce = optimistic_nonce,
@@ -426,7 +426,7 @@ impl AtomicEoaExecutorStore {
                 );
                 pipeline.set(
                     self.optimistic_transaction_count_key_name(),
-                    current_chain_tx_count + 1,
+                    current_chain_tx_count,
                 );
             }
 
