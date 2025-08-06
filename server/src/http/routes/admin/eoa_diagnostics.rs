@@ -1,9 +1,9 @@
 use alloy::{consensus::Transaction, primitives::Address};
 use axum::{
-    debug_handler,
+    Router, debug_handler,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json}, Router,
+    response::{IntoResponse, Json},
 };
 use engine_executors::eoa::store::{EoaExecutorStore, EoaExecutorStoreKeys, TransactionData};
 use serde::{Deserialize, Serialize};
@@ -397,27 +397,27 @@ pub fn eoa_diagnostics_router() -> Router<EngineServerState> {
     // Add hidden admin diagnostic routes (not included in OpenAPI)
     Router::new()
         .route(
-            "/admin/executors/eoa/:eoa_chain/state",
+            "/admin/executors/eoa/{eoa_chain}/state",
             axum::routing::get(crate::http::routes::admin::eoa_diagnostics::get_eoa_state),
         )
         .route(
-            "/admin/executors/eoa/:eoa_chain/transaction/:transaction_id",
+            "/admin/executors/eoa/{eoa_chain}/transaction/{transaction_id}",
             axum::routing::get(crate::http::routes::admin::eoa_diagnostics::get_transaction_detail),
         )
         .route(
-            "/admin/executors/eoa/:eoa_chain/pending",
+            "/admin/executors/eoa/{eoa_chain}/pending",
             axum::routing::get(
                 crate::http::routes::admin::eoa_diagnostics::get_pending_transactions,
             ),
         )
         .route(
-            "/admin/executors/eoa/:eoa_chain/submitted",
+            "/admin/executors/eoa/{eoa_chain}/submitted",
             axum::routing::get(
                 crate::http::routes::admin::eoa_diagnostics::get_submitted_transactions,
             ),
         )
         .route(
-            "/admin/executors/eoa/:eoa_chain/borrowed",
+            "/admin/executors/eoa/{eoa_chain}/borrowed",
             axum::routing::get(
                 crate::http::routes::admin::eoa_diagnostics::get_borrowed_transactions,
             ),
