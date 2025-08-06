@@ -137,7 +137,7 @@ impl EoaExecutorStoreKeys {
     pub fn transaction_data_key_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
             Some(ns) => format!("{ns}:eoa_executor:tx_data:{transaction_id}"),
-            None => format!("eoa_executor:_tx_data:{transaction_id}"),
+            None => format!("eoa_executor:tx_data:{transaction_id}"),
         }
     }
 
@@ -749,6 +749,88 @@ impl EoaExecutorStore {
             SubmittedTransactionDehydrated::from_redis_strings(&highest_nonce_txs);
 
         Ok(submitted_txs)
+    }
+
+    /// Get the current time in milliseconds
+    /// 
+    /// Used as the canonical time representation for this store
+    pub fn now() -> u64 {
+        chrono::Utc::now().timestamp_millis().max(0) as u64
+    }
+
+    /// Get count of pending transactions
+    pub async fn get_pending_transactions_count(&self) -> Result<u64, TransactionStoreError> {
+        let pending_key = self.pending_transactions_zset_name();
+        let mut conn = self.redis.clone();
+
+        let count: u64 = conn.zcard(&pending_key).await?;
+        Ok(count)
+    }
+
+    /// Get count of borrowed transactions  
+    pub async fn get_borrowed_transactions_count(&self) -> Result<u64, TransactionStoreError> {
+        let borrowed_key = self.borrowed_transactions_hashmap_name();
+        let mut conn = self.redis.clone();
+
+        let count: u64 = conn.hlen(&borrowed_key).await?;
+        Ok(count)
+    }
+
+    /// Get all recycled nonces
+    pub async fn get_recycled_nonces(&self) -> Result<Vec<u64>, TransactionStoreError> {
+        let recycled_key = self.recycled_nonces_zset_name();
+        let mut conn = self.redis.clone();
+
+        let nonces: Vec<u64> = conn.zrange(&recycled_key, 0, -1).await?;
+        Ok(nonces)
+    }
+
+    /// Get count of recycled nonces
+    pub async fn get_recycled_nonces_count(&self) -> Result<u64, TransactionStoreError> {
+        let recycled_key = self.recycled_nonces_zset_name();
+        let mut conn = self.redis.clone();
+
+        let count: u64 = conn.zcard(&recycled_key).await?;
+        Ok(count)
+    }
+
+    /// Get all submitted transactions (raw data)
+    pub async fn get_all_submitted_transactions(&self) -> Result<Vec<SubmittedTransactionDehydrated>, TransactionStoreError> {
+        let submitted_key = self.submitted_transactions_zset_name();
+        let mut conn = self.redis.clone();
+
+        let submitted_data: Vec<SubmittedTransactionStringWithNonce> = 
+            conn.zrange_withscores(&submitted_key, 0, -1).await?;
+
+        let submitted_txs: Vec<SubmittedTransactionDehydrated> =
+            SubmittedTransactionDehydrated::from_redis_strings(&submitted_data);
+
+        Ok(submitted_txs)
+    }
+
+    /// Get attempts count for a specific transaction
+    pub async fn get_transaction_attempts_count(&self, transaction_id: &str) -> Result<u64, TransactionStoreError> {
+        let attempts_key = self.transaction_attempts_list_name(transaction_id);
+        let mut conn = self.redis.clone();
+
+        let count: u64 = conn.llen(&attempts_key).await?;
+        Ok(count)
+    }
+
+    /// Get all transaction attempts for a specific transaction
+    pub async fn get_transaction_attempts(&self, transaction_id: &str) -> Result<Vec<TransactionAttempt>, TransactionStoreError> {
+        let attempts_key = self.transaction_attempts_list_name(transaction_id);
+        let mut conn = self.redis.clone();
+
+        let attempts_data: Vec<String> = conn.lrange(&attempts_key, 0, -1).await?;
+        
+        let mut attempts = Vec::new();
+        for attempt_json in attempts_data {
+            let attempt: TransactionAttempt = serde_json::from_str(&attempt_json)?;
+            attempts.push(attempt);
+        }
+
+        Ok(attempts)
     }
 }
 

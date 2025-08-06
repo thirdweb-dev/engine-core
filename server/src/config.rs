@@ -37,6 +37,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub log_format: LogFormat,
+    pub diagnostic_access_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,10 +70,12 @@ impl Default for ServerConfig {
             port: 3000,
             host: "0.0.0.0".into(),
             log_format: LogFormat::Pretty,
+            diagnostic_access_password: None,
         }
     }
 }
 
+/// EngineConfig is cached, it only loads once
 pub fn get_config() -> EngineConfig {
     let base_path = env::current_dir().expect("Failed to determine the current directory");
     let configuration_directory = base_path.join("configuration");

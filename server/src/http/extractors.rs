@@ -13,7 +13,7 @@ use engine_core::{
 use thirdweb_core::auth::ThirdwebAuth;
 use vault_types::enclave::auth::Auth;
 
-use crate::http::error::ApiEngineError;
+use crate::http::{error::ApiEngineError, server::EngineServerState};
 
 // Header name constants
 const HEADER_THIRDWEB_SECRET_KEY: &str = "x-thirdweb-secret-key";
@@ -24,6 +24,7 @@ const HEADER_VAULT_ACCESS_TOKEN: &str = "x-vault-access-token";
 const HEADER_AWS_KMS_ARN: &str = "x-aws-kms-arn";
 const HEADER_AWS_ACCESS_KEY_ID: &str = "x-aws-access-key-id";
 const HEADER_AWS_SECRET_ACCESS_KEY: &str = "x-aws-secret-access-key";
+const HEADER_DIAGNOSTIC_ACCESS_PASSWORD: &str = "x-diagnostic-access-password";
 
 /// Extractor for RPC credentials from headers
 #[derive(OperationIo)]
@@ -289,5 +290,50 @@ where
                 Err(ApiEngineError(EngineError::ValidationError { message }))
             }
         }
+    }
+}
+
+/// Extractor for diagnostic access authentication
+#[derive(OperationIo)]
+pub struct DiagnosticAuthExtractor;
+
+impl FromRequestParts<EngineServerState> for DiagnosticAuthExtractor {
+    type Rejection = ApiEngineError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &EngineServerState,
+    ) -> Result<Self, Self::Rejection> {
+        // Get the configured diagnostic password from environment
+        let config_password = state.diagnostic_access_password.as_ref();
+
+        let config_password = match config_password {
+            Some(pass) if !pass.is_empty() => pass,
+            _ => {
+                return Err(ApiEngineError(EngineError::ValidationError {
+                    message: "Diagnostic access is not configured. Set DIAGNOSTIC_ACCESS_PASSWORD environment variable.".to_string(),
+                }));
+            }
+        };
+
+        // Get the password from the request header
+        let provided_password = parts
+            .headers
+            .get(HEADER_DIAGNOSTIC_ACCESS_PASSWORD)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                ApiEngineError(EngineError::ValidationError {
+                    message: "Missing x-diagnostic-access-password header".to_string(),
+                })
+            })?;
+
+        // Verify the password matches
+        if provided_password != config_password {
+            return Err(ApiEngineError(EngineError::ValidationError {
+                message: "Invalid diagnostic access password".to_string(),
+            }));
+        }
+
+        Ok(DiagnosticAuthExtractor)
     }
 }

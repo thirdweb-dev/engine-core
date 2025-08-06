@@ -27,6 +27,8 @@ pub struct EngineServerState {
 
     pub execution_router: Arc<ExecutionRouter>,
     pub queue_manager: Arc<QueueManager>,
+
+    pub diagnostic_access_password: Option<String>,
 }
 
 pub struct EngineServer {
@@ -71,9 +73,15 @@ impl EngineServer {
             .layer(TraceLayer::new_for_http())
             .with_state(state);
 
+        let eoa_diagnostics_router =
+            crate::http::routes::admin::eoa_diagnostics::eoa_diagnostics_router().with_state(state);
+
         let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
             .nest("/v1", v1_router)
             .split_for_parts();
+
+        // Merge the hidden diagnostic routes after OpenAPI split
+        let router = router.merge(eoa_diagnostics_router);
 
         let api_clone = api.clone();
         let router = router
