@@ -3,13 +3,15 @@ use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
 
 use crate::eoa::{
+    EoaExecutorStore,
     store::{
         CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransactionDehydrated,
-        TransactionData, TransactionStoreError,
+        TransactionStoreError,
     },
     worker::{
-        error::{should_update_balance_threshold, EoaExecutorWorkerError}, EoaExecutorWorker
-    }, EoaExecutorStore,
+        EoaExecutorWorker,
+        error::{EoaExecutorWorkerError, should_update_balance_threshold},
+    },
 };
 
 const NONCE_STALL_LIMIT_MS: u64 = 300_000; // 5 minutes in milliseconds - after this time, attempt gas bump
@@ -248,37 +250,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .get_submitted_transactions_for_nonce(expected_nonce)
             .await?;
 
-        if submitted_transactions.is_empty() {
-            tracing::debug!(
-                nonce = expected_nonce,
-                "No transactions found for stalled nonce, sending noop"
-            );
-
-            let noop_tx = self.send_noop_transaction(expected_nonce).await?;
-            self.store.process_noop_transactions(&[noop_tx]).await?;
-            return Ok(true);
-        }
-
         // Load transaction data for all IDs and find the newest one
-        let mut newest_transaction: Option<(String, TransactionData)> = None;
-        let mut newest_submitted_at = 0u64;
+        let newest_transaction = if submitted_transactions.len() == 1 {
+            submitted_transactions.first()
+        } else {
+            submitted_transactions
+                .iter()
+                .max_by_key(|tx| tx.submitted_at)
+        };
 
-        for SubmittedTransactionDehydrated { transaction_id, .. } in submitted_transactions {
-            if let Some(tx_data) = self.store.get_transaction_data(&transaction_id).await? {
-                // Find the most recent attempt for this transaction
-                if let Some(latest_attempt) = tx_data.attempts.last() {
-                    let submitted_at = latest_attempt.sent_at;
-                    if submitted_at > newest_submitted_at {
-                        newest_submitted_at = submitted_at;
-                        newest_transaction = Some((transaction_id, tx_data));
-                    }
-                }
-            }
-        }
+        let newest_transaction_data = match newest_transaction {
+            Some(tx) => self.store.get_transaction_data(&tx.transaction_id).await?,
+            None => None,
+        };
 
-        if let Some((transaction_id, tx_data)) = newest_transaction {
+        if let Some(newest_transaction_data) = newest_transaction_data {
             tracing::info!(
-                transaction_id = ?transaction_id,
+                transaction_id = ?newest_transaction_data.transaction_id,
                 nonce = expected_nonce,
                 "Found newest transaction for gas bump"
             );
@@ -286,7 +274,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Get the latest attempt to extract gas values from
             // Build typed transaction -> manually bump -> sign
             let typed_tx = match self
-                .build_typed_transaction(&tx_data.user_request, expected_nonce)
+                .build_typed_transaction(&newest_transaction_data.user_request, expected_nonce)
                 .await
             {
                 Ok(tx) => tx,
@@ -310,7 +298,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     }
 
                     tracing::warn!(
-                        transaction_id = ?transaction_id,
+                        transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
                         error = ?e,
                         "Failed to build typed transaction for gas bump"
@@ -320,13 +308,16 @@ impl<C: Chain> EoaExecutorWorker<C> {
             };
             let bumped_typed_tx = self.apply_gas_bump_to_typed_transaction(typed_tx, 120); // 20% increase
             let bumped_tx = match self
-                .sign_transaction(bumped_typed_tx, &tx_data.user_request.signing_credential)
+                .sign_transaction(
+                    bumped_typed_tx,
+                    &newest_transaction_data.user_request.signing_credential,
+                )
                 .await
             {
                 Ok(tx) => tx,
                 Err(e) => {
                     tracing::warn!(
-                        transaction_id = ?transaction_id,
+                        transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
                         error = ?e,
                         "Failed to sign transaction for gas bump"
@@ -341,8 +332,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     &SubmittedTransactionDehydrated {
                         nonce: expected_nonce,
                         transaction_hash: bumped_tx.hash().to_string(),
-                        transaction_id: transaction_id.to_string(),
-                        queued_at: tx_data.created_at,
+                        transaction_id: newest_transaction_data.transaction_id.clone(),
+                        submitted_at: EoaExecutorStore::now(),
+                        queued_at: newest_transaction_data.created_at,
                     },
                     bumped_tx.clone(),
                 )
@@ -353,7 +345,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             match self.chain.provider().send_tx_envelope(tx_envelope).await {
                 Ok(_) => {
                     tracing::info!(
-                        transaction_id = ?transaction_id,
+                        transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
                         "Successfully sent gas bumped transaction"
                     );
@@ -361,7 +353,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        transaction_id = ?transaction_id,
+                        transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
                         error = ?e,
                         "Failed to send gas bumped transaction"

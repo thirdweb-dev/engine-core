@@ -341,6 +341,7 @@ impl From<BorrowedTransactionData> for SubmittedTransactionDehydrated {
             transaction_hash: data.signed_transaction.hash().to_string(),
             transaction_id: data.transaction_id.clone(),
             queued_at: data.queued_at,
+            submitted_at: EoaExecutorStore::now(),
         }
     }
 }

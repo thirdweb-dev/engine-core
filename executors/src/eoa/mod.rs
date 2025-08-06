@@ -1,3 +1,4 @@
+pub mod authorization_cache;
 pub mod error_classifier;
 pub mod events;
 pub mod store;

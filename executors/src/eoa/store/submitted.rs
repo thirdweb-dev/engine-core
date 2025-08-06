@@ -38,12 +38,13 @@ pub struct SubmittedNoopTransaction {
     pub transaction_hash: String,
 }
 
+/// String representation is: {transaction_hash}:{transaction_id}:{queued_at}:{submitted_at}
 pub type SubmittedTransactionStringWithNonce = (String, u64);
 
 impl SubmittedNoopTransaction {
     pub fn to_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
         (
-            format!("{}:{}:0", self.transaction_hash, NO_OP_TRANSACTION_ID),
+            format!("{}:{}:0:0", self.transaction_hash, NO_OP_TRANSACTION_ID),
             self.nonce,
         )
     }
@@ -91,6 +92,7 @@ pub struct SubmittedTransactionDehydrated {
     pub nonce: u64,
     pub transaction_hash: String,
     pub transaction_id: String,
+    pub submitted_at: u64,
     pub queued_at: u64,
 }
 
@@ -100,11 +102,14 @@ impl SubmittedTransactionDehydrated {
             .iter()
             .filter_map(|tx| {
                 let parts: Vec<&str> = tx.0.split(':').collect();
+                // this exists for backwards compatibility with old transactions
+                // remove after sufficient time for old transactions to be cleaned up
                 if parts.len() == 3 {
                     if let Ok(queued_at) = parts[2].parse::<u64>() {
                         Some(SubmittedTransactionDehydrated {
                             transaction_hash: parts[0].to_string(),
                             transaction_id: parts[1].to_string(),
+                            submitted_at: 0,
                             nonce: tx.1,
                             queued_at,
                         })
@@ -112,9 +117,27 @@ impl SubmittedTransactionDehydrated {
                         tracing::error!("Invalid queued_at timestamp: {}", tx.0);
                         None
                     }
+                } else if parts.len() == 4 {
+                    let transaction_hash = parts[0].to_string();
+                    let transaction_id = parts[1].to_string();
+                    let queued_at = parts[2].parse::<u64>();
+                    let submitted_at = parts[3].parse::<u64>();
+
+                    if let (Ok(queued_at), Ok(submitted_at)) = (queued_at, submitted_at) {
+                        Some(SubmittedTransactionDehydrated {
+                            transaction_hash,
+                            transaction_id,
+                            submitted_at,
+                            nonce: tx.1,
+                            queued_at,
+                        })
+                    } else {
+                        tracing::error!("Invalid queued_at or submitted_at timestamps: {}", tx.0);
+                        None
+                    }
                 } else {
                     tracing::error!(
-                        "Invalid transaction format, expected 3 parts separated by ':': {}",
+                        "Invalid transaction format, expected 3 or 4 parts separated by ':': {}",
                         tx.0
                     );
                     None
@@ -137,8 +160,8 @@ impl SubmittedTransactionDehydrated {
     pub fn to_redis_string_with_nonce(&self) -> SubmittedTransactionStringWithNonce {
         (
             format!(
-                "{}:{}:{}",
-                self.transaction_hash, self.transaction_id, self.queued_at
+                "{}:{}:{}:{}",
+                self.transaction_hash, self.transaction_id, self.queued_at, self.submitted_at
             ),
             self.nonce,
         )
