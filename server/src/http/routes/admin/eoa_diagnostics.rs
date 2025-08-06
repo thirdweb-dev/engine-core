@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
-use engine_executors::eoa::store::{EoaExecutorStore, EoaExecutorStoreKeys, TransactionData};
+use engine_executors::eoa::store::{EoaExecutorStore, TransactionData};
 use serde::{Deserialize, Serialize};
 
 use crate::http::{
@@ -231,12 +231,7 @@ pub async fn get_pending_transactions(
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
 
-    let keys = EoaExecutorStoreKeys::new(eoa_address, chain_id, namespace);
-    let store = EoaExecutorStore {
-        redis: redis_conn.clone(),
-        keys,
-    };
-
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
     let offset = pagination.offset.unwrap_or(0);
     let limit = pagination.limit.unwrap_or(1000).min(1000); // Cap at 100
 
@@ -299,11 +294,7 @@ pub async fn get_submitted_transactions(
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
 
-    let keys = EoaExecutorStoreKeys::new(eoa_address, chain_id, namespace);
-    let store = EoaExecutorStore {
-        redis: redis_conn.clone(),
-        keys,
-    };
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
 
     // Use store method to get submitted transactions
     let submitted_txs = store.get_all_submitted_transactions().await.map_err(|e| {
@@ -348,11 +339,7 @@ pub async fn get_borrowed_transactions(
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
 
-    let keys = EoaExecutorStoreKeys::new(eoa_address, chain_id, namespace);
-    let store = EoaExecutorStore {
-        redis: redis_conn.clone(),
-        keys,
-    };
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
 
     // Use store method to get borrowed transactions
     let borrowed_txs = store.peek_borrowed_transactions().await.map_err(|e| {
@@ -402,28 +389,22 @@ pub fn eoa_diagnostics_router() -> Router<EngineServerState> {
     Router::new()
         .route(
             "/admin/executors/eoa/{eoa_chain}/state",
-            axum::routing::get(crate::http::routes::admin::eoa_diagnostics::get_eoa_state),
+            axum::routing::get(get_eoa_state),
         )
         .route(
             "/admin/executors/eoa/{eoa_chain}/transaction/{transaction_id}",
-            axum::routing::get(crate::http::routes::admin::eoa_diagnostics::get_transaction_detail),
+            axum::routing::get(get_transaction_detail),
         )
         .route(
             "/admin/executors/eoa/{eoa_chain}/pending",
-            axum::routing::get(
-                crate::http::routes::admin::eoa_diagnostics::get_pending_transactions,
-            ),
+            axum::routing::get(get_pending_transactions),
         )
         .route(
             "/admin/executors/eoa/{eoa_chain}/submitted",
-            axum::routing::get(
-                crate::http::routes::admin::eoa_diagnostics::get_submitted_transactions,
-            ),
+            axum::routing::get(get_submitted_transactions),
         )
         .route(
             "/admin/executors/eoa/{eoa_chain}/borrowed",
-            axum::routing::get(
-                crate::http::routes::admin::eoa_diagnostics::get_borrowed_transactions,
-            ),
+            axum::routing::get(get_borrowed_transactions),
         )
 }
