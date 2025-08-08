@@ -44,3 +44,5 @@ serde_with = "3.14.0"
 aws-arn = "0.3.1"
 moka = { version = "0.12.10", features = ["future"] }
 engine-eip7702-core = { path = "../eip7702-core" }
+prometheus = "0.13.4"
+thiserror = "2.0.12"

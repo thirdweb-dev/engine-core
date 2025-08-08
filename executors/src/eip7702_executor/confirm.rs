@@ -18,6 +18,7 @@ use twmq::{
 
 use crate::eip7702_executor::send::Eip7702Sender;
 use crate::{
+    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -37,6 +38,9 @@ pub struct Eip7702ConfirmationJobData {
     pub rpc_credentials: RpcCredentials,
     #[serde(default)]
     pub webhook_options: Vec<WebhookOptions>,
+    /// Original timestamp when the transaction was first queued (unix timestamp in milliseconds)
+    #[serde(default)]
+    pub original_queued_timestamp: Option<u64>,
 }
 
 impl HasWebhookOptions for Eip7702ConfirmationJobData {
@@ -261,6 +265,13 @@ where
             gas_used = ?receipt.gas_used,
             "Transaction confirmed successfully"
         );
+
+        // Record metrics if original timestamp is available
+        if let Some(original_timestamp) = job_data.original_queued_timestamp {
+            let confirmed_timestamp = current_timestamp_ms();
+            let queued_to_mined_duration = calculate_duration_seconds(original_timestamp, confirmed_timestamp);
+            record_transaction_queued_to_confirmed("eip7702", job_data.chain_id, queued_to_mined_duration);
+        }
 
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
