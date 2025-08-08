@@ -23,7 +23,7 @@ use crate::eoa::authorization_cache::EoaAuthorizationCache;
 use crate::eoa::store::{
     AtomicEoaExecutorStore, EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, SubmissionResult,
 };
-use crate::metrics::{record_eoa_job_processing_time, current_timestamp_ms, calculate_duration_seconds_from_twmq};
+use crate::metrics::{calculate_duration_seconds, calculate_duration_seconds_from_twmq, current_timestamp_ms, record_eoa_job_processing_time};
 use crate::webhook::WebhookJobHandler;
 
 pub mod confirm;
@@ -189,7 +189,7 @@ where
             signer: self.eoa_signer.clone(),
         };
 
-        let job_start_time = job.job.created_at;
+        let job_start_time = current_timestamp_ms();
         let result = worker.execute_main_workflow().await?;
         if let Err(e) = worker.release_eoa_lock().await {
             tracing::error!(error = ?e, "Error releasing EOA lock");
@@ -197,7 +197,7 @@ where
 
         // Record EOA job processing metrics
         let job_end_time = current_timestamp_ms();
-        let job_duration = calculate_duration_seconds_from_twmq(job_start_time, job_end_time);
+        let job_duration = calculate_duration_seconds(job_start_time, job_end_time);
         record_eoa_job_processing_time(data.chain_id, job_duration);
 
         if result.is_work_remaining() {
