@@ -401,7 +401,11 @@ impl AtomicEoaExecutorStore {
 
         // First, read current health data
         let current_health = self.get_eoa_health().await?;
-        let optimistic_nonce = self.get_optimistic_transaction_count().await?;
+        let optimistic_nonce = match self.get_optimistic_transaction_count().await {
+            Ok(nonce) => Some(nonce),
+            Err(TransactionStoreError::NonceSyncRequired { .. }) => None,
+            Err(e) => return Err(e),
+        };
 
         // Prepare health update if health data exists
         let health_update = if let Some(mut health) = current_health {
@@ -418,11 +422,23 @@ impl AtomicEoaExecutorStore {
             // Update cached transaction count
             pipeline.set(&tx_count_key, current_chain_tx_count);
 
-            if current_chain_tx_count > optimistic_nonce {
-                tracing::warn!(
+            if let Some(optimistic_nonce) = optimistic_nonce {
+                if current_chain_tx_count > optimistic_nonce {
+                    tracing::warn!(
+                        current_chain_tx_count = current_chain_tx_count,
+                        optimistic_nonce = optimistic_nonce,
+                        "Optimistic nonce was behind fresh chain transaction count, updating to match"
+                    );
+                    pipeline.set(
+                        self.optimistic_transaction_count_key_name(),
+                        current_chain_tx_count,
+                    );
+                }
+            } else {
+                // Initialize optimistic nonce for new EOAs
+                tracing::info!(
                     current_chain_tx_count = current_chain_tx_count,
-                    optimistic_nonce = optimistic_nonce,
-                    "Optimistic nonce was behind fresh chain transaction count, updating to match"
+                    "Initializing optimistic nonce for new EOA"
                 );
                 pipeline.set(
                     self.optimistic_transaction_count_key_name(),
