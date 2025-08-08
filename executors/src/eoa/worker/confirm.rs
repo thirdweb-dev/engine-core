@@ -1,7 +1,6 @@
 use alloy::{primitives::B256, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
-use twmq::redis::AsyncCommands;
 
 use crate::eoa::{
     EoaExecutorStore,

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use engine_core::{signer::EoaSigner, userop::UserOpSigner};
-use engine_executors::eoa::authorization_cache::EoaAuthorizationCache;
+use engine_executors::{eoa::authorization_cache::EoaAuthorizationCache, metrics::{ExecutorMetrics, initialize_metrics}};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
@@ -99,6 +99,16 @@ async fn main() -> anyhow::Result<()> {
         chains: chains.clone(),
     };
 
+    // Initialize metrics registry and executor metrics
+    let metrics_registry = Arc::new(prometheus::Registry::new());
+    let executor_metrics = ExecutorMetrics::new(&metrics_registry)
+        .expect("Failed to create executor metrics");
+    
+    // Initialize the executor metrics globally
+    initialize_metrics(executor_metrics);
+    
+    tracing::info!("Executor metrics initialized");
+
     let mut server = EngineServer::new(EngineServerState {
         userop_signer: signer.clone(),
         eoa_signer: eoa_signer.clone(),
@@ -108,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
         execution_router: Arc::new(execution_router),
         queue_manager: Arc::new(queue_manager),
         diagnostic_access_password: config.server.diagnostic_access_password,
+        metrics_registry,
     })
     .await;
 

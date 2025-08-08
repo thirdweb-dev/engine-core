@@ -16,6 +16,7 @@ use crate::{
             TransactionStoreError, atomic::SafeRedisTransaction,
         },
     },
+    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds},
     webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
 
@@ -329,6 +330,13 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                         );
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
+                            // Record metrics: transaction queued to mined for confirmed transactions
+                            let confirmed_timestamp = current_timestamp_ms();
+                            let queued_to_mined_duration = calculate_duration_seconds(
+                                tx.queued_at, 
+                                confirmed_timestamp
+                            );
+                            record_transaction_queued_to_confirmed("eoa", self.keys.chain_id, queued_to_mined_duration);
                             if !tx.user_request.webhook_options.is_empty() {
                                 let event = EoaExecutorEvent {
                                     transaction_id: tx.transaction_id.clone(),

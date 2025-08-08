@@ -15,6 +15,7 @@ use twmq::{
 };
 
 use crate::{
+    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds_from_twmq},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -36,6 +37,9 @@ pub struct UserOpConfirmationJobData {
     pub deployment_lock_acquired: bool,
     pub webhook_options: Vec<WebhookOptions>,
     pub rpc_credentials: RpcCredentials,
+    /// Original timestamp when the transaction was first queued (unix timestamp in milliseconds)
+    #[serde(default)]
+    pub original_queued_timestamp: Option<u64>,
 }
 
 // --- Success Result ---
@@ -211,7 +215,14 @@ where
             "User operation confirmed on-chain"
         );
 
-        // 4. Success! Lock cleanup will happen atomically in on_success hook
+                    // 4. Record metrics if original timestamp is available
+            if let Some(original_timestamp) = job_data.original_queued_timestamp {
+                let confirmed_timestamp = current_timestamp_ms();
+                let queued_to_confirmed_duration = calculate_duration_seconds_from_twmq(original_timestamp, confirmed_timestamp);
+                record_transaction_queued_to_confirmed("erc4337-external", job_data.chain_id, queued_to_confirmed_duration);
+            }
+
+        // 5. Success! Lock cleanup will happen atomically in on_success hook
         Ok(UserOpConfirmationResult {
             user_op_hash: job_data.user_op_hash.clone(),
             receipt,

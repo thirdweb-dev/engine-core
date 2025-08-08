@@ -30,6 +30,7 @@ pub struct EngineServerState {
     pub queue_manager: Arc<QueueManager>,
 
     pub diagnostic_access_password: Option<String>,
+    pub metrics_registry: Arc<prometheus::Registry>,
 }
 
 pub struct EngineServer {
@@ -74,14 +75,21 @@ impl EngineServer {
             .layer(TraceLayer::new_for_http())
             .with_state(state.clone());
 
-        let eoa_diagnostics_router = eoa_diagnostics_router().with_state(state);
+        let eoa_diagnostics_router = eoa_diagnostics_router().with_state(state.clone());
+        
+        // Create metrics router
+        let metrics_router = Router::new()
+            .route("/metrics", get(crate::http::routes::admin::metrics::get_metrics))
+            .with_state(state.metrics_registry.clone());
 
         let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
             .nest("/v1", v1_router)
             .split_for_parts();
 
         // Merge the hidden diagnostic routes after OpenAPI split
-        let router = router.merge(eoa_diagnostics_router);
+        let router = router
+            .merge(eoa_diagnostics_router)
+            .merge(metrics_router);
 
         let api_clone = api.clone();
         let router = router
