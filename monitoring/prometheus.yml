@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'thirdweb-engine'
+    static_configs:
+      - targets: ['host.docker.internal:3069']  # For macOS/Windows Docker Desktop
+        # Alternative for Linux: use your actual host IP
+        # - targets: ['172.17.0.1:3069']  # Common Docker bridge IP on Linux
+        # - targets: ['192.168.1.x:3069']  # Your actual machine IP
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+    
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

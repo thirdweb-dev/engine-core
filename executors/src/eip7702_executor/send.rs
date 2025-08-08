@@ -22,7 +22,7 @@ use twmq::{
 };
 
 use crate::{
-    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds},
+    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds_from_twmq},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -281,10 +281,10 @@ where
 
         tracing::debug!(transaction_id = ?transaction_id, "EIP-7702 transaction sent to bundler");
 
-        // Record metrics: transaction queued to sent
-        let sent_timestamp = current_timestamp_ms();
-        let queued_to_sent_duration = calculate_duration_seconds(job.job.created_at, sent_timestamp);
-        record_transaction_queued_to_sent("eip7702", job_data.chain_id, queued_to_sent_duration);
+                    // Record metrics: transaction queued to sent
+            let sent_timestamp = current_timestamp_ms();
+            let queued_to_sent_duration = calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
+            record_transaction_queued_to_sent("eip7702", job_data.chain_id, queued_to_sent_duration);
 
         let sender_details = match session_key_target_address {
             Some(target_address) => Eip7702Sender::SessionKey {

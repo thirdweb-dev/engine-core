@@ -45,7 +45,7 @@ impl IntoResponse for MetricsError {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             [("content-type", "text/plain")],
-            format!("Metrics export failed: {}", error_message),
+            format!("Metrics export failed: {error_message}"),
         ).into_response()
     }
 }

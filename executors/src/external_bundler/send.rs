@@ -27,7 +27,7 @@ use twmq::{
 };
 
 use crate::{
-    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds},
+    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds_from_twmq},
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -504,10 +504,10 @@ where
 
         tracing::debug!(userop_hash = ?user_op_hash, "User operation sent to bundler");
 
-        // Record metrics: transaction queued to sent
-        let sent_timestamp = current_timestamp_ms();
-        let queued_to_sent_duration = calculate_duration_seconds(job.job.created_at, sent_timestamp);
-        record_transaction_queued_to_sent("erc4337-external", job_data.chain_id, queued_to_sent_duration);
+                    // Record metrics: transaction queued to sent
+            let sent_timestamp = current_timestamp_ms();
+            let queued_to_sent_duration = calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
+            record_transaction_queued_to_sent("erc4337-external", job_data.chain_id, queued_to_sent_duration);
 
         Ok(ExternalBundlerSendResult {
             account_address: smart_account.address,

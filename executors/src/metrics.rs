@@ -121,6 +121,12 @@ pub fn calculate_duration_seconds(start_timestamp_ms: u64, end_timestamp_ms: u64
     (end_timestamp_ms.saturating_sub(start_timestamp_ms)) as f64 / 1000.0
 }
 
+/// Helper to calculate duration in seconds when start timestamp is in seconds (TWMQ format)
+pub fn calculate_duration_seconds_from_twmq(start_timestamp_seconds: u64, end_timestamp_ms: u64) -> f64 {
+    let start_timestamp_ms = start_timestamp_seconds * 1000;
+    calculate_duration_seconds(start_timestamp_ms, end_timestamp_ms)
+}
+
 /// Get current timestamp in milliseconds
 pub fn current_timestamp_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
@@ -139,6 +145,17 @@ mod tests {
         
         // Test edge case where end < start (should return 0)
         assert_eq!(calculate_duration_seconds(3500, 1000), 0.0);
+    }
+    
+    #[test]
+    fn test_calculate_duration_seconds_from_twmq() {
+        // Test TWMQ timestamp (seconds) to milliseconds conversion
+        let start_seconds = 1640995200; // Unix timestamp in seconds
+        let end_ms = 1640995203500; // Unix timestamp in milliseconds (3.5 seconds later)
+        assert_eq!(calculate_duration_seconds_from_twmq(start_seconds, end_ms), 3.5);
+        
+        // Test edge case where end < start (should return 0)
+        assert_eq!(calculate_duration_seconds_from_twmq(1640995203, 1640995200000), 0.0);
     }
     
     #[test]
