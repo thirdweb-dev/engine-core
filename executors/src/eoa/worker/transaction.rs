@@ -210,9 +210,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                                 Ok(tx.with_gas_price(gas_price))
                             }
                             Err(legacy_error) => Err(EoaExecutorWorkerError::RpcError {
-                                message: format!(
-                                    "Failed to get legacy gas price: {legacy_error}"
-                                ),
+                                message: format!("Failed to get legacy gas price: {legacy_error}"),
                                 inner_error: legacy_error.to_engine_error(&self.chain),
                             }),
                         }
@@ -323,6 +321,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
                                     "Transaction reverted during gas estimation: {} (revert: {})",
                                     error_payload.message,
                                     hex::encode(&revert_data)
+                                ),
+                                inner_error: e.to_engine_error(&self.chain),
+                            });
+                        } else if error_payload.message.to_lowercase().contains("revert") {
+                            // This is a revert - the transaction is fundamentally broken
+                            // This should fail the individual transaction, not the worker
+                            // We need this fallback case because some providers don't return revert data
+                            return Err(EoaExecutorWorkerError::TransactionSimulationFailed {
+                                message: format!(
+                                    "Transaction reverted during gas estimation: {}",
+                                    error_payload.message
                                 ),
                                 inner_error: e.to_engine_error(&self.chain),
                             });
