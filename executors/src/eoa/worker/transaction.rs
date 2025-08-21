@@ -335,6 +335,16 @@ impl<C: Chain> EoaExecutorWorker<C> {
                                 ),
                                 inner_error: e.to_engine_error(&self.chain),
                             });
+                        } else if error_payload.message.to_lowercase().contains("oversized") {
+                            // This is an oversized transaction - the transaction is fundamentally broken
+                            // This should fail the individual transaction, not the worker
+                            return Err(EoaExecutorWorkerError::TransactionSimulationFailed {
+                                message: format!(
+                                    "Transaction data is oversized during gas estimation: {}",
+                                    error_payload.message
+                                ),
+                                inner_error: e.to_engine_error(&self.chain),
+                            });
                         }
                     }
 
