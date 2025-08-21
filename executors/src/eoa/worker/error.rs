@@ -185,6 +185,7 @@ pub fn classify_send_error(
     if error_str.contains("malformed")
         || error_str.contains("gas limit")
         || error_str.contains("intrinsic gas too low")
+        || error_str.contains("oversized")
     {
         return SendErrorClassification::DeterministicFailure;
     }
