@@ -510,15 +510,6 @@ impl EoaExecutorStore {
         }
     }
 
-    /// Peek recycled nonces without removing them
-    pub async fn peek_recycled_nonces(&self) -> Result<Vec<u64>, TransactionStoreError> {
-        let recycled_key = self.recycled_nonces_zset_name();
-        let mut conn = self.redis.clone();
-
-        let nonces: Vec<u64> = conn.zrange(&recycled_key, 0, -1).await?;
-        Ok(nonces)
-    }
-
     /// Peek at pending transactions without removing them (safe for planning)
     pub async fn peek_pending_transactions(
         &self,

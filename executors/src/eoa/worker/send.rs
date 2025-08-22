@@ -62,7 +62,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         total_sent += self.process_recycled_nonces().await?;
 
         // 3. Only proceed to new nonces if we successfully used all recycled nonces
-        let remaining_recycled = self.store.peek_recycled_nonces().await?.len();
+        let remaining_recycled = self.store.clean_and_get_recycled_nonces().await?.len();
         if remaining_recycled == 0 {
             let inflight_budget = self.store.get_inflight_budget(self.max_inflight).await?;
             if inflight_budget > 0 {
