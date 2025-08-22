@@ -141,17 +141,28 @@ impl AtomicEoaExecutorStore {
     ///
     /// The transactions must have sequential nonces starting from the current optimistic count.
     /// This operation validates nonce ordering and atomically moves all transactions.
+    #[tracing::instrument(skip_all, fields(transactions = ?transactions))]
     pub async fn atomic_move_pending_to_borrowed_with_incremented_nonces(
         &self,
         transactions: &[BorrowedTransactionData],
     ) -> Result<usize, TransactionStoreError> {
-        self.execute_with_watch_and_retry(&MovePendingToBorrowedWithIncrementedNonces {
-            transactions,
-            keys: &self.keys,
-            eoa: self.eoa,
-            chain_id: self.chain_id,
-        })
-        .await
+        let (moved_count, new_optimistic_tx_count) = self
+            .execute_with_watch_and_retry(&MovePendingToBorrowedWithIncrementedNonces {
+                transactions,
+                keys: &self.keys,
+                eoa: self.eoa,
+                chain_id: self.chain_id,
+            })
+            .await?;
+
+        if let Some(new_optimistic_tx_count) = new_optimistic_tx_count {
+            tracing::info!(
+                new_optimistic_tx_count = new_optimistic_tx_count,
+                "Updated optimistic transaction count to {new_optimistic_tx_count}"
+            );
+        }
+
+        Ok(moved_count)
     }
 
     /// Atomically move multiple pending transactions to borrowed state using recycled nonces
