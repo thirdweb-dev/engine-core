@@ -23,7 +23,9 @@ use crate::eoa::authorization_cache::EoaAuthorizationCache;
 use crate::eoa::store::{
     AtomicEoaExecutorStore, EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, SubmissionResult,
 };
-use crate::metrics::{calculate_duration_seconds, calculate_duration_seconds_from_twmq, current_timestamp_ms, record_eoa_job_processing_time};
+use crate::metrics::{
+    calculate_duration_seconds, current_timestamp_ms, record_eoa_job_processing_time,
+};
 use crate::webhook::WebhookJobHandler;
 
 pub mod confirm;
@@ -148,6 +150,8 @@ where
             })
             .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
 
+        let worker_id = format!("{}:{}", uuid::Uuid::new_v4(), job.lease_token);
+
         // 2. CREATE SCOPED STORE (acquires lock)
         let scoped = EoaExecutorStore::new(
             self.redis.clone(),
@@ -155,13 +159,13 @@ where
             data.eoa_address,
             data.chain_id,
         )
-        .acquire_eoa_lock_aggressively(&job.lease_token)
+        .acquire_eoa_lock_aggressively(&worker_id)
         .await
         .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 
         let delegated_account = DelegatedAccount::new(data.eoa_address, chain.clone());
 
-        // if there's an error checking 7702 delegation here, we'll just assume it's not a minimal account for the pursposes of max in flight
+        // if there's an error checking 7702 delegation here, we'll just assume it's not a minimal account for the purposes of max in flight
         let is_minimal_account = self
             .authorization_cache
             .is_minimal_account(&delegated_account)
@@ -192,7 +196,7 @@ where
         let job_start_time = current_timestamp_ms();
         let result = worker.execute_main_workflow().await?;
         if let Err(e) = worker.release_eoa_lock().await {
-            tracing::error!(error = ?e, "Error releasing EOA lock");
+            tracing::error!(error = ?e, worker_id = worker_id, "Error releasing EOA lock");
         }
 
         // Record EOA job processing metrics
