@@ -27,7 +27,7 @@ pub struct ConfirmedTransactionWithRichReceipt {
 
 impl<C: Chain> EoaExecutorWorker<C> {
     // ========== CONFIRM FLOW ==========
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn confirm_flow(&self) -> Result<CleanupReport, EoaExecutorWorkerError> {
         // Get fresh on-chain transaction count
         let current_chain_transaction_count = self

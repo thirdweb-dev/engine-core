@@ -16,7 +16,7 @@ const HEALTH_CHECK_INTERVAL: u64 = 300; // 5 minutes in seconds
 
 impl<C: Chain> EoaExecutorWorker<C> {
     // ========== SEND FLOW ==========
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn send_flow(&self) -> Result<u32, EoaExecutorWorkerError> {
         // 1. Get EOA health (initializes if needed) and check if we should update balance
         let mut health = self.get_eoa_health().await?;
