@@ -11,8 +11,9 @@ use crate::{
         EoaExecutorStore,
         events::EoaExecutorEvent,
         store::{
-            BorrowedTransactionData, ConfirmedTransaction, EoaHealth, PendingTransaction,
-            SubmittedTransactionDehydrated, TransactionAttempt, TransactionStoreError,
+            BorrowedTransactionData, ConfirmedTransaction, EoaExecutorStoreKeys, EoaHealth,
+            PendingTransaction, SubmittedTransactionDehydrated, TransactionAttempt,
+            TransactionStoreError,
             borrowed::{BorrowedProcessingReport, ProcessBorrowedTransactions, SubmissionResult},
             pending::{
                 MovePendingToBorrowedWithIncrementedNonces, MovePendingToBorrowedWithRecycledNonces,
@@ -502,47 +503,35 @@ impl AtomicEoaExecutorStore {
     ///
     /// This is called when we have too many recycled nonces and detect something wrong
     /// We want to start fresh, with the chain nonce as the new optimistic nonce
+    #[tracing::instrument(skip_all)]
     pub async fn reset_nonces(
         &self,
         current_chain_tx_count: u64,
     ) -> Result<(), TransactionStoreError> {
-        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-
-        let current_health = self.get_eoa_health().await?;
-
-        // Prepare health update if health data exists
-        let health_update = if let Some(mut health) = current_health {
-            health.nonce_resets.push(now);
-            Some(serde_json::to_string(&health)?)
-        } else {
-            None
+        let reset_tx = ResetNoncesTransaction {
+            keys: &self.store.keys,
+            current_chain_tx_count,
         };
 
-        self.with_lock_check(|pipeline| {
-            let optimistic_key = self.optimistic_transaction_count_key_name();
-            let cached_nonce_key = self.last_transaction_count_key_name();
-            let recycled_key = self.recycled_nonces_zset_name();
-            let manual_reset_key = self.manual_reset_key_name();
+        let reset_result = self.execute_with_watch_and_retry(&reset_tx).await;
 
-            // Update health data only if it exists
-            if let Some(ref health_json) = health_update {
-                let health_key = self.eoa_health_key_name();
-                pipeline.set(&health_key, health_json);
+        match &reset_result {
+            Ok(()) => {
+                tracing::info!(
+                    current_chain_tx_count = current_chain_tx_count,
+                    "Reset nonces successfully"
+                );
             }
+            Err(e) => {
+                tracing::error!(
+                    current_chain_tx_count = current_chain_tx_count,
+                    error = ?e,
+                    "Failed to reset nonces"
+                );
+            }
+        }
 
-            // Reset the optimistic nonce
-            pipeline.set(&optimistic_key, current_chain_tx_count);
-
-            // Reset the cached nonce
-            pipeline.set(&cached_nonce_key, current_chain_tx_count);
-
-            // Reset the recycled nonces
-            pipeline.del(recycled_key);
-
-            // Delete the manual reset key
-            pipeline.del(&manual_reset_key);
-        })
-        .await
+        reset_result
     }
 
     /// Fail a transaction that's in the pending state (remove from pending and fail)
@@ -652,5 +641,81 @@ impl AtomicEoaExecutorStore {
             );
         })
         .await
+    }
+}
+
+/// SafeRedisTransaction implementation for resetting nonces
+pub struct ResetNoncesTransaction<'a> {
+    pub keys: &'a EoaExecutorStoreKeys,
+    pub current_chain_tx_count: u64,
+}
+
+impl SafeRedisTransaction for ResetNoncesTransaction<'_> {
+    type ValidationData = Option<String>;
+    type OperationResult = ();
+
+    fn name(&self) -> &str {
+        "reset nonces"
+    }
+
+    fn watch_keys(&self) -> Vec<String> {
+        vec![
+            self.keys.optimistic_transaction_count_key_name(),
+            self.keys.last_transaction_count_key_name(),
+            self.keys.recycled_nonces_zset_name(),
+            self.keys.manual_reset_key_name(),
+        ]
+    }
+
+    async fn validation(
+        &self,
+        _conn: &mut ConnectionManager,
+        store: &EoaExecutorStore,
+    ) -> Result<Self::ValidationData, TransactionStoreError> {
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+        // Get current health data to prepare update
+        let current_health = store.get_eoa_health().await?;
+        let health_update = if let Some(mut health) = current_health {
+            health.nonce_resets.push(now);
+            // Keep only the last 5 nonce reset timestamps
+            if health.nonce_resets.len() > 5 {
+                health.nonce_resets.drain(0..health.nonce_resets.len() - 5);
+            }
+            Some(serde_json::to_string(&health)?)
+        } else {
+            None
+        };
+
+        Ok(health_update)
+    }
+
+    fn operation(
+        &self,
+        pipeline: &mut twmq::redis::Pipeline,
+        health_update: Self::ValidationData,
+    ) -> Self::OperationResult {
+        let optimistic_key = self.keys.optimistic_transaction_count_key_name();
+        let cached_nonce_key = self.keys.last_transaction_count_key_name();
+        let recycled_key = self.keys.recycled_nonces_zset_name();
+        let manual_reset_key = self.keys.manual_reset_key_name();
+
+        // Update health data only if it exists
+        if let Some(ref health_json) = health_update {
+            let health_key = self.keys.eoa_health_key_name();
+            pipeline.set(&health_key, health_json);
+        }
+
+        // Reset the optimistic nonce
+        pipeline.set(&optimistic_key, self.current_chain_tx_count);
+
+        // Reset the cached nonce
+        pipeline.set(&cached_nonce_key, self.current_chain_tx_count);
+
+        // Reset the recycled nonces
+        pipeline.del(recycled_key);
+
+        // Delete the manual reset key
+        pipeline.del(&manual_reset_key);
     }
 }
