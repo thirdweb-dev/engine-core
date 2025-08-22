@@ -141,7 +141,7 @@ impl AtomicEoaExecutorStore {
     ///
     /// The transactions must have sequential nonces starting from the current optimistic count.
     /// This operation validates nonce ordering and atomically moves all transactions.
-    #[tracing::instrument(skip_all, fields(transactions = ?transactions))]
+    #[tracing::instrument(skip_all, fields(transactions_length = transactions.len()))]
     pub async fn atomic_move_pending_to_borrowed_with_incremented_nonces(
         &self,
         transactions: &[BorrowedTransactionData],
