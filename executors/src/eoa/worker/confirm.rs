@@ -53,6 +53,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let cached_transaction_count = match self.store.get_cached_transaction_count().await {
             Err(e) => match e {
                 TransactionStoreError::NonceSyncRequired { .. } => {
+                    tracing::warn!(
+                        cached_transaction_count = current_chain_transaction_count,
+                        "Nonce sync required, store was uninitialized, updating cached transaction count with current chain transaction count"
+                    );
                     self.store
                         .update_cached_transaction_count(current_chain_transaction_count)
                         .await?;
