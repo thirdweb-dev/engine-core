@@ -419,7 +419,7 @@ impl EoaExecutorStore {
                 worker_id: worker_id.to_string(),
             });
         }
-        let conflict_worker_id = conn.get::<_, String>(&lock_key).await?;
+        let conflict_worker_id = conn.get::<_, Option<String>>(&lock_key).await?;
 
         // Lock exists, forcefully take it over
         tracing::warn!(
