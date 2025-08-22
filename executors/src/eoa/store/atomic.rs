@@ -394,6 +394,7 @@ impl AtomicEoaExecutorStore {
     /// Synchronize nonces with the chain
     ///
     /// Part of standard nonce management flow, called in the confirm stage when chain nonce advances, and we need to update our cached nonce
+    #[tracing::instrument(skip_all, fields(current_chain_tx_count = current_chain_tx_count))]
     pub async fn update_cached_transaction_count(
         &self,
         current_chain_tx_count: u64,
