@@ -140,8 +140,9 @@ impl UserCancellable for EoaExecutorWorkerError {
 // ========== SIMPLE ERROR CLASSIFICATION ==========
 #[derive(Debug)]
 pub enum SendErrorClassification {
-    PossiblySent,         // "nonce too low", "already known" etc
-    DeterministicFailure, // Invalid signature, malformed tx, insufficient funds etc
+    PossiblySent,                     // "nonce too low", "already known" etc
+    DeterministicFailure,             // Invalid signature, malformed tx, insufficient funds etc
+    DeterministicFailureNonRetryable, // Non-retryable deterministic failure
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -185,9 +186,12 @@ pub fn classify_send_error(
     if error_str.contains("malformed")
         || error_str.contains("gas limit")
         || error_str.contains("intrinsic gas too low")
-        || error_str.contains("oversized")
     {
         return SendErrorClassification::DeterministicFailure;
+    }
+
+    if error_str.contains("oversized") {
+        return SendErrorClassification::DeterministicFailureNonRetryable;
     }
 
     tracing::warn!(
@@ -305,6 +309,15 @@ impl SubmissionResult {
                             transaction: borrowed_transaction.clone().into(),
                         }
                     }
+                    SendErrorClassification::DeterministicFailureNonRetryable => SubmissionResult {
+                        result: SubmissionResultType::Fail(
+                            EoaExecutorWorkerError::TransactionSendError {
+                                message: format!("Transaction send failed: {rpc_error}"),
+                                inner_error: rpc_error.to_engine_error(chain),
+                            },
+                        ),
+                        transaction: borrowed_transaction.clone().into(),
+                    },
                 }
             }
         }

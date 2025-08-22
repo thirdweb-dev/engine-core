@@ -31,7 +31,7 @@ pub struct MovePendingToBorrowedWithIncrementedNonces<'a> {
 
 impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
     type ValidationData = Vec<String>; // serialized borrowed transactions
-    type OperationResult = usize; // number of transactions processed
+    type OperationResult = (usize, Option<u64>); // number of transactions processed, new optimistic nonce
 
     fn name(&self) -> &str {
         "pending->borrowed with incremented nonces"
@@ -59,10 +59,11 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
         let current_optimistic: Option<u64> = conn
             .get(self.keys.optimistic_transaction_count_key_name())
             .await?;
-        let current_optimistic_nonce = current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
-            eoa: self.eoa,
-            chain_id: self.chain_id,
-        })?;
+        let current_optimistic_nonce =
+            current_optimistic.ok_or(TransactionStoreError::NonceSyncRequired {
+                eoa: self.eoa,
+                chain_id: self.chain_id,
+            })?;
 
         // Extract and validate nonces
         let mut nonces: Vec<u64> = self
@@ -134,13 +135,17 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
             pipeline.hset(&borrowed_key, &tx.transaction_id, borrowed_json);
         }
 
-        // Update optimistic tx count to highest nonce + 1
-        if let Some(last_tx) = self.transactions.last() {
-            let new_optimistic_tx_count = last_tx.signed_transaction.nonce() + 1;
+        let new_optimistic_tx_count = self
+            .transactions
+            .last()
+            .map(|tx| tx.signed_transaction.nonce() + 1);
+
+        // Update optimistic tx count to highest nonce + 1, if we have a new optimistic nonce
+        if let Some(new_optimistic_tx_count) = new_optimistic_tx_count {
             pipeline.set(&optimistic_key, new_optimistic_tx_count);
         }
 
-        self.transactions.len()
+        (self.transactions.len(), new_optimistic_tx_count)
     }
 }
 

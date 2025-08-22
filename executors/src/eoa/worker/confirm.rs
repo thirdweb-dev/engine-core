@@ -27,7 +27,7 @@ pub struct ConfirmedTransactionWithRichReceipt {
 
 impl<C: Chain> EoaExecutorWorker<C> {
     // ========== CONFIRM FLOW ==========
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn confirm_flow(&self) -> Result<CleanupReport, EoaExecutorWorkerError> {
         // Get fresh on-chain transaction count
         let current_chain_transaction_count = self
@@ -53,6 +53,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let cached_transaction_count = match self.store.get_cached_transaction_count().await {
             Err(e) => match e {
                 TransactionStoreError::NonceSyncRequired { .. } => {
+                    tracing::warn!(
+                        cached_transaction_count = current_chain_transaction_count,
+                        "Nonce sync required, store was uninitialized, updating cached transaction count with current chain transaction count"
+                    );
                     self.store
                         .update_cached_transaction_count(current_chain_transaction_count)
                         .await?;

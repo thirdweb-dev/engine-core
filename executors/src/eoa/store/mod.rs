@@ -284,7 +284,10 @@ impl EoaExecutorStoreKeys {
                 "{ns}:eoa_executor:pending_manual_reset:{}:{}",
                 self.chain_id, self.eoa
             ),
-            None => format!("eoa_executor:pending_manual_reset:{}:{}", self.chain_id, self.eoa),
+            None => format!(
+                "eoa_executor:pending_manual_reset:{}:{}",
+                self.chain_id, self.eoa
+            ),
         }
     }
 }
@@ -416,12 +419,15 @@ impl EoaExecutorStore {
                 worker_id: worker_id.to_string(),
             });
         }
+        let conflict_worker_id = conn.get::<_, Option<String>>(&lock_key).await?;
+
         // Lock exists, forcefully take it over
         tracing::warn!(
             eoa = ?self.eoa,
             chain_id = self.chain_id,
             worker_id = worker_id,
-            "Forcefully taking over EOA lock from stalled worker"
+            conflict_worker_id = ?conflict_worker_id,
+            "Forcefully taking over EOA lock from stalled worker."
         );
         // Force set - no expiry, only released by explicit takeover
         let _: () = conn.set(&lock_key, worker_id).await?;
@@ -502,15 +508,6 @@ impl EoaExecutorStore {
         } else {
             Ok(None)
         }
-    }
-
-    /// Peek recycled nonces without removing them
-    pub async fn peek_recycled_nonces(&self) -> Result<Vec<u64>, TransactionStoreError> {
-        let recycled_key = self.recycled_nonces_zset_name();
-        let mut conn = self.redis.clone();
-
-        let nonces: Vec<u64> = conn.zrange(&recycled_key, 0, -1).await?;
-        Ok(nonces)
     }
 
     /// Peek at pending transactions without removing them (safe for planning)
