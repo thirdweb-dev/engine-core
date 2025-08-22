@@ -284,7 +284,10 @@ impl EoaExecutorStoreKeys {
                 "{ns}:eoa_executor:pending_manual_reset:{}:{}",
                 self.chain_id, self.eoa
             ),
-            None => format!("eoa_executor:pending_manual_reset:{}:{}", self.chain_id, self.eoa),
+            None => format!(
+                "eoa_executor:pending_manual_reset:{}:{}",
+                self.chain_id, self.eoa
+            ),
         }
     }
 }
@@ -416,12 +419,15 @@ impl EoaExecutorStore {
                 worker_id: worker_id.to_string(),
             });
         }
+        let conflict_worker_id = conn.get::<_, String>(&lock_key).await?;
+
         // Lock exists, forcefully take it over
         tracing::warn!(
             eoa = ?self.eoa,
             chain_id = self.chain_id,
             worker_id = worker_id,
-            "Forcefully taking over EOA lock from stalled worker"
+            conflict_worker_id = ?conflict_worker_id,
+            "Forcefully taking over EOA lock from stalled worker."
         );
         // Force set - no expiry, only released by explicit takeover
         let _: () = conn.set(&lock_key, worker_id).await?;
