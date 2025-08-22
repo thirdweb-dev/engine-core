@@ -20,14 +20,11 @@ use engine_core::{
 };
 
 use crate::eoa::{
-    EoaTransactionRequest,
     store::{
         BorrowedTransaction, BorrowedTransactionData, PendingTransaction, SubmittedNoopTransaction,
-    },
-    worker::{
-        EoaExecutorWorker,
-        error::{EoaExecutorWorkerError, is_retryable_preparation_error},
-    },
+    }, worker::{
+        error::{is_retryable_preparation_error, is_unsupported_eip1559_error, EoaExecutorWorkerError}, EoaExecutorWorker
+    }, EoaTransactionRequest
 };
 
 // Retry constants for preparation phase
@@ -199,7 +196,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             }
             Err(eip1559_error) => {
                 // Check if this is an "unsupported feature" error
-                if let RpcError::UnsupportedFeature(_) = &eip1559_error {
+                if is_unsupported_eip1559_error(&eip1559_error) {
                     tracing::debug!("EIP-1559 not supported, falling back to legacy gas price");
 
                     // Fall back to legacy gas price only if no gas price is set

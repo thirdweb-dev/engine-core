@@ -238,7 +238,7 @@ pub fn is_retryable_rpc_error(kind: &RpcErrorKind) -> bool {
         RpcErrorKind::ErrorResp(resp) => {
             let message = resp.message.to_lowercase();
             // if the error message contains "invalid chain", it's not retryable
-            !message.contains("invalid chain")
+            !(message.contains("invalid chain") || message.contains("invalid opcode"))
         }
         _ => true,
     }
@@ -322,4 +322,17 @@ impl SubmissionResult {
             }
         }
     }
+}
+
+pub fn is_unsupported_eip1559_error(error: &RpcError<TransportErrorKind>) -> bool {
+    if let RpcError::UnsupportedFeature(_) = error {
+        return true;
+    }
+
+    if let RpcError::ErrorResp(resp) = error {
+        let message = resp.message.to_lowercase();
+        return message.contains("method not found");
+    }
+
+    false
 }
