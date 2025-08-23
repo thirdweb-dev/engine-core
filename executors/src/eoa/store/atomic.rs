@@ -68,6 +68,7 @@ pub trait SafeRedisTransaction: Send + Sync {
 pub struct AtomicEoaExecutorStore {
     pub store: EoaExecutorStore,
     pub worker_id: String,
+    pub eoa_metrics: crate::metrics::EoaMetrics,
 }
 
 impl std::ops::Deref for AtomicEoaExecutorStore {
@@ -600,6 +601,7 @@ impl AtomicEoaExecutorStore {
             last_confirmed_nonce,
             keys: &self.keys,
             webhook_queue,
+            eoa_metrics: &self.eoa_metrics,
         })
         .await
     }
@@ -616,6 +618,7 @@ impl AtomicEoaExecutorStore {
             results,
             keys: &self.keys,
             webhook_queue,
+            eoa_metrics: &self.eoa_metrics,
         })
         .await
     }

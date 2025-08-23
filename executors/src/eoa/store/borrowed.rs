@@ -12,7 +12,7 @@ use crate::eoa::{
     },
     worker::error::EoaExecutorWorkerError,
 };
-use crate::metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds};
+use crate::metrics::{current_timestamp_ms, calculate_duration_seconds, EoaMetrics};
 use crate::webhook::{WebhookJobHandler, queue_webhook_envelopes};
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,7 @@ pub struct ProcessBorrowedTransactions<'a> {
     pub results: Vec<SubmissionResult>,
     pub keys: &'a EoaExecutorStoreKeys,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
+    pub eoa_metrics: &'a EoaMetrics,
 }
 
 #[derive(Debug, Default)]
@@ -124,7 +125,12 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                         result.transaction.queued_at, 
                         sent_timestamp
                     );
-                    record_transaction_queued_to_sent("eoa", self.keys.chain_id, queued_to_sent_duration);
+                    // Record metrics using the clean EoaMetrics abstraction
+                    self.eoa_metrics.record_transaction_sent(
+                        self.keys.eoa,
+                        self.keys.chain_id,
+                        queued_to_sent_duration
+                    );
 
                     // Add to submitted zset
                     let (submitted_tx_redis_string, nonce) =

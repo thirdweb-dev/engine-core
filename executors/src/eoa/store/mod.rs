@@ -407,6 +407,7 @@ impl EoaExecutorStore {
     pub async fn acquire_eoa_lock_aggressively(
         self,
         worker_id: &str,
+        eoa_metrics: crate::metrics::EoaMetrics,
     ) -> Result<AtomicEoaExecutorStore, TransactionStoreError> {
         let lock_key = self.eoa_lock_key_name();
         let mut conn = self.redis.clone();
@@ -417,6 +418,7 @@ impl EoaExecutorStore {
             return Ok(AtomicEoaExecutorStore {
                 store: self,
                 worker_id: worker_id.to_string(),
+                eoa_metrics,
             });
         }
         let conflict_worker_id = conn.get::<_, Option<String>>(&lock_key).await?;
@@ -434,6 +436,7 @@ impl EoaExecutorStore {
         Ok(AtomicEoaExecutorStore {
             store: self,
             worker_id: worker_id.to_string(),
+            eoa_metrics,
         })
     }
 
