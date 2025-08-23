@@ -97,6 +97,25 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     );
                 }
             }
+            
+            // Check if EOA is stuck and record metric using the clean EoaMetrics abstraction
+            let time_since_movement_seconds = time_since_movement as f64 / 1000.0;
+            if self.store.eoa_metrics.is_stuck(time_since_movement) {
+                tracing::warn!(
+                    time_since_movement = time_since_movement,
+                    stuck_threshold = self.store.eoa_metrics.stuck_threshold_seconds,
+                    eoa = ?self.eoa,
+                    chain_id = self.chain_id,
+                    "EOA is stuck - nonce hasn't moved for too long"
+                );
+                
+                // Record stuck EOA metric (low cardinality - only problematic EOAs)
+                self.store.eoa_metrics.record_stuck_eoa(
+                    self.eoa,
+                    self.chain_id,
+                    time_since_movement_seconds
+                );
+            }
 
             tracing::debug!("No nonce progress, still going ahead with confirm flow");
             // return Ok(CleanupReport::default());

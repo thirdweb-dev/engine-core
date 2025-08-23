@@ -24,7 +24,7 @@ use crate::eoa::store::{
     AtomicEoaExecutorStore, EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, SubmissionResult,
 };
 use crate::metrics::{
-    calculate_duration_seconds, current_timestamp_ms, record_eoa_job_processing_time,
+    EoaMetrics, calculate_duration_seconds, current_timestamp_ms, record_eoa_job_processing_time,
 };
 use crate::webhook::WebhookJobHandler;
 
@@ -123,6 +123,9 @@ where
     pub eoa_signer: Arc<EoaSigner>,
     pub max_inflight: u64, // Note: Spec uses MAX_INFLIGHT_PER_EOA constant
     pub max_recycled_nonces: u64, // Note: Spec uses MAX_RECYCLED_THRESHOLD constant
+
+    // EOA metrics abstraction with encapsulated configuration
+    pub eoa_metrics: EoaMetrics,
 }
 
 impl<CS> DurableExecution for EoaExecutorJobHandler<CS>
@@ -159,7 +162,7 @@ where
             data.eoa_address,
             data.chain_id,
         )
-        .acquire_eoa_lock_aggressively(&worker_id)
+        .acquire_eoa_lock_aggressively(&worker_id, self.eoa_metrics.clone())
         .await
         .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
 

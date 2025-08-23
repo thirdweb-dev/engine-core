@@ -7,6 +7,10 @@ pub struct ExecutorMetrics {
     pub transaction_queued_to_sent_duration: HistogramVec,
     pub transaction_queued_to_confirmed_duration: HistogramVec,
     pub eoa_job_processing_duration: HistogramVec,
+    // EOA degradation and stuck metrics (low cardinality - only problematic EOAs)
+    pub eoa_degraded_send_duration: HistogramVec,
+    pub eoa_degraded_confirmation_duration: HistogramVec,
+    pub eoa_stuck_duration: HistogramVec,
 }
 
 impl ExecutorMetrics {
@@ -39,10 +43,41 @@ impl ExecutorMetrics {
             registry
         )?;
 
+        // EOA degradation and stuck metrics (low cardinality - only problematic EOAs)
+        let eoa_degraded_send_duration = register_histogram_vec_with_registry!(
+            HistogramOpts::new(
+                "tw_engine_executor_eoa_degraded_send_duration_seconds",
+                "Duration of EOA transactions that exceeded the send degradation threshold"
+            ).buckets(vec![5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0, 600.0]),
+            &["eoa_address", "chain_id"],
+            registry
+        )?;
+        
+        let eoa_degraded_confirmation_duration = register_histogram_vec_with_registry!(
+            HistogramOpts::new(
+                "tw_engine_executor_eoa_degraded_confirmation_duration_seconds",
+                "Duration of EOA transactions that exceeded the confirmation degradation threshold"
+            ).buckets(vec![30.0, 45.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0]),
+            &["eoa_address", "chain_id"],
+            registry
+        )?;
+        
+        let eoa_stuck_duration = register_histogram_vec_with_registry!(
+            HistogramOpts::new(
+                "tw_engine_executor_eoa_stuck_duration_seconds",
+                "Duration since last nonce movement for EOAs that are considered stuck"
+            ).buckets(vec![200.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0, 7200.0, 14400.0]),
+            &["eoa_address", "chain_id"],
+            registry
+        )?;
+
         Ok(ExecutorMetrics {
             transaction_queued_to_sent_duration,
             transaction_queued_to_confirmed_duration,
             eoa_job_processing_duration,
+            eoa_degraded_send_duration,
+            eoa_degraded_confirmation_duration,
+            eoa_stuck_duration,
         })
     }
 }
@@ -116,6 +151,76 @@ pub fn record_eoa_job_processing_time(chain_id: u64, duration_seconds: f64) {
         .observe(duration_seconds);
 }
 
+/// EOA Metrics abstraction that encapsulates configuration and provides clean interface
+#[derive(Debug, Clone)]
+pub struct EoaMetrics {
+    pub send_degradation_threshold_seconds: u64,
+    pub confirmation_degradation_threshold_seconds: u64,
+    pub stuck_threshold_seconds: u64,
+}
+
+impl EoaMetrics {
+    /// Create new EoaMetrics with configuration
+    pub fn new(
+        send_degradation_threshold_seconds: u64,
+        confirmation_degradation_threshold_seconds: u64,
+        stuck_threshold_seconds: u64,
+    ) -> Self {
+        Self {
+            send_degradation_threshold_seconds,
+            confirmation_degradation_threshold_seconds,
+            stuck_threshold_seconds,
+        }
+    }
+
+    /// Record EOA transaction send metrics with automatic degradation detection
+    pub fn record_transaction_sent(&self, eoa_address: alloy::primitives::Address, chain_id: u64, duration_seconds: f64) {
+        // Always record the regular metric
+        record_transaction_queued_to_sent("eoa", chain_id, duration_seconds);
+        
+        // Only record degraded metric if threshold exceeded (low cardinality)
+        if duration_seconds > self.send_degradation_threshold_seconds as f64 {
+            let metrics = get_metrics();
+            metrics.eoa_degraded_send_duration
+                .with_label_values(&[&eoa_address.to_string(), &chain_id.to_string()])
+                .observe(duration_seconds);
+        }
+    }
+
+    /// Record EOA transaction confirmation metrics with automatic degradation detection
+    pub fn record_transaction_confirmed(&self, eoa_address: alloy::primitives::Address, chain_id: u64, duration_seconds: f64) {
+        // Always record the regular metric
+        record_transaction_queued_to_confirmed("eoa", chain_id, duration_seconds);
+        
+        // Only record degraded metric if threshold exceeded (low cardinality)
+        if duration_seconds > self.confirmation_degradation_threshold_seconds as f64 {
+            let metrics = get_metrics();
+            metrics.eoa_degraded_confirmation_duration
+                .with_label_values(&[&eoa_address.to_string(), &chain_id.to_string()])
+                .observe(duration_seconds);
+        }
+    }
+
+    /// Record stuck EOA metric when nonce hasn't moved for too long
+    pub fn record_stuck_eoa(&self, eoa_address: alloy::primitives::Address, chain_id: u64, time_since_last_movement_seconds: f64) {
+        // Only record if EOA is actually stuck (exceeds threshold)
+        if time_since_last_movement_seconds > self.stuck_threshold_seconds as f64 {
+            let metrics = get_metrics();
+            metrics.eoa_stuck_duration
+                .with_label_values(&[&eoa_address.to_string(), &chain_id.to_string()])
+                .observe(time_since_last_movement_seconds);
+        }
+    }
+
+    /// Check if an EOA should be considered stuck based on time since last nonce movement
+    pub fn is_stuck(&self, time_since_last_movement_ms: u64) -> bool {
+        let time_since_last_movement_seconds = time_since_last_movement_ms as f64 / 1000.0;
+        time_since_last_movement_seconds > self.stuck_threshold_seconds as f64
+    }
+}
+
+
+
 /// Helper to calculate duration in seconds from unix timestamps (milliseconds)
 pub fn calculate_duration_seconds(start_timestamp_ms: u64, end_timestamp_ms: u64) -> f64 {
     (end_timestamp_ms.saturating_sub(start_timestamp_ms)) as f64 / 1000.0
@@ -165,11 +270,24 @@ mod tests {
         record_transaction_queued_to_confirmed("test", 1, 10.0);
         record_eoa_job_processing_time(1, 2.0);
         
+        // Test new EOA metrics abstraction
+        let eoa_metrics = EoaMetrics::new(10, 120, 600);
+        let test_address = "0x1234567890123456789012345678901234567890".parse().unwrap();
+        
+        eoa_metrics.record_transaction_sent(test_address, 1, 5.0); // Won't record degradation (below threshold)
+        eoa_metrics.record_transaction_sent(test_address, 1, 15.0); // Will record degradation (above threshold)
+        eoa_metrics.record_transaction_confirmed(test_address, 1, 60.0); // Won't record degradation (below threshold)
+        eoa_metrics.record_transaction_confirmed(test_address, 1, 180.0); // Will record degradation (above threshold)
+        eoa_metrics.record_stuck_eoa(test_address, 1, 900.0); // Will record stuck EOA
+        
         // Test that default metrics can be exported
         let metrics_output = export_default_metrics().expect("Should be able to export default metrics");
         assert!(metrics_output.contains("tw_engine_executor_transaction_queued_to_sent_duration_seconds"));
         assert!(metrics_output.contains("tw_engine_executor_transaction_queued_to_confirmed_duration_seconds"));
         assert!(metrics_output.contains("tw_engine_eoa_executor_job_processing_duration_seconds"));
+        assert!(metrics_output.contains("tw_engine_executor_eoa_degraded_send_duration_seconds"));
+        assert!(metrics_output.contains("tw_engine_executor_eoa_degraded_confirmation_duration_seconds"));
+        assert!(metrics_output.contains("tw_engine_executor_eoa_stuck_duration_seconds"));
     }
 
     #[test]

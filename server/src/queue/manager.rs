@@ -207,6 +207,12 @@ impl QueueManager {
             .arc();
 
         // Create EOA executor queue
+        let eoa_metrics = engine_executors::metrics::EoaMetrics::new(
+            queue_config.monitoring.eoa_send_degradation_threshold_seconds,
+            queue_config.monitoring.eoa_confirmation_degradation_threshold_seconds,
+            queue_config.monitoring.eoa_stuck_threshold_seconds,
+        );
+        
         let eoa_executor_handler = EoaExecutorJobHandler {
             chain_service: chain_service.clone(),
             eoa_signer: eoa_signer.clone(),
@@ -216,6 +222,7 @@ impl QueueManager {
             authorization_cache,
             max_inflight: 100,
             max_recycled_nonces: 50,
+            eoa_metrics,
         };
 
         let eoa_executor_queue = Queue::builder()

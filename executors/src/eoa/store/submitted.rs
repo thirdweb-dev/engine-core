@@ -16,7 +16,7 @@ use crate::{
             TransactionStoreError, atomic::SafeRedisTransaction,
         },
     },
-    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds},
+    metrics::{current_timestamp_ms, calculate_duration_seconds, EoaMetrics},
     webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
 
@@ -198,6 +198,7 @@ pub struct CleanSubmittedTransactions<'a> {
     pub confirmed_transactions: &'a [ConfirmedTransaction],
     pub keys: &'a EoaExecutorStoreKeys,
     pub webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
+    pub eoa_metrics: &'a EoaMetrics,
 }
 
 pub struct CleanAndGetRecycledNonces<'a> {
@@ -336,7 +337,12 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                 tx.queued_at, 
                                 confirmed_timestamp
                             );
-                            record_transaction_queued_to_confirmed("eoa", self.keys.chain_id, queued_to_mined_duration);
+                            // Record metrics using the clean EoaMetrics abstraction
+                            self.eoa_metrics.record_transaction_confirmed(
+                                self.keys.eoa,
+                                self.keys.chain_id,
+                                queued_to_mined_duration
+                            );
                             if !tx.user_request.webhook_options.is_empty() {
                                 let event = EoaExecutorEvent {
                                     transaction_id: tx.transaction_id.clone(),

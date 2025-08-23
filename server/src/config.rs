@@ -24,6 +24,27 @@ pub struct QueueConfig {
     pub local_concurrency: usize,
     pub polling_interval_ms: u64,
     pub lease_duration_seconds: u64,
+    
+    #[serde(default)]
+    pub monitoring: MonitoringConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MonitoringConfig {
+    pub eoa_send_degradation_threshold_seconds: u64,
+    pub eoa_confirmation_degradation_threshold_seconds: u64,
+    pub eoa_stuck_threshold_seconds: u64,
+}
+
+impl Default for MonitoringConfig {
+    fn default() -> Self {
+        Self {
+            eoa_send_degradation_threshold_seconds: 10, // 10 seconds
+            eoa_confirmation_degradation_threshold_seconds: 120, // 2 minutes
+            eoa_stuck_threshold_seconds: 600, // 10 minutes
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
