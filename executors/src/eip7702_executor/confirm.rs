@@ -199,7 +199,7 @@ where
             .await
             .map_err(|e| {
                 tracing::error!(
-                    transaction_id = job_data.bundler_transaction_id,
+                    bundler_transaction_id = job_data.bundler_transaction_id,
                     sender_details = ?job_data.sender_details,
                     error = ?e,
                     "Failed to get transaction hash from bundler"
