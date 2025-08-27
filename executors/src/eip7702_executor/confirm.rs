@@ -18,7 +18,10 @@ use twmq::{
 
 use crate::eip7702_executor::send::Eip7702Sender;
 use crate::{
-    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds_from_twmq},
+    metrics::{
+        calculate_duration_seconds_from_twmq, current_timestamp_ms,
+        record_transaction_queued_to_confirmed,
+    },
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -194,10 +197,18 @@ where
             .bundler_client()
             .tw_get_transaction_hash(&job_data.bundler_transaction_id)
             .await
-            .map_err(|e| Eip7702ConfirmationError::TransactionHashError {
-                message: e.to_string(),
+            .map_err(|e| {
+                tracing::error!(
+                    transaction_id = job_data.bundler_transaction_id,
+                    sender_details = ?job_data.sender_details,
+                    error = ?e,
+                    "Failed to get transaction hash from bundler"
+                );
+                Eip7702ConfirmationError::TransactionHashError {
+                    message: e.to_string(),
+                }
             })
-            .map_err_fail()?;
+            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
 
         let transaction_hash = match transaction_hash_res {
             TwGetTransactionHashResponse::Success { transaction_hash } => {
@@ -266,12 +277,17 @@ where
             "Transaction confirmed successfully"
         );
 
-                    // Record metrics if original timestamp is available
-            if let Some(original_timestamp) = job_data.original_queued_timestamp {
-                let confirmed_timestamp = current_timestamp_ms();
-                let queued_to_confirmed_duration = calculate_duration_seconds_from_twmq(original_timestamp, confirmed_timestamp);
-                record_transaction_queued_to_confirmed("eip7702", job_data.chain_id, queued_to_confirmed_duration);
-            }
+        // Record metrics if original timestamp is available
+        if let Some(original_timestamp) = job_data.original_queued_timestamp {
+            let confirmed_timestamp = current_timestamp_ms();
+            let queued_to_confirmed_duration =
+                calculate_duration_seconds_from_twmq(original_timestamp, confirmed_timestamp);
+            record_transaction_queued_to_confirmed(
+                "eip7702",
+                job_data.chain_id,
+                queued_to_confirmed_duration,
+            );
+        }
 
         Ok(Eip7702ConfirmationResult {
             transaction_id: job_data.transaction_id.clone(),
