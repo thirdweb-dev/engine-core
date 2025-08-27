@@ -88,6 +88,12 @@ pub enum TwGetTransactionHashStatus {
     Success,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwGetDelegationContractResponse {
+    pub delegation_contract: Address,
+}
+
 impl BundlerClient {
     /// Create a new bundler client with the given transport
     pub fn new(transport: impl IntoBoxTransport) -> Self {
@@ -168,6 +174,11 @@ impl BundlerClient {
         let response: TwGetTransactionHashResponse =
             self.inner.request("tw_getTransactionHash", params).await?;
 
+        Ok(response)
+    }
+
+    pub async fn tw_get_delegation_contract(&self) -> TransportResult<TwGetDelegationContractResponse> {
+        let response: TwGetDelegationContractResponse = self.inner.request("tw_getDelegationContract", ()).await?;
         Ok(response)
     }
 }

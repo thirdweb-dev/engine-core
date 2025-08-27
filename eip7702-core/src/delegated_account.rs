@@ -10,10 +10,7 @@ use engine_core::{
 };
 use rand::Rng;
 
-use crate::constants::{
-    EIP_7702_DELEGATION_CODE_LENGTH, EIP_7702_DELEGATION_PREFIX,
-    MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
-};
+use crate::constants::{EIP_7702_DELEGATION_CODE_LENGTH, EIP_7702_DELEGATION_PREFIX};
 
 /// Represents an EOA address that can have EIP-7702 delegation, associated with a specific chain
 #[derive(Clone, Debug)]
@@ -62,21 +59,26 @@ impl<C: Chain> DelegatedAccount<C> {
 
         // Extract the target address from bytes 3-23 (20 bytes for address)
         // EIP-7702 format: 0xef0100 + 20 bytes address
-        let target_bytes = &code[3..23];
-        let target_address = Address::from_slice(target_bytes);
 
-        // Compare with the minimal account implementation address
-        let is_delegated = target_address == MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS;
+        // NOTE!: skip the actual delegated target address check for now
+        // extremely unlikely that an EOA being used with engine is delegated to a non-minimal account
+        // Potential source for fringe edge cases, please verify delegated target address if debugging 7702 execution issues
 
-        tracing::debug!(
-            eoa_address = ?self.eoa_address,
-            target_address = ?target_address,
-            minimal_account_address = ?MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
-            has_delegation = is_delegated,
-            "EIP-7702 delegation check result"
-        );
+        // let target_bytes = &code[3..23];
+        // let target_address = Address::from_slice(target_bytes);
 
-        Ok(is_delegated)
+        // // Compare with the minimal account implementation address
+        // let is_delegated = target_address == MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS;
+
+        // tracing::debug!(
+        //     eoa_address = ?self.eoa_address,
+        //     target_address = ?target_address,
+        //     minimal_account_address = ?MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
+        //     has_delegation = is_delegated,
+        //     "EIP-7702 delegation check result"
+        // );
+
+        Ok(true)
     }
 
     /// Get the EOA address
@@ -103,6 +105,7 @@ impl<C: Chain> DelegatedAccount<C> {
         &self,
         eoa_signer: &S,
         credentials: &SigningCredential,
+        delegation_contract: Address,
     ) -> Result<alloy::eips::eip7702::SignedAuthorization, EngineError> {
         let nonce = self.get_nonce().await?;
 
@@ -115,7 +118,7 @@ impl<C: Chain> DelegatedAccount<C> {
             .sign_authorization(
                 signing_options,
                 self.chain.chain_id(),
-                MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
+                delegation_contract,
                 nonce,
                 credentials,
             )

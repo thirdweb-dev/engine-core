@@ -479,7 +479,6 @@ impl<C: Chain> EoaExecutorWorker<C> {
     /// This method ensures the health data is always available for the worker
     async fn get_eoa_health(&self) -> Result<EoaHealth, EoaExecutorWorkerError> {
         let store_health = self.store.get_eoa_health().await?;
-        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
         match store_health {
             Some(health) => Ok(health),
@@ -499,6 +498,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             inner_error: engine_error,
                         }
                     })?;
+
+                let now = current_timestamp_ms();
 
                 let health = EoaHealth {
                     balance,

@@ -193,12 +193,13 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         mut self,
         signer: &S,
         credentials: &SigningCredential,
+        delegation_contract: Address,
     ) -> Result<Self, EngineError> {
         if self.account.is_minimal_account().await? {
             return Ok(self);
         }
 
-        let authorization = self.account.sign_authorization(signer, credentials).await?;
+        let authorization = self.account.sign_authorization(signer, credentials, delegation_contract).await?;
         self.authorization = Some(authorization);
         Ok(self)
     }
