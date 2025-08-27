@@ -22,6 +22,7 @@ use twmq::{
 use crate::eoa::authorization_cache::EoaAuthorizationCache;
 use crate::eoa::store::{
     AtomicEoaExecutorStore, EoaExecutorStore, EoaExecutorStoreKeys, EoaHealth, SubmissionResult,
+    TransactionStoreError,
 };
 use crate::metrics::{
     EoaMetrics, calculate_duration_seconds, current_timestamp_ms, record_eoa_job_processing_time,
@@ -241,13 +242,25 @@ where
         self.soft_release_eoa_lock(&job.job.data).await;
     }
 
+    #[tracing::instrument(name = "eoa_executor_worker_on_fail", skip_all, fields(eoa = ?job.job.data.eoa_address, chain_id = job.job.data.chain_id, job_id = ?job.job.id))]
     async fn on_fail(
         &self,
         job: &BorrowedJob<Self::JobData>,
-        _fail_data: FailHookData<'_, Self::ErrorData>,
+        fail_data: FailHookData<'_, Self::ErrorData>,
         _tx: &mut TransactionContext<'_>,
     ) {
-        self.soft_release_eoa_lock(&job.job.data).await;
+        if let EoaExecutorWorkerError::StoreError { inner_error, .. } = &fail_data.error {
+            if let TransactionStoreError::LockLost { .. } = &inner_error {
+                tracing::error!(
+                    eoa = ?job.job.data.eoa_address,
+                    chain_id = job.job.data.chain_id,
+                    "Encountered lock lost store error, skipping soft release of EOA lock"
+                );
+                return;
+            }
+        } else {
+            self.soft_release_eoa_lock(&job.job.data).await;
+        }
     }
 }
 
