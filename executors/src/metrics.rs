@@ -67,7 +67,7 @@ impl ExecutorMetrics {
                 "tw_engine_executor_eoa_stuck_duration_seconds",
                 "Duration since last nonce movement for EOAs that are considered stuck"
             ).buckets(vec![200.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0, 7200.0, 14400.0]),
-            &["eoa_address", "chain_id"],
+            &["eoa_address", "chain_id", "out_of_funds"],
             registry
         )?;
 
@@ -202,12 +202,12 @@ impl EoaMetrics {
     }
 
     /// Record stuck EOA metric when nonce hasn't moved for too long
-    pub fn record_stuck_eoa(&self, eoa_address: alloy::primitives::Address, chain_id: u64, time_since_last_movement_seconds: f64) {
+    pub fn record_stuck_eoa(&self, eoa_address: alloy::primitives::Address, chain_id: u64, time_since_last_movement_seconds: f64, out_of_funds: bool) {
         // Only record if EOA is actually stuck (exceeds threshold)
         if time_since_last_movement_seconds > self.stuck_threshold_seconds as f64 {
             let metrics = get_metrics();
             metrics.eoa_stuck_duration
-                .with_label_values(&[&eoa_address.to_string(), &chain_id.to_string()])
+                .with_label_values(&[&eoa_address.to_string(), &chain_id.to_string(), &out_of_funds.to_string()])
                 .observe(time_since_last_movement_seconds);
         }
     }
@@ -278,7 +278,7 @@ mod tests {
         eoa_metrics.record_transaction_sent(test_address, 1, 15.0); // Will record degradation (above threshold)
         eoa_metrics.record_transaction_confirmed(test_address, 1, 60.0); // Won't record degradation (below threshold)
         eoa_metrics.record_transaction_confirmed(test_address, 1, 180.0); // Will record degradation (above threshold)
-        eoa_metrics.record_stuck_eoa(test_address, 1, 900.0); // Will record stuck EOA
+        eoa_metrics.record_stuck_eoa(test_address, 1, 900.0, false); // Will record stuck EOA
         
         // Test that default metrics can be exported
         let metrics_output = export_default_metrics().expect("Should be able to export default metrics");

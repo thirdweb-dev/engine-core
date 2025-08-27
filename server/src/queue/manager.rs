@@ -188,6 +188,15 @@ impl QueueManager {
             .await?
             .arc();
 
+        // Create delegation contract cache for EIP-7702
+        let delegation_contract_cache = engine_executors::eip7702_executor::delegation_cache::DelegationContractCache::new(
+            moka::future::Cache::builder()
+                .max_capacity(10000) // Large capacity since it's a single entry per chain
+                .time_to_live(Duration::from_secs(24 * 60 * 60)) // 24 hours as requested
+                .time_to_idle(Duration::from_secs(24 * 60 * 60)) // Also 24 hours for TTI
+                .build(),
+        );
+
         // Create EIP-7702 send queue
         let eip7702_send_handler = Eip7702SendHandler {
             chain_service: chain_service.clone(),
@@ -195,6 +204,7 @@ impl QueueManager {
             webhook_queue: webhook_queue.clone(),
             confirm_queue: eip7702_confirm_queue.clone(),
             transaction_registry: transaction_registry.clone(),
+            delegation_contract_cache,
         };
 
         let eip7702_send_queue = Queue::builder()

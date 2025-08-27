@@ -22,7 +22,11 @@ use twmq::{
 };
 
 use crate::{
-    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds_from_twmq},
+    eip7702_executor::delegation_cache::DelegationContractCache,
+    metrics::{
+        calculate_duration_seconds_from_twmq, current_timestamp_ms,
+        record_transaction_queued_to_sent,
+    },
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -138,6 +142,7 @@ where
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<CS>>>,
     pub transaction_registry: Arc<TransactionRegistry>,
+    pub delegation_contract_cache: DelegationContractCache,
 }
 
 impl<CS> ExecutorStage for Eip7702SendHandler<CS>
@@ -216,8 +221,23 @@ where
             None => account.owner_transaction(&job_data.transactions),
         };
 
+        // Get delegation contract from cache
+        let delegation_contract = self
+            .delegation_contract_cache
+            .get_delegation_contract(transactions.account().chain())
+            .await
+            .map_err(|e| Eip7702SendError::DelegationCheckFailed { inner_error: e })
+            .map_err_nack(
+                Some(Duration::from_secs(2)),
+                twmq::job::RequeuePosition::Last,
+            )?;
+
         let transactions = transactions
-            .add_authorization_if_needed(self.eoa_signer.deref(), &job_data.signing_credential)
+            .add_authorization_if_needed(
+                self.eoa_signer.deref(),
+                &job_data.signing_credential,
+                delegation_contract,
+            )
             .await
             .map_err(|e| {
                 let mapped_error = match e {
@@ -281,10 +301,11 @@ where
 
         tracing::debug!(transaction_id = ?transaction_id, "EIP-7702 transaction sent to bundler");
 
-                    // Record metrics: transaction queued to sent
-            let sent_timestamp = current_timestamp_ms();
-            let queued_to_sent_duration = calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
-            record_transaction_queued_to_sent("eip7702", job_data.chain_id, queued_to_sent_duration);
+        // Record metrics: transaction queued to sent
+        let sent_timestamp = current_timestamp_ms();
+        let queued_to_sent_duration =
+            calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
+        record_transaction_queued_to_sent("eip7702", job_data.chain_id, queued_to_sent_duration);
 
         let sender_details = match session_key_target_address {
             Some(target_address) => Eip7702Sender::SessionKey {

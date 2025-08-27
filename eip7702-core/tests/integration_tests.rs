@@ -27,7 +27,6 @@ use engine_core::{
     transaction::InnerTransaction,
 };
 use engine_eip7702_core::{
-    constants::MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
     delegated_account::DelegatedAccount,
     transaction::{CallSpec, LimitType, SessionSpec, WrappedCalls},
 };
@@ -290,6 +289,7 @@ struct TestSetup {
     user_address: Address,
 
     signer: MockEoaSigner,
+    delegation_contract: Option<Address>,
 }
 
 const ANVIL_PORT: u16 = 8545;
@@ -358,6 +358,7 @@ impl TestSetup {
             signer,
             mock_erc20_contract: contract,
             anvil_provider: provider,
+            delegation_contract: None,
         })
     }
 
@@ -376,22 +377,32 @@ impl TestSetup {
         Ok(())
     }
 
-    async fn fetch_and_set_bytecode(&self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_and_set_bytecode(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Fetch bytecode from Base Sepolia
         let base_sepolia_url = "https://84532.rpc.thirdweb.com".parse()?;
         let base_sepolia_provider = ProviderBuilder::new().connect_http(base_sepolia_url);
 
+        let delegation_contract_response = self
+            .chain
+            .bundler_client()
+            .tw_get_delegation_contract()
+            .await?;
+
+        // Store the delegation contract address for later use
+        self.delegation_contract = Some(delegation_contract_response.delegation_contract);
+
         let bytecode = base_sepolia_provider
-            .get_code_at(MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS)
+            .get_code_at(delegation_contract_response.delegation_contract)
             .await?;
         // Set bytecode on our Anvil chain
         let _: () = self
             .anvil_provider
-            .anvil_set_code(MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS, bytecode)
+            .anvil_set_code(delegation_contract_response.delegation_contract, bytecode)
             .await?;
 
         println!(
-            "Set bytecode for minimal account implementation at {MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS}"
+            "Set bytecode for minimal account implementation at {:?}",
+            delegation_contract_response.delegation_contract
         );
 
         Ok(())
@@ -645,7 +656,7 @@ impl TestSetup {
 #[tokio::test]
 async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     // Set up test environment
-    let setup = TestSetup::new().await?;
+    let mut setup = TestSetup::new().await?;
 
     // Step 1: Fetch and set bytecode from Base Sepolia
     setup.fetch_and_set_bytecode().await?;
@@ -683,7 +694,11 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     let developer_tx = developer_account
         .clone()
         .owner_transaction(&[mint_transaction])
-        .add_authorization_if_needed(&setup.signer, &setup.developer_credentials)
+        .add_authorization_if_needed(
+            &setup.signer, 
+            &setup.developer_credentials,
+            setup.delegation_contract.expect("Delegation contract should be set")
+        )
         .await?;
 
     let (wrapped_calls_json, signature) = developer_tx
@@ -723,7 +738,11 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     // Step 8: Delegate user account (session key granter)
     // User signs authorization but executor broadcasts it (user has no funds)
     let user_authorization = user_account
-        .sign_authorization(&setup.signer, &setup.user_credentials)
+        .sign_authorization(
+            &setup.signer, 
+            &setup.user_credentials,
+            setup.delegation_contract.expect("Delegation contract should be set")
+        )
         .await?;
 
     // Executor broadcasts the user's delegation transaction
