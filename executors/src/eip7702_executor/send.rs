@@ -227,7 +227,10 @@ where
             .get_delegation_contract(transactions.account().chain())
             .await
             .map_err(|e| Eip7702SendError::DelegationCheckFailed { inner_error: e })
-            .map_err_fail()?;
+            .map_err_nack(
+                Some(Duration::from_secs(2)),
+                twmq::job::RequeuePosition::Last,
+            )?;
 
         let transactions = transactions
             .add_authorization_if_needed(
