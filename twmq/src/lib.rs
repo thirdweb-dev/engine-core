@@ -574,6 +574,8 @@ impl<H: DurableExecution> Queue<H> {
         self: &Arc<Self>,
         batch_size: usize,
     ) -> RedisResult<Vec<BorrowedJob<H::JobData>>> {
+        let pop_id = nanoid::nanoid!(4);
+
         // Lua script that does:
         // 1. Clean up expired leases (with lease token validation)
         // 2. Process pending cancellations
@@ -582,8 +584,9 @@ impl<H: DurableExecution> Queue<H> {
         let script = redis::Script::new(
             r#"
             local now = tonumber(ARGV[1])
-            local batch_size = tonumber(ARGV[2])
-            local lease_seconds = tonumber(ARGV[3])
+            local pop_id = ARGV[2]
+            local batch_size = tonumber(ARGV[3])
+            local lease_seconds = tonumber(ARGV[4])
 
             local queue_id = KEYS[1]
             local delayed_zset_name = KEYS[2]
@@ -707,7 +710,7 @@ impl<H: DurableExecution> Queue<H> {
                     local attempts = redis.call('HINCRBY', job_meta_hash_name, 'attempts', 1)
 
                     -- Generate unique lease token
-                    local lease_token = now .. '_' .. job_id .. '_' .. attempts
+                    local lease_token = now .. '_' .. job_id .. '_' .. attempts .. '_' .. pop_id
 
                     -- Create separate lease key with TTL
                     local lease_key = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
@@ -748,6 +751,7 @@ impl<H: DurableExecution> Queue<H> {
             .key(self.failed_list_name())
             .key(self.success_list_name())
             .arg(now)
+            .arg(pop_id)
             .arg(batch_size)
             .arg(self.options.lease_duration.as_secs())
             .invoke_async(&mut self.redis.clone())
