@@ -1,6 +1,7 @@
 use alloy::primitives::TxHash;
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionReceipt;
+use alloy::transports::RpcError;
 use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
 use engine_core::rpc_clients::TwGetTransactionHashResponse;
 use engine_core::{
@@ -204,11 +205,19 @@ where
                     error = ?e,
                     "Failed to get transaction hash from bundler"
                 );
-                Eip7702ConfirmationError::TransactionHashError {
-                    message: e.to_string(),
+
+                if e.is_error_resp() {
+                    Eip7702ConfirmationError::TransactionHashError {
+                        message: e.to_string(),
+                    }
+                    .fail()
+                } else {
+                    Eip7702ConfirmationError::TransactionHashError {
+                        message: e.to_string(),
+                    }
+                    .nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
                 }
-            })
-            .map_err_nack(Some(Duration::from_secs(10)), RequeuePosition::Last)?;
+            })?;
 
         let transaction_hash = match transaction_hash_res {
             TwGetTransactionHashResponse::Success { transaction_hash } => {
