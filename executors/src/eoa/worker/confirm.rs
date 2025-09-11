@@ -2,15 +2,18 @@ use alloy::{primitives::B256, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
 
-use crate::eoa::{
-    EoaExecutorStore,
-    store::{
-        CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransactionDehydrated,
-        TransactionStoreError,
-    },
-    worker::{
-        EoaExecutorWorker,
-        error::{EoaExecutorWorkerError, should_update_balance_threshold},
+use crate::{
+    FlashblocksSupport,
+    eoa::{
+        EoaExecutorStore,
+        store::{
+            CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransactionDehydrated,
+            TransactionStoreError,
+        },
+        worker::{
+            EoaExecutorWorker,
+            error::{EoaExecutorWorkerError, should_update_balance_threshold},
+        },
     },
 };
 
@@ -34,6 +37,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .chain
             .provider()
             .get_transaction_count(self.eoa)
+            .with_flashblocks_support(self.chain.chain_id())
             .await
             .map_err(|e| {
                 let engine_error = e.to_engine_error(&self.chain);
