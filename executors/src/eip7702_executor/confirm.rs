@@ -1,7 +1,6 @@
 use alloy::primitives::TxHash;
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionReceipt;
-use alloy::transports::RpcError;
 use engine_core::error::{AlloyRpcErrorToEngineError, EngineError};
 use engine_core::rpc_clients::TwGetTransactionHashResponse;
 use engine_core::{
