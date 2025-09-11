@@ -5,14 +5,18 @@ pub mod metrics;
 pub mod transaction_registry;
 pub mod webhook;
 
-use alloy::{rpc::json_rpc::{RpcSend, RpcRecv}, providers::Provider};
+use alloy::{
+    providers::Provider,
+    rpc::json_rpc::{RpcRecv, RpcSend},
+};
 
 /// Extension trait for RpcWithBlock to automatically select block tag based on flashblocks support
 pub trait FlashblocksSupport {
     fn with_flashblocks_support(self, chain_id: u64) -> Self;
 }
 
-impl<Params, Resp, Output, Map> FlashblocksSupport for alloy::providers::RpcWithBlock<Params, Resp, Output, Map>
+impl<Params, Resp, Output, Map> FlashblocksSupport
+    for alloy::providers::RpcWithBlock<Params, Resp, Output, Map>
 where
     Params: RpcSend,
     Resp: RpcRecv,
@@ -41,7 +45,11 @@ pub trait FlashblocksTransactionCount {
         &self,
         address: alloy::primitives::Address,
         chain_id: u64,
-    ) -> impl Future<Output = Result<TransactionCounts, alloy::transports::TransportError>>;
+    ) -> impl Future<Output = Result<TransactionCounts, alloy::transports::TransportError>> + Send;
+}
+
+fn is_flashblocks_chain(chain_id: u64) -> bool {
+    matches!(chain_id, 8453 | 84532)
 }
 
 impl<T> FlashblocksTransactionCount for T
@@ -53,26 +61,23 @@ where
         address: alloy::primitives::Address,
         chain_id: u64,
     ) -> Result<TransactionCounts, alloy::transports::TransportError> {
-        match chain_id {
-            8453 | 84532 => {
-                // For flashblocks chains, fetch both latest and pending in parallel
-                let (latest_result, preconfirmed_result) = tokio::try_join!(
-                    self.get_transaction_count(address),
-                    self.get_transaction_count(address).pending()
-                )?;
-                Ok(TransactionCounts {
-                    latest: latest_result,
-                    preconfirmed: preconfirmed_result,
-                })
-            }
-            _ => {
-                // For non-flashblocks chains, fetch once and use same value for both
-                let count = self.get_transaction_count(address).await?;
-                Ok(TransactionCounts {
-                    latest: count,
-                    preconfirmed: count,
-                })
-            }
+        if is_flashblocks_chain(chain_id) {
+            // For flashblocks chains, fetch both latest and pending in parallel
+            let (latest_result, preconfirmed_result) = tokio::try_join!(
+                self.get_transaction_count(address),
+                self.get_transaction_count(address).pending()
+            )?;
+            Ok(TransactionCounts {
+                latest: latest_result,
+                preconfirmed: preconfirmed_result,
+            })
+        } else {
+            // For non-flashblocks chains, fetch once and use same value for both
+            let count = self.get_transaction_count(address).await?;
+            Ok(TransactionCounts {
+                latest: count,
+                preconfirmed: count,
+            })
         }
     }
 }
