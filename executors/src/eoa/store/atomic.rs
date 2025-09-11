@@ -593,12 +593,12 @@ impl AtomicEoaExecutorStore {
     pub async fn clean_submitted_transactions(
         &self,
         confirmed_transactions: &[ConfirmedTransaction],
-        last_confirmed_nonce: u64,
+        transaction_counts: crate::TransactionCounts,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<CleanupReport, TransactionStoreError> {
         self.execute_with_watch_and_retry(&CleanSubmittedTransactions {
             confirmed_transactions,
-            last_confirmed_nonce,
+            transaction_counts,
             keys: &self.keys,
             webhook_queue,
             eoa_metrics: &self.eoa_metrics,

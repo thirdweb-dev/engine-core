@@ -3,7 +3,7 @@ use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    FlashblocksSupport,
+    FlashblocksTransactionCount, TransactionCounts,
     eoa::{
         EoaExecutorStore,
         store::{
@@ -32,17 +32,16 @@ impl<C: Chain> EoaExecutorWorker<C> {
     // ========== CONFIRM FLOW ==========
     #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn confirm_flow(&self) -> Result<CleanupReport, EoaExecutorWorkerError> {
-        // Get fresh on-chain transaction count
-        let current_chain_transaction_count = self
+        // Get fresh on-chain transaction counts (both latest and preconfirmed)
+        let transaction_counts = self
             .chain
             .provider()
-            .get_transaction_count(self.eoa)
-            .with_flashblocks_support(self.chain.chain_id())
+            .get_transaction_counts_with_flashblocks_support(self.eoa, self.chain.chain_id())
             .await
             .map_err(|e| {
                 let engine_error = e.to_engine_error(&self.chain);
                 EoaExecutorWorkerError::RpcError {
-                    message: format!("Failed to get transaction count: {engine_error}"),
+                    message: format!("Failed to get transaction counts: {engine_error}"),
                     inner_error: engine_error,
                 }
             })?;
@@ -50,7 +49,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         if self.store.is_manual_reset_scheduled().await? {
             tracing::info!("Manual reset scheduled, executing now");
             self.store
-                .reset_nonces(current_chain_transaction_count)
+                .reset_nonces(transaction_counts.latest)
                 .await?;
         }
 
@@ -58,13 +57,13 @@ impl<C: Chain> EoaExecutorWorker<C> {
             Err(e) => match e {
                 TransactionStoreError::NonceSyncRequired { .. } => {
                     tracing::warn!(
-                        cached_transaction_count = current_chain_transaction_count,
+                        cached_transaction_count = transaction_counts.latest,
                         "Nonce sync required, store was uninitialized, updating cached transaction count with current chain transaction count"
                     );
                     self.store
-                        .update_cached_transaction_count(current_chain_transaction_count)
+                        .update_cached_transaction_count(transaction_counts.latest)
                         .await?;
-                    current_chain_transaction_count
+                    transaction_counts.latest
                 }
                 _ => return Err(e.into()),
             },
@@ -74,7 +73,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let submitted_count = self.store.get_submitted_transactions_count().await?;
 
         // no nonce progress
-        if current_chain_transaction_count <= cached_transaction_count {
+        if transaction_counts.preconfirmed <= cached_transaction_count {
             let current_health = self.get_eoa_health().await?;
             let now = EoaExecutorStore::now();
             // No nonce progress - check if we should attempt gas bumping for stalled nonce
@@ -97,14 +96,14 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     tracing::info!(
                         time_since_movement = time_since_movement,
                         stall_timeout = NONCE_STALL_LIMIT_MS,
-                        current_chain_nonce = current_chain_transaction_count,
+                        current_chain_nonce = transaction_counts.preconfirmed,
                         cached_transaction_count = cached_transaction_count,
                         "Nonce has been stalled, attempting gas bump"
                     );
 
                     // Attempt gas bump for the next expected nonce
                     if let Err(e) = self
-                        .attempt_gas_bump_for_stalled_nonce(current_chain_transaction_count)
+                        .attempt_gas_bump_for_stalled_nonce(transaction_counts.preconfirmed)
                         .await
                     {
                         tracing::warn!(
@@ -141,7 +140,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         }
 
         tracing::info!(
-            current_chain_nonce = current_chain_transaction_count,
+            current_chain_nonce_latest = transaction_counts.latest,
+            current_chain_nonce_preconfirmed = transaction_counts.preconfirmed,
             cached_transaction_count = cached_transaction_count,
             "Processing confirmations"
         );
@@ -151,7 +151,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let waiting_txs = self
             .store
             .get_submitted_transactions_below_chain_transaction_count(
-                current_chain_transaction_count,
+                transaction_counts.preconfirmed,
             )
             .await?;
 
@@ -201,15 +201,18 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .store
             .clean_submitted_transactions(
                 &successes,
-                current_chain_transaction_count - 1,
+                TransactionCounts {
+                    latest: transaction_counts.latest - 1,       // Use latest for replacement detection
+                    preconfirmed: transaction_counts.preconfirmed - 1, // Use preconfirmed for confirmation
+                },
                 self.webhook_queue.clone(),
             )
             .await?;
 
-        if current_chain_transaction_count != cached_transaction_count {
-            if current_chain_transaction_count < cached_transaction_count {
+        if transaction_counts.latest != cached_transaction_count {
+            if transaction_counts.latest < cached_transaction_count {
                 tracing::error!(
-                    current_chain_transaction_count = current_chain_transaction_count,
+                    current_chain_transaction_count = transaction_counts.latest,
                     cached_transaction_count = cached_transaction_count,
                     "Fresh fetched chain transaction count is lower than cached transaction count. \
                     This indicates a re-org or RPC block lag. Engine will use the newest fetched transaction count from now (assuming re-org).\
@@ -219,7 +222,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             }
 
             self.store
-                .update_cached_transaction_count(current_chain_transaction_count)
+                .update_cached_transaction_count(transaction_counts.latest)
                 .await?;
         }
 
