@@ -209,17 +209,19 @@ impl<'a> CleanSubmittedTransactions<'a> {
         pipeline: &mut Pipeline,
         tx: &SubmittedTransactionHydrated,
     ) {
-        let (submitted_tx_redis_string, _nonce) = tx.clone().to_redis_string_with_nonce();
+        let (submitted_tx_redis_string, _nonce) = tx.to_redis_string_with_nonce();
 
         pipeline.zrem(
             self.keys.submitted_transactions_zset_name(),
             &submitted_tx_redis_string,
         );
 
+        let (submitted_tx_legacy_redis_string, _nonce) = tx.to_legacy_redis_string_with_nonce();
+
         // Also remove the legacy formatted key if present
         pipeline.zrem(
             self.keys.submitted_transactions_zset_name(),
-            tx.to_legacy_redis_string_with_nonce(),
+            &submitted_tx_legacy_redis_string,
         );
 
         pipeline.del(self.keys.transaction_hash_to_id_key_name(tx.hash()));

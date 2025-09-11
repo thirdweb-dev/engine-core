@@ -202,8 +202,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .clean_submitted_transactions(
                 &successes,
                 TransactionCounts {
-                    latest: transaction_counts.latest - 1,       // Use latest for replacement detection
-                    preconfirmed: transaction_counts.preconfirmed - 1, // Use preconfirmed for confirmation
+                    latest: transaction_counts.latest.saturating_sub(1),       // Use latest for replacement detection
+                    preconfirmed: transaction_counts.preconfirmed.saturating_sub(1), // Use preconfirmed for confirmation
                 },
                 self.webhook_queue.clone(),
             )
