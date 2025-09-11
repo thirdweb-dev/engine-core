@@ -208,9 +208,15 @@ where
         let job_duration = calculate_duration_seconds(job_start_time, job_end_time);
         record_eoa_job_processing_time(data.chain_id, job_duration);
 
+        let delay = if is_minimal_account {
+            Some(Duration::from_secs(2))
+        } else {
+            Some(Duration::from_millis(200))
+        };
+
         if result.is_work_remaining() {
             Err(EoaExecutorWorkerError::WorkRemaining { result })
-                .map_err_nack(Some(Duration::from_millis(200)), RequeuePosition::Last)
+                .map_err_nack(delay, RequeuePosition::Last)
         } else {
             Ok(result)
         }
