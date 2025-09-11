@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::{
+    TransactionCounts,
     eoa::{
         EoaExecutorStore, EoaTransactionRequest,
         events::EoaExecutorEvent,
@@ -16,7 +17,7 @@ use crate::{
             TransactionStoreError, atomic::SafeRedisTransaction,
         },
     },
-    metrics::{current_timestamp_ms, calculate_duration_seconds, EoaMetrics},
+    metrics::{EoaMetrics, calculate_duration_seconds, current_timestamp_ms},
     webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
 
@@ -194,11 +195,37 @@ impl SubmittedTransactionDehydrated {
 }
 
 pub struct CleanSubmittedTransactions<'a> {
-    pub last_confirmed_nonce: u64,
+    pub transaction_counts: TransactionCounts,
     pub confirmed_transactions: &'a [ConfirmedTransaction],
     pub keys: &'a EoaExecutorStoreKeys,
     pub webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     pub eoa_metrics: &'a EoaMetrics,
+}
+
+impl<'a> CleanSubmittedTransactions<'a> {
+    /// Helper method to remove a transaction from Redis submitted state
+    fn remove_transaction_from_redis_submitted_zset(
+        &self,
+        pipeline: &mut Pipeline,
+        tx: &SubmittedTransactionHydrated,
+    ) {
+        let (submitted_tx_redis_string, _nonce) = tx.to_redis_string_with_nonce();
+
+        pipeline.zrem(
+            self.keys.submitted_transactions_zset_name(),
+            &submitted_tx_redis_string,
+        );
+
+        let (submitted_tx_legacy_redis_string, _nonce) = tx.to_legacy_redis_string_with_nonce();
+
+        // Also remove the legacy formatted key if present
+        pipeline.zrem(
+            self.keys.submitted_transactions_zset_name(),
+            &submitted_tx_legacy_redis_string,
+        );
+
+        pipeline.del(self.keys.transaction_hash_to_id_key_name(tx.hash()));
+    }
 }
 
 pub struct CleanAndGetRecycledNonces<'a> {
@@ -254,11 +281,17 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
         conn: &mut ConnectionManager,
         store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
+        // Fetch transactions up to the latest confirmed nonce for replacements
+        // This includes both transactions that should be confirmed and those that might be replaced
+        let max_nonce = std::cmp::max(
+            self.transaction_counts.preconfirmed,
+            self.transaction_counts.latest,
+        );
         let submitted_txs: Vec<SubmittedTransactionStringWithNonce> = conn
             .zrangebyscore_withscores(
                 self.keys.submitted_transactions_zset_name(),
                 0,
-                self.last_confirmed_nonce as isize,
+                max_nonce as isize,
             )
             .await?;
 
@@ -296,31 +329,31 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
         let mut replaced_transactions = Vec::with_capacity(submitted_txs.len());
 
         for tx in &submitted_txs {
-            // Clean up this hash from Redis (happens for ALL hashes)
-            let (submitted_tx_redis_string, _nonce) = tx.clone().to_redis_string_with_nonce();
+            let tx_nonce = tx.nonce();
 
-            pipeline.zrem(
-                self.keys.submitted_transactions_zset_name(),
-                &submitted_tx_redis_string,
-            );
+            // Only process transactions that are within range for either confirmation or replacement
+            let should_process = tx_nonce <= self.transaction_counts.preconfirmed
+                || tx_nonce <= self.transaction_counts.latest;
 
-            // Also remove the legacy formmated key if present
-            pipeline.zrem(
-                self.keys.submitted_transactions_zset_name(),
-                tx.to_legacy_redis_string_with_nonce(),
-            );
-
-            pipeline.del(self.keys.transaction_hash_to_id_key_name(tx.hash()));
+            if !should_process {
+                continue;
+            }
 
             // Process each unique transaction_id once
             if processed_ids.insert(tx.transaction_id()) {
                 match (tx.transaction_id(), confirmed_ids.get(tx.transaction_id())) {
-                    // if the transaction id is noop, we don't do anything
-                    (NO_OP_TRANSACTION_ID, _) => report.noop_count += 1,
+                    // if the transaction id is noop, we don't do anything but still clean up
+                    (NO_OP_TRANSACTION_ID, _) => {
+                        // Clean up noop transaction from Redis
+                        self.remove_transaction_from_redis_submitted_zset(pipeline, tx);
+                        report.noop_count += 1;
+                    }
 
                     // in case of a valid ID, we check if it's in the confirmed transactions
                     // if it is confirmed, we succeed it and queue success jobs
                     (id, Some(confirmed_tx)) => {
+                        // Clean up confirmed transaction from Redis
+                        self.remove_transaction_from_redis_submitted_zset(pipeline, tx);
                         let data_key_name = self.keys.transaction_data_key_name(id);
                         pipeline.hset(&data_key_name, "status", "confirmed");
                         pipeline.hset(&data_key_name, "completed_at", now);
@@ -333,15 +366,13 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions
                             let confirmed_timestamp = current_timestamp_ms();
-                            let queued_to_mined_duration = calculate_duration_seconds(
-                                tx.queued_at, 
-                                confirmed_timestamp
-                            );
+                            let queued_to_mined_duration =
+                                calculate_duration_seconds(tx.queued_at, confirmed_timestamp);
                             // Record metrics using the clean EoaMetrics abstraction
                             self.eoa_metrics.record_transaction_confirmed(
                                 self.keys.eoa,
                                 self.keys.chain_id,
-                                queued_to_mined_duration
+                                queued_to_mined_duration,
                             );
                             if !tx.user_request.webhook_options.is_empty() {
                                 let event = EoaExecutorEvent {
@@ -372,32 +403,55 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                     // if the ID is not in the confirmed transactions, we queue it for pending
                     _ => {
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
-                            // zadd_multiple expects (score, member)
-                            replaced_transactions.push((tx.queued_at, tx.transaction_id.clone()));
+                            // Only move to pending (replaced) if it's within the latest transaction count range
+                            // This prevents false replacements due to flashblocks propagation delays
+                            if tx_nonce <= self.transaction_counts.latest {
+                                // Clean up replaced transaction from Redis
+                                self.remove_transaction_from_redis_submitted_zset(
+                                    pipeline,
+                                    &SubmittedTransactionHydrated::Real(tx.clone()),
+                                );
 
-                            if !tx.user_request.webhook_options.is_empty() {
-                                let event = EoaExecutorEvent {
-                                    transaction_id: tx.transaction_id.clone(),
-                                    address: tx.user_request.from,
-                                };
+                                // zadd_multiple expects (score, member)
+                                replaced_transactions
+                                    .push((tx.queued_at, tx.transaction_id.clone()));
 
-                                let success_envelope =
-                                    event.transaction_replaced_envelope(tx.data.clone());
+                                if !tx.user_request.webhook_options.is_empty() {
+                                    let event = EoaExecutorEvent {
+                                        transaction_id: tx.transaction_id.clone(),
+                                        address: tx.user_request.from,
+                                    };
 
-                                let mut tx_context = self
-                                    .webhook_queue
-                                    .transaction_context_from_pipeline(pipeline);
-                                if let Err(e) = queue_webhook_envelopes(
-                                    success_envelope,
-                                    tx.user_request.webhook_options.clone(),
-                                    &mut tx_context,
-                                    self.webhook_queue.clone(),
-                                ) {
-                                    tracing::error!("Failed to queue webhook for fail: {}", e);
+                                    let success_envelope =
+                                        event.transaction_replaced_envelope(tx.data.clone());
+
+                                    let mut tx_context = self
+                                        .webhook_queue
+                                        .transaction_context_from_pipeline(pipeline);
+                                    if let Err(e) = queue_webhook_envelopes(
+                                        success_envelope,
+                                        tx.user_request.webhook_options.clone(),
+                                        &mut tx_context,
+                                        self.webhook_queue.clone(),
+                                    ) {
+                                        tracing::error!("Failed to queue webhook for fail: {}", e);
+                                    }
                                 }
-                            }
 
-                            report.moved_to_pending += 1;
+                                report.moved_to_pending += 1;
+                            } else {
+                                // Transaction is beyond latest confirmed nonce, keep it in submitted state
+                                // This happens when preconfirmed > latest due to flashblocks
+                                tracing::debug!(
+                                    transaction_id = tx.transaction_id,
+                                    transaction_hash = tx.transaction_hash,
+                                    tx_nonce = tx_nonce,
+                                    latest_confirmed_nonce = self.transaction_counts.latest,
+                                    preconfirmed_nonce = self.transaction_counts.preconfirmed,
+                                    "Keeping transaction in submitted state due to potential flashblocks propagation delay"
+                                );
+                                // Don't increment any counter - transaction stays in submitted state
+                            }
                         }
                     }
                 }
@@ -413,7 +467,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
 
         pipeline.set(
             self.keys.last_transaction_count_key_name(),
-            self.last_confirmed_nonce + 1,
+            self.transaction_counts.latest + 1,
         );
 
         // Finalize report stats
