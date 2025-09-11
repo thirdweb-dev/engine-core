@@ -214,7 +214,7 @@ where
                     Eip7702ConfirmationError::TransactionHashError {
                         message: e.to_string(),
                     }
-                    .nack(Some(Duration::from_secs(10)), RequeuePosition::Last)
+                    .nack(Some(Duration::from_secs(2)), RequeuePosition::Last)
                 }
             })?;
 
@@ -232,7 +232,7 @@ where
                 return Err(Eip7702ConfirmationError::TransactionHashError {
                     message: "Transaction not yet confirmed".to_string(),
                 })
-                .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
+                .map_err_nack(Some(Duration::from_secs(1)), RequeuePosition::Last);
             }
         };
 
@@ -253,7 +253,7 @@ where
                     message: format!("Failed to get transaction receipt: {e}"),
                     inner_error: Some(e.to_engine_error(&chain)),
                 }
-                .nack(Some(Duration::from_secs(5)), RequeuePosition::Last)
+                .nack(Some(Duration::from_secs(1)), RequeuePosition::Last)
             })?;
 
         let receipt = match receipt {
@@ -264,7 +264,7 @@ where
                     message: "Transaction not mined yet".to_string(),
                     transaction_hash,
                 })
-                .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last);
+                .map_err_nack(Some(Duration::from_secs(1)), RequeuePosition::Last);
             }
         };
 

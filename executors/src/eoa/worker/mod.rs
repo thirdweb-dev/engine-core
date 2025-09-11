@@ -210,7 +210,7 @@ where
 
         if result.is_work_remaining() {
             Err(EoaExecutorWorkerError::WorkRemaining { result })
-                .map_err_nack(Some(Duration::from_secs(2)), RequeuePosition::Last)
+                .map_err_nack(Some(Duration::from_millis(200)), RequeuePosition::Last)
         } else {
             Ok(result)
         }
