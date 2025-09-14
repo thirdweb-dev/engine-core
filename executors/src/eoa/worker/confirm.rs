@@ -146,6 +146,24 @@ impl<C: Chain> EoaExecutorWorker<C> {
             "Processing confirmations"
         );
 
+        // Always update cached transaction count first, regardless of whether there are transactions to confirm
+        if transaction_counts.latest != cached_transaction_count {
+            if transaction_counts.latest < cached_transaction_count {
+                tracing::error!(
+                    current_chain_transaction_count = transaction_counts.latest,
+                    cached_transaction_count = cached_transaction_count,
+                    "Fresh fetched chain transaction count is lower than cached transaction count. \
+                    This indicates a re-org or RPC block lag. Engine will use the newest fetched transaction count from now (assuming re-org).\
+                    Transactions already confirmed will not be attempted again, even if their nonce was higher than the new chain transaction count.
+                    In case this is RPC misbehaviour not reflective of actual chain state, Engine's nonce management might be affected."
+                );
+            }
+
+            self.store
+                .update_cached_transaction_count(transaction_counts.latest)
+                .await?;
+        }
+
         // Get all pending transactions below the current chain transaction count
         // ie, if transaction count is 1, nonce 0 should have mined
         let waiting_txs = self
@@ -208,23 +226,6 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 self.webhook_queue.clone(),
             )
             .await?;
-
-        if transaction_counts.latest != cached_transaction_count {
-            if transaction_counts.latest < cached_transaction_count {
-                tracing::error!(
-                    current_chain_transaction_count = transaction_counts.latest,
-                    cached_transaction_count = cached_transaction_count,
-                    "Fresh fetched chain transaction count is lower than cached transaction count. \
-                    This indicates a re-org or RPC block lag. Engine will use the newest fetched transaction count from now (assuming re-org).\
-                    Transactions already confirmed will not be attempted again, even if their nonce was higher than the new chain transaction count.
-                    In case this is RPC misbehaviour not reflective of actual chain state, Engine's nonce management might be affected."
-                );
-            }
-
-            self.store
-                .update_cached_transaction_count(transaction_counts.latest)
-                .await?;
-        }
 
         Ok(report)
     }
