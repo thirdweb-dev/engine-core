@@ -27,6 +27,9 @@ pub struct QueueConfig {
     
     #[serde(default)]
     pub monitoring: MonitoringConfig,
+    
+    #[serde(default)]
+    pub eoa_executor: EoaExecutorConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +46,20 @@ impl Default for MonitoringConfig {
             eoa_send_degradation_threshold_seconds: 10, // 10 seconds
             eoa_confirmation_degradation_threshold_seconds: 120, // 2 minutes
             eoa_stuck_threshold_seconds: 600, // 10 minutes
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EoaExecutorConfig {
+    pub failed_transaction_expiry_seconds: u64,
+}
+
+impl Default for EoaExecutorConfig {
+    fn default() -> Self {
+        Self {
+            failed_transaction_expiry_seconds: 86400, // 24 hours
         }
     }
 }

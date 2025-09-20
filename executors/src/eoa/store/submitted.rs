@@ -354,21 +354,19 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                     (id, Some(confirmed_tx)) => {
                         // Clean up confirmed transaction from Redis
                         self.remove_transaction_from_redis_submitted_zset(pipeline, tx);
-                        let data_key_name = self.keys.transaction_data_key_name(id);
-                        pipeline.hset(&data_key_name, "status", "confirmed");
-                        pipeline.hset(&data_key_name, "completed_at", now);
-                        pipeline.hset(
-                            &data_key_name,
-                            "receipt",
-                            confirmed_tx.receipt_serialized.clone(),
-                        );
+
+                        // IMMEDIATE CLEANUP: Delete all transaction data since it's confirmed
+                        // Note: Hash mappings will be cleaned up periodically by maintenance script
+                        let keys_to_delete = self.keys.get_all_transaction_keys(id);
+                        for key in keys_to_delete {
+                            pipeline.del(&key);
+                        }
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions
                             let confirmed_timestamp = current_timestamp_ms();
                             let queued_to_mined_duration =
                                 calculate_duration_seconds(tx.queued_at, confirmed_timestamp);
-                            // Record metrics using the clean EoaMetrics abstraction
                             self.eoa_metrics.record_transaction_confirmed(
                                 self.keys.eoa,
                                 self.keys.chain_id,

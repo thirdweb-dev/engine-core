@@ -196,24 +196,18 @@ pub async fn get_transaction_detail(
     let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
 
     // Get transaction data using store method
+    // Note: Successful transactions are immediately cleaned up, so they may not exist
     let transaction_data = store
         .get_transaction_data(&transaction_id)
         .await
-        .map_err(|e| {
-            ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get transaction data: {e}"),
-            })
-        })?;
+        .unwrap_or(None); // Convert error to None - transaction may have been cleaned up
 
-    // Get attempts count using store method
+    // Get attempts count using store method  
+    // Note: Attempts are also cleaned up for successful transactions
     let attempts_count = store
         .get_transaction_attempts_count(&transaction_id)
         .await
-        .map_err(|e| {
-            ApiEngineError(engine_core::error::EngineError::InternalError {
-                message: format!("Failed to get attempts count: {e}"),
-            })
-        })?;
+        .unwrap_or(0); // Default to 0 if cleaned up
 
     let response = TransactionDetailResponse {
         transaction_data,
