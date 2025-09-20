@@ -226,7 +226,6 @@ impl<'a> CleanSubmittedTransactions<'a> {
 
         pipeline.del(self.keys.transaction_hash_to_id_key_name(tx.hash()));
     }
-
 }
 
 pub struct CleanAndGetRecycledNonces<'a> {
@@ -355,7 +354,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                     (id, Some(confirmed_tx)) => {
                         // Clean up confirmed transaction from Redis
                         self.remove_transaction_from_redis_submitted_zset(pipeline, tx);
-                        
+
                         // IMMEDIATE CLEANUP: Delete all transaction data since it's confirmed
                         // Note: Hash mappings will be cleaned up periodically by maintenance script
                         let keys_to_delete = self.keys.get_all_transaction_keys(id);

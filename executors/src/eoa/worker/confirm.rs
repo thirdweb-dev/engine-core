@@ -129,7 +129,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             
                             // Ultimate fallback: check if we should trigger auto-reset
                             let time_since_movement = now.saturating_sub(current_health.last_nonce_movement_at);
-                            if time_since_movement > 30 * 60 * 1000 && submitted_count > 0 { // 30 minutes
+                            if time_since_movement > 5 * 60 * 1000 && submitted_count > 0 { // 5 minutes
                                 tracing::warn!(
                                     nonce = transaction_counts.preconfirmed,
                                     time_since_movement = time_since_movement,
