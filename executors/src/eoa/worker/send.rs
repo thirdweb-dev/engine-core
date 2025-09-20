@@ -7,12 +7,15 @@ use tokio_retry2::{
 use tracing::Instrument;
 
 use crate::eoa::{
+    EoaExecutorStore,
     store::{BorrowedTransaction, PendingTransaction, SubmissionResult},
     worker::{
+        EoaExecutorWorker,
         error::{
-            classify_send_error, is_retryable_preparation_error, should_update_balance_threshold, EoaExecutorWorkerError, SendContext, SendErrorClassification
-        }, EoaExecutorWorker
-    }, EoaExecutorStore,
+            EoaExecutorWorkerError, SendContext, SendErrorClassification, classify_send_error,
+            is_retryable_preparation_error, should_update_balance_threshold,
+        },
+    },
 };
 
 const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in ms
@@ -26,7 +29,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>,
         alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
     > {
-        let retry_strategy = ExponentialBackoff::from_millis(500)
+        let retry_strategy = ExponentialBackoff::from_millis(100)
+            .max_delay_millis(1000)
             .map(jitter) // add jitter
             .take(3); // limit to 3 retries
 
@@ -198,7 +202,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         SendContext::InitialBroadcast,
                     )
                     .instrument(tracing::info_span!(
-                        "send_tx_envelope_with_retry", 
+                        "send_tx_envelope_with_retry",
                         transaction_id = %borrowed_tx.transaction_id,
                         context = "recycled_nonces"
                     ))
@@ -433,7 +437,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         SendContext::InitialBroadcast,
                     )
                     .instrument(tracing::info_span!(
-                        "send_tx_envelope_with_retry", 
+                        "send_tx_envelope_with_retry",
                         transaction_id = %borrowed_tx.transaction_id,
                         context = "new_transactions"
                     ))

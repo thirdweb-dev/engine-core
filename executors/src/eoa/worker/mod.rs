@@ -326,7 +326,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .recover_borrowed_state()
             .await
             .map_err(|e| {
-                tracing::error!("Error in recover_borrowed_state: {}", e);
+                tracing::error!(error = ?e, "Error in recover_borrowed_state");
                 e
             })
             .map_err(|e| e.handle())?;
@@ -455,7 +455,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             SendContext::Rebroadcast,
                         )
                         .instrument(tracing::info_span!(
-                            "send_tx_envelope_with_retry", 
+                            "send_tx_envelope_with_retry",
                             transaction_id = %transaction_id,
                             nonce = nonce,
                             context = "recovery_rebroadcast"

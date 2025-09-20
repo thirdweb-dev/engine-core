@@ -357,10 +357,20 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
 
                         // IMMEDIATE CLEANUP: Delete all transaction data since it's confirmed
                         // Note: Hash mappings will be cleaned up periodically by maintenance script
-                        let keys_to_delete = self.keys.get_all_transaction_keys(id);
-                        for key in keys_to_delete {
-                            pipeline.del(&key);
-                        }
+                        // TODO: Buggy deletions, fix later
+                        // let keys_to_delete = self.keys.get_all_transaction_keys(id);
+                        // for key in keys_to_delete {
+                        //     pipeline.del(&key);
+                        // }
+
+                        let data_key_name = self.keys.transaction_data_key_name(id);
+                        pipeline.hset(&data_key_name, "status", "confirmed");
+                        pipeline.hset(&data_key_name, "completed_at", now);
+                        pipeline.hset(
+                            &data_key_name,
+                            "receipt",
+                            confirmed_tx.receipt_serialized.clone(),
+                        );
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions
