@@ -569,11 +569,17 @@ impl AtomicEoaExecutorStore {
             pipeline.hset(&tx_data_key, "completed_at", now);
             pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
             pipeline.hset(&tx_data_key, "status", "failed");
-            
+
             // Set expiry on all related keys for failed transactions
-            let transaction_keys = self.get_all_transaction_keys(&pending_transaction.transaction_id);
+            let transaction_keys =
+                self.get_all_transaction_keys(&pending_transaction.transaction_id);
+
+            let ttl: i64 = i64::try_from(failed_transaction_expiry_seconds)
+                .unwrap_or(i64::MAX)
+                .max(1);
+
             for key in transaction_keys {
-                pipeline.expire(&key, failed_transaction_expiry_seconds as i64);
+                pipeline.expire(&key, ttl);
             }
 
             let event = EoaExecutorEvent {

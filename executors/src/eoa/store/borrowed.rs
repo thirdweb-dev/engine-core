@@ -12,7 +12,7 @@ use crate::eoa::{
     },
     worker::error::EoaExecutorWorkerError,
 };
-use crate::metrics::{current_timestamp_ms, calculate_duration_seconds, EoaMetrics};
+use crate::metrics::{EoaMetrics, calculate_duration_seconds, current_timestamp_ms};
 use crate::webhook::{WebhookJobHandler, queue_webhook_envelopes};
 
 #[derive(Debug, Clone)]
@@ -122,15 +122,13 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                 SubmissionResultType::Success => {
                     // Record metrics: transaction queued to sent
                     let sent_timestamp = current_timestamp_ms();
-                    let queued_to_sent_duration = calculate_duration_seconds(
-                        result.transaction.queued_at, 
-                        sent_timestamp
-                    );
+                    let queued_to_sent_duration =
+                        calculate_duration_seconds(result.transaction.queued_at, sent_timestamp);
                     // Record metrics using the clean EoaMetrics abstraction
                     self.eoa_metrics.record_transaction_sent(
                         self.keys.eoa,
                         self.keys.chain_id,
-                        queued_to_sent_duration
+                        queued_to_sent_duration,
                     );
 
                     // Add to submitted zset
@@ -190,7 +188,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Update transaction data status
                     let tx_data_key = self.keys.transaction_data_key_name(transaction_id);
                     pipeline.hset(&tx_data_key, "status", "pending");
-                    
+
                     // ask for this nonce to be recycled because we did not consume the nonce
                     pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
@@ -226,10 +224,14 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     pipeline.hset(&tx_data_key, "completed_at", now);
                     pipeline.hset(&tx_data_key, "failure_reason", err.to_string());
 
+                    let ttl: i64 = i64::try_from(self.failed_transaction_expiry_seconds)
+                        .unwrap_or(i64::MAX)
+                        .max(1);
+
                     // Set expiry on all related keys for failed transactions
                     let transaction_keys = self.keys.get_all_transaction_keys(transaction_id);
                     for key in transaction_keys {
-                        pipeline.expire(&key, self.failed_transaction_expiry_seconds as i64);
+                        pipeline.expire(&key, ttl);
                     }
 
                     // ask for this nonce to be recycled because we did not consume the nonce
