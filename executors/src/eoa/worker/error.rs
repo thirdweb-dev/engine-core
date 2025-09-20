@@ -167,6 +167,7 @@ pub fn classify_send_error(
     if error_str.contains("invalid signature")
         || error_str.contains("malformed transaction")
         || (context == SendContext::InitialBroadcast && error_str.contains("insufficient funds"))
+        || error_str.contains("transaction execution error: user cant pay the bills")
         || error_str.contains("invalid transaction format")
         || error_str.contains("nonce too high")
     // Should trigger nonce reset
@@ -240,6 +241,7 @@ pub fn should_update_balance_threshold(error: &EngineError) -> bool {
                     || message.contains("balance too low")
                     || message.contains("not enough funds")
                     || message.contains("insufficient native token")
+                    || message.contains("transaction execution error: user cant pay the bills")
             }
             _ => false,
         },
