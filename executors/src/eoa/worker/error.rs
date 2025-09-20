@@ -143,9 +143,10 @@ pub enum SendErrorClassification {
     PossiblySent,                     // "nonce too low", "already known" etc
     DeterministicFailure,             // Invalid signature, malformed tx, insufficient funds etc
     DeterministicFailureNonRetryable, // Non-retryable deterministic failure
+    RetryInPlace,                     // Errors that should be retried in place (thirdweb support error, rate limits, etc.)
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum SendContext {
     Rebroadcast,
     InitialBroadcast,
@@ -192,6 +193,21 @@ pub fn classify_send_error(
 
     if error_str.contains("oversized") {
         return SendErrorClassification::DeterministicFailureNonRetryable;
+    }
+
+    // Check for retry-in-place errors
+    if error_str.contains("we are not able to process your request at this time") {
+        return SendErrorClassification::RetryInPlace;
+    }
+
+    // Rate limiting and temporary server errors
+    if error_str.contains("rate limit") 
+        || error_str.contains("too many requests")
+        || error_str.contains("server error")
+        || error_str.contains("internal error")
+        || error_str.contains("connection")
+        || error_str.contains("timeout") {
+        return SendErrorClassification::RetryInPlace;
     }
 
     tracing::warn!(
@@ -296,6 +312,14 @@ impl SubmissionResult {
                     SendErrorClassification::PossiblySent => SubmissionResult {
                         result: SubmissionResultType::Success,
                         transaction: borrowed_transaction.clone().into(),
+                    },
+                    SendErrorClassification::RetryInPlace => {
+                        // Treat retry-in-place errors as success (same as PossiblySent)
+                        // The actual retry logic will be handled in the send flow
+                        SubmissionResult {
+                            result: SubmissionResultType::Success,
+                            transaction: borrowed_transaction.clone().into(),
+                        }
                     },
                     SendErrorClassification::DeterministicFailure => {
                         // Transaction failed, should be retried

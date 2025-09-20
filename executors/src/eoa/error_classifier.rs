@@ -38,6 +38,9 @@ pub enum EoaExecutionError {
         message: String,
         inner_error: Option<EngineError>,
     },
+
+    /// Thirdweb support error that requires retry in place
+    ThirdwebSupportError { message: String },
 }
 
 /// Recovery strategy for an EOA execution error
@@ -113,6 +116,10 @@ impl EoaErrorMapper {
                     }
                 } else if msg_lower.contains("account") {
                     EoaExecutionError::AccountError {
+                        message: message.to_string(),
+                    }
+                } else if msg_lower.contains("we are not able to process your request at this time") {
+                    EoaExecutionError::ThirdwebSupportError {
                         message: message.to_string(),
                     }
                 } else {
@@ -204,6 +211,14 @@ impl EoaErrorMapper {
                 retry_delay: None,
             },
 
+            EoaExecutionError::ThirdwebSupportError { .. } => RecoveryStrategy {
+                queue_confirmation: false,
+                recycle_nonce: false,
+                needs_resync: false,
+                retryable: true,
+                retry_delay: Some(Duration::from_secs(1)), // Short delay for retry in place
+            },
+
             EoaExecutionError::RpcError { .. } => {
                 // This should not be used - let engine error handle it
                 RecoveryStrategy {
@@ -231,6 +246,7 @@ impl EoaExecutionError {
             | EoaExecutionError::GasError { message }
             | EoaExecutionError::PoolLimitExceeded { message }
             | EoaExecutionError::AccountError { message }
+            | EoaExecutionError::ThirdwebSupportError { message }
             | EoaExecutionError::RpcError { message, .. } => message,
         }
     }
