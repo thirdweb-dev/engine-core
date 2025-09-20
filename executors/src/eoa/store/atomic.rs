@@ -503,7 +503,8 @@ impl AtomicEoaExecutorStore {
             // Add new hash:id to submitted (keeping old ones)
             pipeline.zadd(&submitted_key, &submitted_transaction_string, nonce);
 
-            // Still maintain separate hash-to-ID mapping for backward compatibility
+            // Create hash-to-ID mapping for the new gas bump hash
+            // Keep ALL hashes until transaction is fully cleaned up for re-org protection
             pipeline.set(&hash_to_id_key, &submitted_transaction.transaction_id);
 
             // Simply push the new attempt to the attempts list
@@ -554,6 +555,7 @@ impl AtomicEoaExecutorStore {
         pending_transaction: &PendingTransaction,
         error: EoaExecutorWorkerError,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
+        failed_transaction_expiry_seconds: u64,
     ) -> Result<(), TransactionStoreError> {
         self.with_lock_check(|pipeline| {
             let pending_key = self.pending_transactions_zset_name();
@@ -563,10 +565,16 @@ impl AtomicEoaExecutorStore {
             // Remove from pending state
             pipeline.zrem(&pending_key, &pending_transaction.transaction_id);
 
-            // Update transaction data with failure
+            // Update transaction data with failure and set expiry
             pipeline.hset(&tx_data_key, "completed_at", now);
             pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
             pipeline.hset(&tx_data_key, "status", "failed");
+            
+            // Set expiry on all related keys for failed transactions
+            let transaction_keys = self.get_all_transaction_keys(&pending_transaction.transaction_id);
+            for key in transaction_keys {
+                pipeline.expire(&key, failed_transaction_expiry_seconds as i64);
+            }
 
             let event = EoaExecutorEvent {
                 transaction_id: pending_transaction.transaction_id.clone(),
@@ -613,12 +621,14 @@ impl AtomicEoaExecutorStore {
         &self,
         results: Vec<SubmissionResult>,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
+        failed_transaction_expiry_seconds: u64,
     ) -> Result<BorrowedProcessingReport, TransactionStoreError> {
         self.execute_with_watch_and_retry(&ProcessBorrowedTransactions {
             results,
             keys: &self.keys,
             webhook_queue,
             eoa_metrics: &self.eoa_metrics,
+            failed_transaction_expiry_seconds,
         })
         .await
     }

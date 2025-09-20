@@ -181,7 +181,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Use batch processing to handle all submission results
             let processing_report = self
                 .store
-                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone(), self.failed_transaction_expiry_seconds)
                 .await?;
 
             tracing::debug!(
@@ -273,7 +273,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             "Transaction permanently failed due to non-retryable preparation error",
                         );
                         self.store
-                            .fail_pending_transaction(pending, e, self.webhook_queue.clone())
+                            .fail_pending_transaction(pending, e, self.webhook_queue.clone(), self.failed_transaction_expiry_seconds)
                             .await?;
                     }
                 }
@@ -405,7 +405,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Use batch processing to handle all submission results
             let processing_report = self
                 .store
-                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone(), self.failed_transaction_expiry_seconds)
                 .await?;
 
             tracing::debug!(

@@ -31,3 +31,5 @@ queue:
     eoa_send_degradation_threshold_seconds: 30
     eoa_confirmation_degradation_threshold_seconds: 60
     eoa_stuck_threshold_seconds: 300
+  eoa_executor:
+    failed_transaction_expiry_seconds: 86400  # 24 hours for failed transactions

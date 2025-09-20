@@ -127,6 +127,9 @@ where
 
     // EOA metrics abstraction with encapsulated configuration
     pub eoa_metrics: EoaMetrics,
+    
+    // Cleanup configuration
+    pub failed_transaction_expiry_seconds: u64,
 }
 
 impl<CS> DurableExecution for EoaExecutorJobHandler<CS>
@@ -195,6 +198,7 @@ where
             max_recycled_nonces: self.max_recycled_nonces,
             webhook_queue: self.webhook_queue.clone(),
             signer: self.eoa_signer.clone(),
+            failed_transaction_expiry_seconds: self.failed_transaction_expiry_seconds,
         };
 
         let job_start_time = current_timestamp_ms();
@@ -307,6 +311,8 @@ pub struct EoaExecutorWorker<C: Chain> {
 
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub signer: Arc<EoaSigner>,
+    
+    pub failed_transaction_expiry_seconds: u64,
 }
 
 impl<C: Chain> EoaExecutorWorker<C> {
@@ -475,7 +481,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Process all results in one batch operation
         let report = self
             .store
-            .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
+            .process_borrowed_transactions(submission_results, self.webhook_queue.clone(), self.failed_transaction_expiry_seconds)
             .await?;
 
         // TODO: Handle post-processing updates here if needed

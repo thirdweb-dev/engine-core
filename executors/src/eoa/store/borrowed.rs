@@ -41,6 +41,7 @@ pub struct ProcessBorrowedTransactions<'a> {
     pub keys: &'a EoaExecutorStoreKeys,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub eoa_metrics: &'a EoaMetrics,
+    pub failed_transaction_expiry_seconds: u64,
 }
 
 #[derive(Debug, Default)]
@@ -219,11 +220,17 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     report.moved_to_pending += 1;
                 }
                 SubmissionResultType::Fail(err) => {
-                    // Mark as failed
+                    // Mark as failed and set expiry
                     let tx_data_key = self.keys.transaction_data_key_name(transaction_id);
                     pipeline.hset(&tx_data_key, "status", "failed");
                     pipeline.hset(&tx_data_key, "completed_at", now);
                     pipeline.hset(&tx_data_key, "failure_reason", err.to_string());
+
+                    // Set expiry on all related keys for failed transactions
+                    let transaction_keys = self.keys.get_all_transaction_keys(transaction_id);
+                    for key in transaction_keys {
+                        pipeline.expire(&key, self.failed_transaction_expiry_seconds as i64);
+                    }
 
                     // ask for this nonce to be recycled because we did not consume the nonce
                     pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
