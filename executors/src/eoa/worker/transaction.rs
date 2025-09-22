@@ -1,8 +1,4 @@
-use tokio_retry2::{
-    Retry, RetryError,
-    strategy::{ExponentialBackoff, jitter},
-};
-use tracing::Instrument;
+use std::time::Duration;
 
 use alloy::{
     consensus::{
@@ -24,17 +20,16 @@ use engine_core::{
 };
 
 use crate::eoa::{
-    EoaTransactionRequest,
     store::{
         BorrowedTransaction, BorrowedTransactionData, PendingTransaction, SubmittedNoopTransaction,
-    },
-    worker::{
-        EoaExecutorWorker,
-        error::{
-            EoaExecutorWorkerError, is_retryable_preparation_error, is_unsupported_eip1559_error,
-        },
-    },
+    }, worker::{
+        error::{is_retryable_preparation_error, is_unsupported_eip1559_error, EoaExecutorWorkerError}, EoaExecutorWorker
+    }, EoaTransactionRequest
 };
+
+// Retry constants for preparation phase
+const MAX_PREPARATION_RETRIES: u32 = 3;
+const PREPARATION_RETRY_DELAY_MS: u64 = 100;
 
 impl<C: Chain> EoaExecutorWorker<C> {
     pub async fn build_and_sign_single_transaction_with_retries(
@@ -42,44 +37,51 @@ impl<C: Chain> EoaExecutorWorker<C> {
         pending_transaction: &PendingTransaction,
         nonce: u64,
     ) -> Result<BorrowedTransaction, EoaExecutorWorkerError> {
-        let retry_strategy = ExponentialBackoff::from_millis(100)
-            .max_delay_millis(1000) // max 1 second between retries
-            .map(jitter) // add jitter
-            .take(3); // limit to 3 retries
+        let mut last_error = None;
 
-        let pending_tx = pending_transaction.clone();
-        let nonce_copy = nonce;
+        // Internal retry loop for retryable errors
+        for attempt in 0..=MAX_PREPARATION_RETRIES {
+            if attempt > 0 {
+                // Simple exponential backoff
+                let delay = PREPARATION_RETRY_DELAY_MS * (2_u64.pow(attempt - 1));
+                tokio::time::sleep(Duration::from_millis(delay)).await;
 
-        Retry::spawn(retry_strategy, || {
-            let pending_tx = pending_tx.clone();
-            async move {
-                match self
-                    .build_and_sign_single_transaction(&pending_tx, nonce_copy)
-                    .await
-                {
-                    Ok(result) => Ok(result),
-                    Err(error) => {
-                        if is_retryable_preparation_error(&error) {
-                            tracing::warn!(
-                                transaction_id = ?pending_tx.transaction_id,
-                                error = ?error,
-                                "Retryable error during transaction preparation, will retry"
-                            );
-                            Err(RetryError::transient(error))
-                        } else {
-                            // Deterministic error - don't retry
-                            tracing::error!(
-                                transaction_id = ?pending_tx.transaction_id,
-                                error = ?error,
-                                "Non-retryable error during transaction preparation"
-                            );
-                            Err(RetryError::permanent(error))
-                        }
+                tracing::debug!(
+                    transaction_id = ?pending_transaction.transaction_id,
+                    attempt = attempt,
+                    "Retrying transaction preparation"
+                );
+            }
+
+            match self
+                .build_and_sign_single_transaction(pending_transaction, nonce)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    if is_retryable_preparation_error(&error) && attempt < MAX_PREPARATION_RETRIES {
+                        tracing::warn!(
+                            transaction_id = ?pending_transaction.transaction_id,
+                            attempt = attempt,
+                            error = ?error,
+                            "Retryable error during transaction preparation, will retry"
+                        );
+                        last_error = Some(error);
+                        continue;
+                    } else {
+                        // Either deterministic error or exceeded max retries
+                        return Err(error);
                     }
                 }
             }
-        })
-        .await
+        }
+
+        // This should never be reached, but just in case
+        Err(
+            last_error.unwrap_or_else(|| EoaExecutorWorkerError::InternalError {
+                message: "Unexpected error in retry loop".to_string(),
+            }),
+        )
     }
 
     pub async fn build_and_sign_single_transaction(
@@ -141,24 +143,18 @@ impl<C: Chain> EoaExecutorWorker<C> {
     ) -> Result<SubmittedNoopTransaction, EoaExecutorWorkerError> {
         let tx = self.build_and_sign_noop_transaction(nonce).await?;
 
-        self.send_tx_envelope_with_retry(
-            tx.into(),
-            crate::eoa::worker::error::SendContext::InitialBroadcast,
-        )
-        .instrument(tracing::info_span!(
-            "send_tx_envelope_with_retry",
-            nonce = nonce,
-            context = "noop_transaction"
-        ))
-        .await
-        .map_err(|e| EoaExecutorWorkerError::TransactionSendError {
-            message: format!("Failed to send no-op transaction: {e:?}"),
-            inner_error: e.to_engine_error(&self.chain),
-        })
-        .map(|pending| SubmittedNoopTransaction {
-            nonce,
-            transaction_hash: pending.tx_hash().to_string(),
-        })
+        self.chain
+            .provider()
+            .send_tx_envelope(tx.into())
+            .await
+            .map_err(|e| EoaExecutorWorkerError::TransactionSendError {
+                message: format!("Failed to send no-op transaction: {e:?}"),
+                inner_error: e.to_engine_error(&self.chain),
+            })
+            .map(|pending| SubmittedNoopTransaction {
+                nonce,
+                transaction_hash: pending.tx_hash().to_string(),
+            })
     }
 
     async fn estimate_gas_fees(

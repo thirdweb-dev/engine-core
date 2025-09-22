@@ -1,76 +1,31 @@
 use alloy::providers::Provider;
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
-use tokio_retry2::{
-    Retry, RetryError,
-    strategy::{ExponentialBackoff, jitter},
-};
-use tracing::Instrument;
 
 use crate::eoa::{
-    EoaExecutorStore,
     store::{BorrowedTransaction, PendingTransaction, SubmissionResult},
     worker::{
         EoaExecutorWorker,
         error::{
-            EoaExecutorWorkerError, SendContext, SendErrorClassification, classify_send_error,
-            is_retryable_preparation_error, should_update_balance_threshold,
+            EoaExecutorWorkerError, SendContext, is_retryable_preparation_error,
+            should_update_balance_threshold,
         },
     },
 };
 
-const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in ms
+const HEALTH_CHECK_INTERVAL: u64 = 300; // 5 minutes in seconds
 
 impl<C: Chain> EoaExecutorWorker<C> {
-    pub async fn send_tx_envelope_with_retry(
-        &self,
-        tx_envelope: alloy::consensus::TxEnvelope,
-        send_context: SendContext,
-    ) -> Result<
-        alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>,
-        alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
-    > {
-        let retry_strategy = ExponentialBackoff::from_millis(100)
-            .max_delay_millis(1000)
-            .map(jitter) // add jitter
-            .take(3); // limit to 3 retries
-
-        Retry::spawn(retry_strategy, || {
-            let tx_envelope = tx_envelope.clone();
-            async move {
-                match self.chain.provider().send_tx_envelope(tx_envelope).await {
-                    Ok(result) => Ok(result),
-                    Err(error) => {
-                        match classify_send_error(&error, send_context) {
-                            SendErrorClassification::RetryInPlace => {
-                                tracing::warn!(
-                                    error = ?error,
-                                    "Retryable error during transaction send, will retry in place"
-                                );
-                                Err(RetryError::transient(error))
-                            }
-                            _ => {
-                                // Not retryable, return permanent error
-                                Err(RetryError::permanent(error))
-                            }
-                        }
-                    }
-                }
-            }
-        })
-        .await
-    }
-
     // ========== SEND FLOW ==========
     #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn send_flow(&self) -> Result<u32, EoaExecutorWorkerError> {
         // 1. Get EOA health (initializes if needed) and check if we should update balance
         let mut health = self.get_eoa_health().await?;
-        let now = EoaExecutorStore::now();
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
         // Update balance if it's stale
         // TODO: refactor this, very ugly
         if health.balance <= health.balance_threshold {
-            if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL_MS {
+            if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL {
                 let balance = self
                     .chain
                     .provider()
@@ -193,19 +148,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 "Moved transactions to borrowed state using recycled nonces"
             );
 
-            // Actually send the transactions to the blockchain with retry logic
+            // Actually send the transactions to the blockchain
             let send_tasks: Vec<_> = cleaned_results
                 .iter()
                 .map(|borrowed_tx| {
-                    self.send_tx_envelope_with_retry(
-                        borrowed_tx.signed_transaction.clone().into(),
-                        SendContext::InitialBroadcast,
-                    )
-                    .instrument(tracing::info_span!(
-                        "send_tx_envelope_with_retry",
-                        transaction_id = %borrowed_tx.transaction_id,
-                        context = "recycled_nonces"
-                    ))
+                    let signed_tx = borrowed_tx.signed_transaction.clone();
+                    async move {
+                        self.chain
+                            .provider()
+                            .send_tx_envelope(signed_tx.into())
+                            .await
+                    }
                 })
                 .collect();
 
@@ -228,11 +181,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Use batch processing to handle all submission results
             let processing_report = self
                 .store
-                .process_borrowed_transactions(
-                    submission_results,
-                    self.webhook_queue.clone(),
-                    self.failed_transaction_expiry_seconds,
-                )
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
                 .await?;
 
             tracing::debug!(
@@ -324,12 +273,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             "Transaction permanently failed due to non-retryable preparation error",
                         );
                         self.store
-                            .fail_pending_transaction(
-                                pending,
-                                e,
-                                self.webhook_queue.clone(),
-                                self.failed_transaction_expiry_seconds,
-                            )
+                            .fail_pending_transaction(pending, e, self.webhook_queue.clone())
                             .await?;
                     }
                 }
@@ -428,19 +372,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 "Moved transactions to borrowed state using incremented nonces"
             );
 
-            // Send the transactions to the blockchain with retry logic
+            // Send the transactions to the blockchain
             let send_tasks: Vec<_> = cleaned_results
                 .iter()
                 .map(|borrowed_tx| {
-                    self.send_tx_envelope_with_retry(
-                        borrowed_tx.signed_transaction.clone().into(),
-                        SendContext::InitialBroadcast,
-                    )
-                    .instrument(tracing::info_span!(
-                        "send_tx_envelope_with_retry",
-                        transaction_id = %borrowed_tx.transaction_id,
-                        context = "new_transactions"
-                    ))
+                    let signed_tx = borrowed_tx.signed_transaction.clone();
+                    async move {
+                        self.chain
+                            .provider()
+                            .send_tx_envelope(signed_tx.into())
+                            .await
+                    }
                 })
                 .collect();
 
@@ -463,11 +405,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Use batch processing to handle all submission results
             let processing_report = self
                 .store
-                .process_borrowed_transactions(
-                    submission_results,
-                    self.webhook_queue.clone(),
-                    self.failed_transaction_expiry_seconds,
-                )
+                .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
                 .await?;
 
             tracing::debug!(

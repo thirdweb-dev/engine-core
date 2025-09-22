@@ -143,10 +143,9 @@ pub enum SendErrorClassification {
     PossiblySent,                     // "nonce too low", "already known" etc
     DeterministicFailure,             // Invalid signature, malformed tx, insufficient funds etc
     DeterministicFailureNonRetryable, // Non-retryable deterministic failure
-    RetryInPlace,                     // Errors that should be retried in place (thirdweb support error, rate limits, etc.)
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum SendContext {
     Rebroadcast,
     InitialBroadcast,
@@ -167,7 +166,6 @@ pub fn classify_send_error(
     if error_str.contains("invalid signature")
         || error_str.contains("malformed transaction")
         || (context == SendContext::InitialBroadcast && error_str.contains("insufficient funds"))
-        || error_str.contains("transaction execution error: user cant pay the bills")
         || error_str.contains("invalid transaction format")
         || error_str.contains("nonce too high")
     // Should trigger nonce reset
@@ -194,21 +192,6 @@ pub fn classify_send_error(
 
     if error_str.contains("oversized") {
         return SendErrorClassification::DeterministicFailureNonRetryable;
-    }
-
-    // Check for retry-in-place errors
-    if error_str.contains("we are not able to process your request at this time") {
-        return SendErrorClassification::RetryInPlace;
-    }
-
-    // Rate limiting and temporary server errors
-    if error_str.contains("rate limit") 
-        || error_str.contains("too many requests")
-        || error_str.contains("server error")
-        || error_str.contains("internal error")
-        || error_str.contains("connection")
-        || error_str.contains("timeout") {
-        return SendErrorClassification::RetryInPlace;
     }
 
     tracing::warn!(
@@ -241,7 +224,6 @@ pub fn should_update_balance_threshold(error: &EngineError) -> bool {
                     || message.contains("balance too low")
                     || message.contains("not enough funds")
                     || message.contains("insufficient native token")
-                    || message.contains("transaction execution error: user cant pay the bills")
             }
             _ => false,
         },
@@ -314,14 +296,6 @@ impl SubmissionResult {
                     SendErrorClassification::PossiblySent => SubmissionResult {
                         result: SubmissionResultType::Success,
                         transaction: borrowed_transaction.clone().into(),
-                    },
-                    SendErrorClassification::RetryInPlace => {
-                        // Treat retry-in-place errors as success (same as PossiblySent)
-                        // The actual retry logic will be handled in the send flow
-                        SubmissionResult {
-                            result: SubmissionResultType::Success,
-                            transaction: borrowed_transaction.clone().into(),
-                        }
                     },
                     SendErrorClassification::DeterministicFailure => {
                         // Transaction failed, should be retried

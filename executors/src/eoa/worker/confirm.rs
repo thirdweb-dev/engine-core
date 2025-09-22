@@ -1,15 +1,14 @@
 use alloy::{primitives::B256, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use serde::{Deserialize, Serialize};
-use tracing::Instrument;
 
 use crate::{
     FlashblocksTransactionCount, TransactionCounts,
     eoa::{
         EoaExecutorStore,
         store::{
-            CleanupReport, ConfirmedTransaction, ReplacedTransaction,
-            SubmittedTransactionDehydrated, TransactionStoreError,
+            CleanupReport, ConfirmedTransaction, ReplacedTransaction, SubmittedTransactionDehydrated,
+            TransactionStoreError,
         },
         worker::{
             EoaExecutorWorker,
@@ -49,7 +48,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
         if self.store.is_manual_reset_scheduled().await? {
             tracing::info!("Manual reset scheduled, executing now");
-            self.store.reset_nonces(transaction_counts.latest).await?;
+            self.store
+                .reset_nonces(transaction_counts.latest)
+                .await?;
         }
 
         let cached_transaction_count = match self.store.get_cached_transaction_count().await {
@@ -107,46 +108,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     {
                         tracing::warn!(
                             error = ?e,
-                            "Failed to attempt gas bump for stalled nonce, trying fallback"
+                            "Failed to attempt gas bump for stalled nonce"
                         );
-
-                        // Fallback: try to send a no-op transaction
-                        tracing::info!(
-                            nonce = transaction_counts.preconfirmed,
-                            "Gas bump failed, attempting no-op transaction as fallback"
-                        );
-                        if let Ok(noop_tx) = self
-                            .send_noop_transaction(transaction_counts.preconfirmed)
-                            .await
-                        {
-                            if let Err(e) = self.store.process_noop_transactions(&[noop_tx]).await {
-                                tracing::error!(
-                                    error = ?e,
-                                    "Failed to process fallback no-op transaction for stalled nonce"
-                                );
-                            }
-                        } else {
-                            tracing::error!(
-                                "Failed to send fallback no-op transaction for stalled nonce"
-                            );
-
-                            // Ultimate fallback: check if we should trigger auto-reset
-                            let time_since_movement =
-                                now.saturating_sub(current_health.last_nonce_movement_at);
-
-                            if (time_since_movement > (5 * 60 * 1000)) && (submitted_count > 0) {
-                                // 5 minutes
-                                tracing::warn!(
-                                    nonce = transaction_counts.preconfirmed,
-                                    time_since_movement = time_since_movement,
-                                    "EOA appears permanently stuck, scheduling auto-reset"
-                                );
-
-                                if let Err(e) = self.store.schedule_manual_reset().await {
-                                    tracing::error!(error = ?e, "Failed to schedule auto-reset");
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -257,7 +220,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             .clean_submitted_transactions(
                 &successes,
                 TransactionCounts {
-                    latest: transaction_counts.latest.saturating_sub(1), // Use latest for replacement detection
+                    latest: transaction_counts.latest.saturating_sub(1),       // Use latest for replacement detection
                     preconfirmed: transaction_counts.preconfirmed.saturating_sub(1), // Use preconfirmed for confirmation
                 },
                 self.webhook_queue.clone(),
@@ -393,7 +356,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         error = ?e,
                         "Failed to build typed transaction for gas bump"
                     );
-                    return Err(e);
+                    return Ok(false);
                 }
             };
             let bumped_typed_tx = self.apply_gas_bump_to_typed_transaction(typed_tx, 120); // 20% increase
@@ -412,7 +375,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         error = ?e,
                         "Failed to sign transaction for gas bump"
                     );
-                    return Err(e);
+                    return Ok(false);
                 }
             };
 
@@ -430,20 +393,9 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 )
                 .await?;
 
-            // Send the bumped transaction with retry logic
-            match self
-                .send_tx_envelope_with_retry(
-                    bumped_tx.into(),
-                    crate::eoa::worker::error::SendContext::InitialBroadcast,
-                )
-                .instrument(tracing::info_span!(
-                    "send_tx_envelope_with_retry",
-                    transaction_id = %newest_transaction_data.transaction_id,
-                    nonce = expected_nonce,
-                    context = "gas_bump"
-                ))
-                .await
-            {
+            // Send the bumped transaction
+            let tx_envelope = bumped_tx.into();
+            match self.chain.provider().send_tx_envelope(tx_envelope).await {
                 Ok(_) => {
                     tracing::info!(
                         transaction_id = ?newest_transaction_data.transaction_id,
@@ -457,13 +409,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
                         error = ?e,
-                        "Failed to send gas bumped transaction after retries"
+                        "Failed to send gas bumped transaction"
                     );
-                    // Convert RPC error to worker error and bubble up
-                    Err(EoaExecutorWorkerError::TransactionSendError {
-                        message: format!("Failed to send gas bumped transaction: {e:?}"),
-                        inner_error: e.to_engine_error(&self.chain),
-                    })
+                    // Don't fail the worker, just log the error
+                    Ok(false)
                 }
             }
         } else {

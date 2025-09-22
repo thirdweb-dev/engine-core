@@ -233,7 +233,6 @@ impl QueueManager {
             max_inflight: 100,
             max_recycled_nonces: 50,
             eoa_metrics,
-            failed_transaction_expiry_seconds: queue_config.eoa_executor.failed_transaction_expiry_seconds,
         };
 
         let eoa_executor_queue = Queue::builder()
