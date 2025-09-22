@@ -5,7 +5,7 @@ use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
-    eoa::{authorization_cache::EoaAuthorizationCache, EoaExecutorJobHandler},
+    eoa::{EoaExecutorJobHandler, authorization_cache::EoaAuthorizationCache},
     external_bundler::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
@@ -94,7 +94,16 @@ impl QueueManager {
 
         // Create webhook queue
         let webhook_handler = WebhookJobHandler {
-            http_client: reqwest::Client::new(),
+            // Specifc HTTP client config for high concurrency webhook handling
+            http_client: reqwest::Client::builder()
+                .pool_max_idle_per_host(50) // Allow more connections per host
+                .pool_idle_timeout(Duration::from_secs(30)) // Shorter idle timeout
+                .timeout(Duration::from_secs(10)) // Much shorter request timeout
+                .connect_timeout(Duration::from_secs(5)) // Quick connection timeout
+                .tcp_keepalive(Duration::from_secs(60)) // Keep connections alive
+                .tcp_nodelay(true) // Reduce latency
+                .build()
+                .expect("Failed to create HTTP client"),
             retry_config: Arc::new(WebhookRetryConfig::default()),
         };
 
@@ -189,13 +198,14 @@ impl QueueManager {
             .arc();
 
         // Create delegation contract cache for EIP-7702
-        let delegation_contract_cache = engine_executors::eip7702_executor::delegation_cache::DelegationContractCache::new(
-            moka::future::Cache::builder()
-                .max_capacity(10000) // Large capacity since it's a single entry per chain
-                .time_to_live(Duration::from_secs(24 * 60 * 60)) // 24 hours as requested
-                .time_to_idle(Duration::from_secs(24 * 60 * 60)) // Also 24 hours for TTI
-                .build(),
-        );
+        let delegation_contract_cache =
+            engine_executors::eip7702_executor::delegation_cache::DelegationContractCache::new(
+                moka::future::Cache::builder()
+                    .max_capacity(10000) // Large capacity since it's a single entry per chain
+                    .time_to_live(Duration::from_secs(24 * 60 * 60)) // 24 hours as requested
+                    .time_to_idle(Duration::from_secs(24 * 60 * 60)) // Also 24 hours for TTI
+                    .build(),
+            );
 
         // Create EIP-7702 send queue
         let eip7702_send_handler = Eip7702SendHandler {
@@ -218,11 +228,15 @@ impl QueueManager {
 
         // Create EOA executor queue
         let eoa_metrics = engine_executors::metrics::EoaMetrics::new(
-            queue_config.monitoring.eoa_send_degradation_threshold_seconds,
-            queue_config.monitoring.eoa_confirmation_degradation_threshold_seconds,
+            queue_config
+                .monitoring
+                .eoa_send_degradation_threshold_seconds,
+            queue_config
+                .monitoring
+                .eoa_confirmation_degradation_threshold_seconds,
             queue_config.monitoring.eoa_stuck_threshold_seconds,
         );
-        
+
         let eoa_executor_handler = EoaExecutorJobHandler {
             chain_service: chain_service.clone(),
             eoa_signer: eoa_signer.clone(),
