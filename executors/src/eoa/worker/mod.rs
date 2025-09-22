@@ -318,9 +318,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let recovered = self
             .recover_borrowed_state()
             .await
-            .map_err(|e| {
-                tracing::error!("Error in recover_borrowed_state: {}", e);
-                e
+            .inspect_err(|e| {
+                tracing::error!(error = ?e, "Error in recover_borrowed_state");
             })
             .map_err(|e| e.handle())?;
 
@@ -328,9 +327,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let confirmations_report = self
             .confirm_flow()
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error in confirm flow");
-                e
             })
             .map_err(|e| e.handle())?;
 
@@ -338,62 +336,31 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let sent = self
             .send_flow()
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error in send_flow");
-                e
             })
             .map_err(|e| e.handle())?;
 
         // 4. CHECK FOR REMAINING WORK
-        let pending_count = self
+        let counts = self
             .store
-            .get_pending_transactions_count()
+            .get_all_counts()
             .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_pending_transactions");
-                e
+            .map_err(EoaExecutorWorkerError::from)
+            .inspect_err(|e| {
+                tracing::error!(error = ?e, "Error in get_all_counts");
             })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let borrowed_count = self
-            .store
-            .get_borrowed_transactions_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_borrowed_transactions");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let recycled_nonces_count = self
-            .store
-            .get_recycled_nonces_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_recycled_nonces");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let submitted_count = self
-            .store
-            .get_submitted_transactions_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in get_submitted_transactions_count");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
+            .map_err(|e| e.handle())?;
 
         tracing::info!(
             recovered = recovered,
             confirmed = confirmations_report.moved_to_success,
             temp_failed = confirmations_report.moved_to_pending,
             replacements = confirmations_report.moved_to_pending,
-            currently_submitted = submitted_count,
-            currently_pending = pending_count,
-            currently_borrowed = borrowed_count,
-            currently_recycled = recycled_nonces_count,
+            currently_submitted = counts.submitted_transactions,
+            currently_pending = counts.pending_transactions,
+            currently_borrowed = counts.borrowed_transactions,
+            currently_recycled = counts.recycled_nonces,
         );
 
         Ok(EoaExecutorWorkerResult {
@@ -401,12 +368,11 @@ impl<C: Chain> EoaExecutorWorker<C> {
             confirmed_transactions: confirmations_report.moved_to_success as u32,
             failed_transactions: confirmations_report.moved_to_pending as u32,
             sent_transactions: sent,
-
             replaced_transactions: confirmations_report.moved_to_pending as u32,
-            submitted_transactions: submitted_count as u32,
-            pending_transactions: pending_count as u32,
-            borrowed_transactions: borrowed_count as u32,
-            recycled_nonces: recycled_nonces_count as u32,
+            submitted_transactions: counts.submitted_transactions as u32,
+            pending_transactions: counts.pending_transactions as u32,
+            borrowed_transactions: counts.borrowed_transactions as u32,
+            recycled_nonces: counts.recycled_nonces as u32,
         })
     }
 

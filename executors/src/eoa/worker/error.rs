@@ -168,6 +168,8 @@ pub fn classify_send_error(
         || (context == SendContext::InitialBroadcast && error_str.contains("insufficient funds"))
         || error_str.contains("invalid transaction format")
         || error_str.contains("nonce too high")
+        || error_str.contains("transaction execution error: user cant pay the bills")
+    // chain 106
     // Should trigger nonce reset
     {
         return SendErrorClassification::DeterministicFailure;
@@ -224,6 +226,7 @@ pub fn should_update_balance_threshold(error: &EngineError) -> bool {
                     || message.contains("balance too low")
                     || message.contains("not enough funds")
                     || message.contains("insufficient native token")
+                    || message.contains("transaction execution error: user cant pay the bills") // chain 106
             }
             _ => false,
         },
