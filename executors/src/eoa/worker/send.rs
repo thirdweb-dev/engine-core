@@ -12,7 +12,7 @@ use crate::eoa::{
     },
 };
 
-const HEALTH_CHECK_INTERVAL: u64 = 300; // 5 minutes in seconds
+const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in milliseconds
 
 impl<C: Chain> EoaExecutorWorker<C> {
     // ========== SEND FLOW ==========
@@ -25,7 +25,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Update balance if it's stale
         // TODO: refactor this, very ugly
         if health.balance <= health.balance_threshold {
-            if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL {
+            if now - health.balance_fetched_at > HEALTH_CHECK_INTERVAL_MS {
                 let balance = self
                     .chain
                     .provider()
