@@ -560,6 +560,7 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
         vec![
             self.keys.recycled_nonces_zset_name(),
             self.keys.last_transaction_count_key_name(),
+            self.keys.optimistic_transaction_count_key_name(),
             self.keys.submitted_transactions_zset_name(),
         ]
     }
@@ -616,6 +617,11 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
             self.keys.recycled_nonces_zset_name(),
             highest_submitted_nonce,
             "+inf",
+        );
+
+        pipeline.set(
+            self.keys.optimistic_transaction_count_key_name(),
+            highest_submitted_nonce + 1,
         );
 
         recycled_nonces

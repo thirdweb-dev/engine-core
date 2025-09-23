@@ -12,7 +12,7 @@ use crate::eoa::{
     },
     worker::error::EoaExecutorWorkerError,
 };
-use crate::metrics::{current_timestamp_ms, calculate_duration_seconds, EoaMetrics};
+use crate::metrics::{EoaMetrics, calculate_duration_seconds, current_timestamp_ms};
 use crate::webhook::{WebhookJobHandler, queue_webhook_envelopes};
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,10 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
     }
 
     fn watch_keys(&self) -> Vec<String> {
-        vec![self.keys.borrowed_transactions_hashmap_name()]
+        vec![
+            self.keys.borrowed_transactions_hashmap_name(),
+            self.keys.recycled_nonces_zset_name(),
+        ]
     }
 
     async fn validation(
@@ -121,15 +124,13 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                 SubmissionResultType::Success => {
                     // Record metrics: transaction queued to sent
                     let sent_timestamp = current_timestamp_ms();
-                    let queued_to_sent_duration = calculate_duration_seconds(
-                        result.transaction.queued_at, 
-                        sent_timestamp
-                    );
+                    let queued_to_sent_duration =
+                        calculate_duration_seconds(result.transaction.queued_at, sent_timestamp);
                     // Record metrics using the clean EoaMetrics abstraction
                     self.eoa_metrics.record_transaction_sent(
                         self.keys.eoa,
                         self.keys.chain_id,
-                        queued_to_sent_duration
+                        queued_to_sent_duration,
                     );
 
                     // Add to submitted zset
@@ -189,7 +190,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     // Update transaction data status
                     let tx_data_key = self.keys.transaction_data_key_name(transaction_id);
                     pipeline.hset(&tx_data_key, "status", "pending");
-                    
+
                     // ask for this nonce to be recycled because we did not consume the nonce
                     pipeline.zadd(self.keys.recycled_nonces_zset_name(), nonce, nonce);
 
