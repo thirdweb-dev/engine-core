@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{Json, Router, routing::get};
 use engine_core::{signer::EoaSigner, userop::UserOpSigner};
+use serde_json::json;
 use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
 use utoipa::OpenApi;
@@ -76,10 +77,13 @@ impl EngineServer {
             .with_state(state.clone());
 
         let eoa_diagnostics_router = eoa_diagnostics_router().with_state(state.clone());
-        
+
         // Create metrics router
         let metrics_router = Router::new()
-            .route("/metrics", get(crate::http::routes::admin::metrics::get_metrics))
+            .route(
+                "/metrics",
+                get(crate::http::routes::admin::metrics::get_metrics),
+            )
             .with_state(state.metrics_registry.clone());
 
         let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -87,50 +91,14 @@ impl EngineServer {
             .split_for_parts();
 
         // Merge the hidden diagnostic routes after OpenAPI split
-        let router = router
-            .merge(eoa_diagnostics_router)
-            .merge(metrics_router);
+        let router = router.merge(eoa_diagnostics_router).merge(metrics_router);
 
         let api_clone = api.clone();
         let router = router
             .merge(Scalar::with_url("/reference", api).custom_html(SCALAR_HTML))
+            // health endpoint with 200 and JSON response {}
+            .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
             .route("/api.json", get(|| async { Json(api_clone) }));
-
-        // let v1_router = ApiRouter::new()
-        //     // generate Scalar API References using the openapi spec route
-        //     .api_route(
-        //         "/read/contract",
-        //         post_with(read_contract, read_contract_docs),
-        //     )
-        //     .api_route(
-        //         "/encode/contract",
-        //         post_with(encode_contract, encode_contract_docs),
-        //     )
-        //     .api_route(
-        //         "/write/contract",
-        //         post_with(write_contract, write_contract_docs),
-        //     )
-        //     .api_route(
-        //         "/write/transaction",
-        //         post_with(write_transaction, write_transaction_docs),
-        //     )
-        //     // We'll serve our generated document here.
-        //     .route("/api.json", get(serve_api))
-        //     // .route("/smart-account/status", post(smart_account_status))
-        //     // .route("/userop/create", post(create_user_op))
-        //     // .route("/test", post(read_contract))
-        //     .layer(cors)
-        //     .layer(TraceLayer::new_for_http())
-        //     // Generate the documentation.
-        //     .route("/reference", Scalar::new("/v1/api.json").axum_route())
-        //     .with_state(state);
-
-        // let router = ApiRouter::new()
-        //     .nest_api_service("/v1", v1_router)
-        //     .finish_api(&mut api)
-        //     // Expose the documentation to the handlers.
-        //     .layer(Extension(Arc::new(api)));
-        // // Add more routes here
 
         Self {
             handle: None,
@@ -184,9 +152,7 @@ impl EngineServer {
                 }
                 Err(e) => {
                     tracing::error!("Failed to join HTTP server task: {}", e);
-                    return Err(std::io::Error::other(
-                        format!("Task join error: {e}"),
-                    ));
+                    return Err(std::io::Error::other(format!("Task join error: {e}")));
                 }
             }
         }

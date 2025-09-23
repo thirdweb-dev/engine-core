@@ -2504,7 +2504,6 @@ dependencies = [
  "thirdweb-core",
  "thiserror 2.0.12",
  "tokio",
- "tokio-retry2",
  "tracing",
  "twmq",
  "uuid",
@@ -5838,17 +5837,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-retry2"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7de2537bbad4f8b2d4237cdab9e7c4948a1f74744e45f54144eeccd05d3ad955"
-dependencies = [
- "pin-project 1.1.10",
- "rand 0.9.1",
  "tokio",
 ]
 

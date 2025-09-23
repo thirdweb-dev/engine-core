@@ -186,26 +186,6 @@ impl EoaExecutorStoreKeys {
         }
     }
 
-    /// Get all Redis keys related to a transaction for cleanup
-    pub fn get_all_transaction_keys(&self, transaction_id: &str) -> Vec<String> {
-        vec![
-            self.transaction_data_key_name(transaction_id),
-            self.transaction_attempts_list_name(transaction_id),
-        ]
-    }
-
-    /// Get all Redis keys related to a transaction including hash mappings for cleanup
-    pub fn get_all_transaction_keys_with_hashes(&self, transaction_id: &str, transaction_hashes: &[String]) -> Vec<String> {
-        let mut keys = self.get_all_transaction_keys(transaction_id);
-        
-        // Add hash-to-id mappings
-        for hash in transaction_hashes {
-            keys.push(self.transaction_hash_to_id_key_name(hash));
-        }
-        
-        keys
-    }
-
     /// Name of the hashmap that maps `transaction_id` -> `BorrowedTransactionData`
     ///
     /// This is used for crash recovery. Before submitting a transaction, we atomically move from pending to this borrowed hashmap.
@@ -420,6 +400,13 @@ impl NonceType {
     }
 }
 
+pub struct EoaExecutorCounts {
+    pub pending_transactions: u64,
+    pub submitted_transactions: u64,
+    pub borrowed_transactions: u64,
+    pub recycled_nonces: u64,
+}
+
 impl EoaExecutorStore {
     /// Aggressively acquire EOA lock, forcefully taking over from stalled workers
     ///
@@ -531,6 +518,24 @@ impl EoaExecutorStore {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn get_all_counts(&self) -> Result<EoaExecutorCounts, TransactionStoreError> {
+        let mut conn = self.redis.clone();
+        let mut pipeline = twmq::redis::pipe();
+
+        pipeline.zcard(self.pending_transactions_zset_name());
+        pipeline.zcard(self.submitted_transactions_zset_name());
+        pipeline.hlen(self.borrowed_transactions_hashmap_name());
+        pipeline.zcard(self.recycled_nonces_zset_name());
+
+        let counts: (u64, u64, u64, u64) = pipeline.query_async(&mut conn).await?;
+        Ok(EoaExecutorCounts {
+            pending_transactions: counts.0,
+            submitted_transactions: counts.1,
+            borrowed_transactions: counts.2,
+            recycled_nonces: counts.3,
+        })
     }
 
     /// Peek at pending transactions without removing them (safe for planning)

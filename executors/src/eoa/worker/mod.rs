@@ -10,7 +10,6 @@ use engine_core::{
 use engine_eip7702_core::delegated_account::DelegatedAccount;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
-use tracing::Instrument;
 use twmq::Queue;
 use twmq::redis::AsyncCommands;
 use twmq::redis::aio::ConnectionManager;
@@ -128,9 +127,6 @@ where
 
     // EOA metrics abstraction with encapsulated configuration
     pub eoa_metrics: EoaMetrics,
-
-    // Cleanup configuration
-    pub failed_transaction_expiry_seconds: u64,
 }
 
 impl<CS> DurableExecution for EoaExecutorJobHandler<CS>
@@ -199,7 +195,6 @@ where
             max_recycled_nonces: self.max_recycled_nonces,
             webhook_queue: self.webhook_queue.clone(),
             signer: self.eoa_signer.clone(),
-            failed_transaction_expiry_seconds: self.failed_transaction_expiry_seconds,
         };
 
         let job_start_time = current_timestamp_ms();
@@ -312,8 +307,6 @@ pub struct EoaExecutorWorker<C: Chain> {
 
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub signer: Arc<EoaSigner>,
-
-    pub failed_transaction_expiry_seconds: u64,
 }
 
 impl<C: Chain> EoaExecutorWorker<C> {
@@ -325,9 +318,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let recovered = self
             .recover_borrowed_state()
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error in recover_borrowed_state");
-                e
             })
             .map_err(|e| e.handle())?;
 
@@ -335,9 +327,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let confirmations_report = self
             .confirm_flow()
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error in confirm flow");
-                e
             })
             .map_err(|e| e.handle())?;
 
@@ -345,62 +336,31 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let sent = self
             .send_flow()
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error in send_flow");
-                e
             })
             .map_err(|e| e.handle())?;
 
         // 4. CHECK FOR REMAINING WORK
-        let pending_count = self
+        let counts = self
             .store
-            .get_pending_transactions_count()
+            .get_all_counts()
             .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_pending_transactions");
-                e
+            .map_err(EoaExecutorWorkerError::from)
+            .inspect_err(|e| {
+                tracing::error!(error = ?e, "Error in get_all_counts");
             })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let borrowed_count = self
-            .store
-            .get_borrowed_transactions_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_borrowed_transactions");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let recycled_nonces_count = self
-            .store
-            .get_recycled_nonces_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in peek_recycled_nonces");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
-
-        let submitted_count = self
-            .store
-            .get_submitted_transactions_count()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "Error in get_submitted_transactions_count");
-                e
-            })
-            .map_err(|e| Into::<EoaExecutorWorkerError>::into(e).handle())?;
+            .map_err(|e| e.handle())?;
 
         tracing::info!(
             recovered = recovered,
             confirmed = confirmations_report.moved_to_success,
             temp_failed = confirmations_report.moved_to_pending,
             replacements = confirmations_report.moved_to_pending,
-            currently_submitted = submitted_count,
-            currently_pending = pending_count,
-            currently_borrowed = borrowed_count,
-            currently_recycled = recycled_nonces_count,
+            currently_submitted = counts.submitted_transactions,
+            currently_pending = counts.pending_transactions,
+            currently_borrowed = counts.borrowed_transactions,
+            currently_recycled = counts.recycled_nonces,
         );
 
         Ok(EoaExecutorWorkerResult {
@@ -408,12 +368,11 @@ impl<C: Chain> EoaExecutorWorker<C> {
             confirmed_transactions: confirmations_report.moved_to_success as u32,
             failed_transactions: confirmations_report.moved_to_pending as u32,
             sent_transactions: sent,
-
             replaced_transactions: confirmations_report.moved_to_pending as u32,
-            submitted_transactions: submitted_count as u32,
-            pending_transactions: pending_count as u32,
-            borrowed_transactions: borrowed_count as u32,
-            recycled_nonces: recycled_nonces_count as u32,
+            submitted_transactions: counts.submitted_transactions as u32,
+            pending_transactions: counts.pending_transactions as u32,
+            borrowed_transactions: counts.borrowed_transactions as u32,
+            recycled_nonces: counts.recycled_nonces as u32,
         })
     }
 
@@ -439,6 +398,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let rebroadcast_futures: Vec<_> = borrowed_transactions
             .iter()
             .map(|borrowed| {
+                let tx_envelope = borrowed.signed_transaction.clone().into();
                 let nonce = borrowed.signed_transaction.nonce();
                 let transaction_id = borrowed.transaction_id.clone();
 
@@ -449,18 +409,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 );
 
                 async move {
-                    let send_result = self
-                        .send_tx_envelope_with_retry(
-                            borrowed.signed_transaction.clone().into(),
-                            SendContext::Rebroadcast,
-                        )
-                        .instrument(tracing::info_span!(
-                            "send_tx_envelope_with_retry",
-                            transaction_id = %transaction_id,
-                            nonce = nonce,
-                            context = "recovery_rebroadcast"
-                        ))
-                        .await;
+                    let send_result = self.chain.provider().send_tx_envelope(tx_envelope).await;
                     (borrowed, send_result)
                 }
             })
@@ -492,11 +441,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Process all results in one batch operation
         let report = self
             .store
-            .process_borrowed_transactions(
-                submission_results,
-                self.webhook_queue.clone(),
-                self.failed_transaction_expiry_seconds,
-            )
+            .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
             .await?;
 
         // TODO: Handle post-processing updates here if needed
