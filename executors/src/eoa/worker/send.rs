@@ -4,12 +4,10 @@ use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 use crate::eoa::{
     store::{BorrowedTransaction, PendingTransaction, SubmissionResult},
     worker::{
-        EoaExecutorWorker,
         error::{
-            EoaExecutorWorkerError, SendContext, is_retryable_preparation_error,
-            should_update_balance_threshold,
-        },
-    },
+            is_retryable_preparation_error, should_update_balance_threshold, EoaExecutorWorkerError, SendContext
+        }, EoaExecutorWorker
+    }, EoaExecutorStore,
 };
 
 const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in milliseconds
@@ -20,7 +18,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
     pub async fn send_flow(&self) -> Result<u32, EoaExecutorWorkerError> {
         // 1. Get EOA health (initializes if needed) and check if we should update balance
         let mut health = self.get_eoa_health().await?;
-        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let now = EoaExecutorStore::now();
 
         // Update balance if it's stale
         // TODO: refactor this, very ugly
