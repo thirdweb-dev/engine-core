@@ -68,6 +68,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
             let inflight_budget = self.store.get_inflight_budget(self.max_inflight).await?;
             if inflight_budget > 0 {
                 total_sent += self.process_new_transactions(inflight_budget).await?;
+            } else {
+                tracing::warn!("No inflight budget, not sending new transactions");
             }
         } else {
             tracing::warn!(
