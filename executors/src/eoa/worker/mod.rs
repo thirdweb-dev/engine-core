@@ -180,6 +180,8 @@ where
             .ok()
             .unwrap_or(false);
 
+        let chain_id = chain.chain_id();
+
         let worker = EoaExecutorWorker {
             store: scoped,
             chain,
@@ -189,6 +191,8 @@ where
 
             max_inflight: if is_minimal_account {
                 1
+            } else if chain_id == 1628 {
+                20
             } else {
                 self.max_inflight
             },
