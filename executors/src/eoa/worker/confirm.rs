@@ -109,11 +109,41 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             bumped_nonce = transaction_counts.preconfirmed,
                             preconfirmed_nonce = transaction_counts.preconfirmed,
                             latest_nonce = transaction_counts.latest,
-                            "Failed to attempt gas bump for stalled nonce. Scheduling nonce reset"
+                            "Failed to attempt gas bump for stalled nonce. Attempting no-op transaction as fallback"
                         );
 
-                        if let Err(e) = self.store.schedule_manual_reset().await {
-                            tracing::error!(error = ?e, "Failed to schedule auto-reset");
+                        // Try sending a no-op transaction as fallback
+                        match self
+                            .send_noop_transaction(transaction_counts.preconfirmed)
+                            .await
+                        {
+                            Ok(noop_tx) => {
+                                // Process the no-op transaction
+                                if let Err(e) =
+                                    self.store.process_noop_transactions(&[noop_tx]).await
+                                {
+                                    tracing::error!(
+                                        error = ?e,
+                                        bumped_nonce = transaction_counts.preconfirmed,
+                                        preconfirmed_nonce = transaction_counts.preconfirmed,
+                                        latest_nonce = transaction_counts.latest,
+                                        "Failed to process fallback no-op transaction for stalled nonce, but sending transactions was successful"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = ?e,
+                                    bumped_nonce = transaction_counts.preconfirmed,
+                                    preconfirmed_nonce = transaction_counts.preconfirmed,
+                                    latest_nonce = transaction_counts.latest,
+                                    "Failed to send fallback no-op transaction for stalled nonce. Scheduling auto-reset if EOA is stuck"
+                                );
+
+                                if let Err(e) = self.store.schedule_manual_reset().await {
+                                    tracing::error!(error = ?e, "Failed to schedule auto-reset");
+                                }
+                            }
                         }
                     }
                 }
