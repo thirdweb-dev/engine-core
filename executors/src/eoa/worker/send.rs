@@ -1,13 +1,16 @@
-use alloy::providers::Provider;
+use alloy::{consensus::Transaction, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 
 use crate::eoa::{
-    store::{BorrowedTransaction, PendingTransaction, SubmissionResult},
+    EoaExecutorStore,
+    store::{BorrowedTransaction, PendingTransaction, SubmissionResult, SubmissionResultType},
     worker::{
+        EoaExecutorWorker,
         error::{
-            is_retryable_preparation_error, should_update_balance_threshold, EoaExecutorWorkerError, SendContext
-        }, EoaExecutorWorker
-    }, EoaExecutorStore,
+            EoaExecutorWorkerError, SendContext, is_retryable_preparation_error,
+            should_update_balance_threshold,
+        },
+    },
 };
 
 const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in milliseconds
@@ -391,12 +394,24 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .into_iter()
                 .zip(cleaned_results.into_iter())
                 .map(|(send_result, borrowed_tx)| {
-                    SubmissionResult::from_send_result(
+                    let result = SubmissionResult::from_send_result(
                         &borrowed_tx,
                         send_result,
                         SendContext::InitialBroadcast,
                         &self.chain,
-                    )
+                    );
+
+                    match &result.result {
+                        SubmissionResultType::Success => result,
+                        SubmissionResultType::Nack(e) => {
+                            tracing::error!(error = ?e, transaction_id = borrowed_tx.transaction_id, nonce = borrowed_tx.data.signed_transaction.nonce(), "Transaction nack error during send");
+                            result
+                        }
+                        SubmissionResultType::Fail(e) => {
+                            tracing::error!(error = ?e, transaction_id = borrowed_tx.transaction_id, nonce = borrowed_tx.data.signed_transaction.nonce(), "Transaction failed during send");
+                            result
+                        }
+                    }
                 })
                 .collect();
 
