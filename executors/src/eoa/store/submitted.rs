@@ -341,7 +341,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
 
             // Do business logic only once per unique transaction_id
             let is_first_occurrence = processed_ids.insert(tx.transaction_id());
-            
+
             if is_first_occurrence {
                 match (tx.transaction_id(), confirmed_ids.get(tx.transaction_id())) {
                     // if the transaction id is noop, we don't do anything but still clean up
@@ -389,7 +389,10 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                     &mut tx_context,
                                     self.webhook_queue.clone(),
                                 ) {
-                                    tracing::error!("Failed to queue webhook for confirmed transaction: {}", e);
+                                    tracing::error!(
+                                        "Failed to queue webhook for confirmed transaction: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -425,7 +428,10 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                         &mut tx_context,
                                         self.webhook_queue.clone(),
                                     ) {
-                                        tracing::error!("Failed to queue webhook for replaced transaction: {}", e);
+                                        tracing::error!(
+                                            "Failed to queue webhook for replaced transaction: {}",
+                                            e
+                                        );
                                     }
                                 }
 
@@ -562,7 +568,7 @@ fn detect_violations<'a>(
 }
 
 impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
-    type ValidationData = (u64, Vec<u64>);
+    type ValidationData = (u64, Vec<u64>, Option<u64>);
     type OperationResult = Vec<u64>;
 
     fn name(&self) -> &str {
@@ -618,13 +624,21 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
             .filter(|nonce| *nonce < highest_submitted_nonce)
             .collect();
 
-        Ok((highest_submitted_nonce, recycled_nonces))
+        let current_optimistic_tx_count: Option<u64> = conn
+            .get(self.keys.optimistic_transaction_count_key_name())
+            .await?;
+
+        Ok((
+            highest_submitted_nonce,
+            recycled_nonces,
+            current_optimistic_tx_count,
+        ))
     }
 
     fn operation(
         &self,
         pipeline: &mut Pipeline,
-        (highest_submitted_nonce, recycled_nonces): Self::ValidationData,
+        (highest_submitted_nonce, recycled_nonces, current_optimistic_tx_count): Self::ValidationData,
     ) -> Self::OperationResult {
         pipeline.zrembyscore(
             self.keys.recycled_nonces_zset_name(),
@@ -632,11 +646,15 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
             "+inf",
         );
 
-        pipeline.set(
-            self.keys.optimistic_transaction_count_key_name(),
-            highest_submitted_nonce + 1,
-        );
-
+        if let Some(current_optimistic_tx_count) = current_optimistic_tx_count {
+            // if the current optimistic tx count is floating too high, we need to bring it down
+            if highest_submitted_nonce + 1 < current_optimistic_tx_count {
+                pipeline.set(
+                    self.keys.optimistic_transaction_count_key_name(),
+                    highest_submitted_nonce + 1,
+                );
+            }
+        }
         recycled_nonces
     }
 }
