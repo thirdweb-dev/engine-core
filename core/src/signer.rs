@@ -15,7 +15,7 @@ use vault_sdk::VaultClient;
 use vault_types::enclave::encrypted::eoa::MessageFormat;
 
 use crate::{
-    credentials::SigningCredential,
+    credentials::{SigningCredential, KmsClientCache},
     defs::AddressDef,
     error::{EngineError, SerialisableAwsSdkError, SerialisableAwsSignerError},
     execution_options::aa::{EntrypointAndFactoryDetails, EntrypointAndFactoryDetailsDeserHelper},
@@ -204,14 +204,16 @@ pub trait AccountSigner {
 pub struct EoaSigner {
     pub vault_client: VaultClient,
     pub iaw_client: IAWClient,
+    pub kms_client_cache: KmsClientCache,
 }
 
 impl EoaSigner {
     /// Create a new EOA signer
-    pub fn new(vault_client: VaultClient, iaw_client: IAWClient) -> Self {
+    pub fn new(vault_client: VaultClient, iaw_client: IAWClient, kms_client_cache: KmsClientCache) -> Self {
         Self {
             vault_client,
             iaw_client,
+            kms_client_cache,
         }
     }
 }
@@ -272,7 +274,10 @@ impl AccountSigner for EoaSigner {
                 Ok(iaw_result.signature)
             }
             SigningCredential::AwsKms(creds) => {
-                let signer = creds.get_signer(options.chain_id).await?;
+                // Clone and inject the cache into the credentials
+                let mut creds_with_cache = creds.clone();
+                creds_with_cache.kms_client_cache = Some(self.kms_client_cache.clone());
+                let signer = creds_with_cache.get_signer(options.chain_id).await?;
                 let message = match format {
                     MessageFormat::Text => message.to_string().into_bytes(),
                     MessageFormat::Hex => {
@@ -352,7 +357,10 @@ impl AccountSigner for EoaSigner {
             }
 
             SigningCredential::AwsKms(creds) => {
-                let signer = creds.get_signer(options.chain_id).await?;
+                // Clone and inject the cache into the credentials
+                let mut creds_with_cache = creds.clone();
+                creds_with_cache.kms_client_cache = Some(self.kms_client_cache.clone());
+                let signer = creds_with_cache.get_signer(options.chain_id).await?;
 
                 // TODO: create serialisable error for @alloy-signer::error::Error
                 let signature = signer
@@ -420,7 +428,10 @@ impl AccountSigner for EoaSigner {
                 Ok(iaw_result.signature)
             }
             SigningCredential::AwsKms(creds) => {
-                let signer = creds.get_signer(options.chain_id).await?;
+                // Clone and inject the cache into the credentials
+                let mut creds_with_cache = creds.clone();
+                creds_with_cache.kms_client_cache = Some(self.kms_client_cache.clone());
+                let signer = creds_with_cache.get_signer(options.chain_id).await?;
                 let mut transaction = transaction.clone();
 
                 // TODO: create serialisable error for @alloy-signer::error::Error
@@ -500,7 +511,10 @@ impl AccountSigner for EoaSigner {
                 Ok(iaw_result.signed_authorization)
             }
             SigningCredential::AwsKms(creds) => {
-                let signer = creds.get_signer(options.chain_id).await?;
+                // Clone and inject the cache into the credentials
+                let mut creds_with_cache = creds.clone();
+                creds_with_cache.kms_client_cache = Some(self.kms_client_cache.clone());
+                let signer = creds_with_cache.get_signer(options.chain_id).await?;
                 let authorization_hash = authorization.signature_hash();
 
                 let signature = signer.sign_hash(&authorization_hash).await.map_err(|e| {

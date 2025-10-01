@@ -7,7 +7,7 @@ use axum::{
 };
 use engine_core::{
     chain::RpcCredentials,
-    credentials::{AwsKmsCredential, SigningCredential},
+    credentials::{AwsKmsCredential, SigningCredential, KmsClientCache},
     error::EngineError,
 };
 use thirdweb_core::auth::ThirdwebAuth;
@@ -101,15 +101,15 @@ where
 #[derive(OperationIo)]
 pub struct SigningCredentialsExtractor(pub SigningCredential);
 
-impl<S> FromRequestParts<S> for SigningCredentialsExtractor
-where
-    S: Send + Sync,
-{
+impl FromRequestParts<EngineServerState> for SigningCredentialsExtractor {
     type Rejection = ApiEngineError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Try AWS KMS credentials first
-        if let Some(aws_kms) = Self::try_extract_aws_kms(parts)? {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &EngineServerState,
+    ) -> Result<Self, Self::Rejection> {
+        // Try AWS KMS credentials first (with cache)
+        if let Some(aws_kms) = Self::try_extract_aws_kms_with_cache(parts, state.kms_client_cache.clone())? {
             return Ok(SigningCredentialsExtractor(SigningCredential::AwsKms(
                 aws_kms,
             )));
@@ -145,8 +145,11 @@ impl SigningCredentialsExtractor {
         parts.headers.get(header_name).and_then(|v| v.to_str().ok())
     }
 
-    /// Try to extract AWS KMS credentials from headers
-    fn try_extract_aws_kms(parts: &Parts) -> Result<Option<AwsKmsCredential>, ApiEngineError> {
+    /// Try to extract AWS KMS credentials from headers with cache
+    fn try_extract_aws_kms_with_cache(
+        parts: &Parts,
+        kms_cache: KmsClientCache,
+    ) -> Result<Option<AwsKmsCredential>, ApiEngineError> {
         let arn = Self::get_header_value(parts, HEADER_AWS_KMS_ARN);
         let access_key_id = Self::get_header_value(parts, HEADER_AWS_ACCESS_KEY_ID);
         let secret_access_key = Self::get_header_value(parts, HEADER_AWS_SECRET_ACCESS_KEY);
@@ -154,12 +157,13 @@ impl SigningCredentialsExtractor {
         match (arn, access_key_id, secret_access_key) {
             (Some(arn), Some(access_key_id), Some(secret_access_key)) => {
                 let (key_id, region) = Self::parse_kms_arn(arn)?;
-                Ok(Some(AwsKmsCredential {
-                    access_key_id: access_key_id.to_string(),
-                    secret_access_key: secret_access_key.to_string(),
+                Ok(Some(AwsKmsCredential::new(
+                    access_key_id.to_string(),
+                    secret_access_key.to_string(),
                     key_id,
                     region,
-                }))
+                    kms_cache,
+                )))
             }
             _ => Ok(None),
         }

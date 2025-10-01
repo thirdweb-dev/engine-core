@@ -2449,6 +2449,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-kms",
  "engine-aa-types",
+ "moka",
  "schemars 0.8.22",
  "serde",
  "serde_json",

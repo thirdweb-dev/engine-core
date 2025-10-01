@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Json, Router, routing::get};
-use engine_core::{signer::EoaSigner, userop::UserOpSigner};
+use engine_core::{signer::EoaSigner, userop::UserOpSigner, credentials::KmsClientCache};
 use serde_json::json;
 use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
@@ -32,6 +32,7 @@ pub struct EngineServerState {
 
     pub diagnostic_access_password: Option<String>,
     pub metrics_registry: Arc<prometheus::Registry>,
+    pub kms_client_cache: KmsClientCache,
 }
 
 pub struct EngineServer {

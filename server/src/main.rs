@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use engine_core::{signer::EoaSigner, userop::UserOpSigner};
+use engine_core::{signer::EoaSigner, userop::UserOpSigner, credentials::KmsClientCache};
 use engine_executors::{eoa::authorization_cache::EoaAuthorizationCache, metrics::{ExecutorMetrics, initialize_metrics}};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
@@ -47,11 +47,19 @@ async fn main() -> anyhow::Result<()> {
     let iaw_client = IAWClient::new(&config.thirdweb.urls.iaw_service)?;
     tracing::info!("IAW client initialized");
 
+    let kms_client_cache: KmsClientCache = moka::future::Cache::builder()
+        .max_capacity(100) // Limit number of KMS clients cached
+        .time_to_live(Duration::from_secs(60 * 60)) // 1 hour TTL
+        .time_to_idle(Duration::from_secs(60 * 30)) // 30 minutes idle timeout
+        .build();
+
+    tracing::info!("KMS client cache initialized");
+
     let signer = Arc::new(UserOpSigner {
         vault_client: vault_client.clone(),
         iaw_client: iaw_client.clone(),
     });
-    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
+    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client, kms_client_cache.clone()));
     let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
     let authorization_cache = EoaAuthorizationCache::new(
@@ -69,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
         signer.clone(),
         eoa_signer.clone(),
         authorization_cache.clone(),
+        kms_client_cache.clone(),
     )
     .await?;
 
@@ -119,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
         queue_manager: Arc::new(queue_manager),
         diagnostic_access_password: config.server.diagnostic_access_password,
         metrics_registry,
+        kms_client_cache: kms_client_cache.clone(),
     })
     .await;
 

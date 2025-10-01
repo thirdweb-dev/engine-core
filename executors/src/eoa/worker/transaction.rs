@@ -397,7 +397,11 @@ impl<C: Chain> EoaExecutorWorker<C> {
         nonce: u64,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(request, nonce).await?;
-        self.sign_transaction(typed_tx, &request.signing_credential)
+        
+        // Inject KMS cache into the signing credential
+        let credential_with_cache = self.inject_kms_cache_into_credential(request.signing_credential.clone());
+        
+        self.sign_transaction(typed_tx, &credential_with_cache)
             .await
     }
 

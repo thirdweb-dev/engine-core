@@ -23,3 +23,4 @@ alloy-signer-aws = { version = "1.0.23", features = ["eip712"] }
 aws-config = "1.8.2"
 aws-sdk-kms = "1.79.0"
 aws-credential-types = "1.2.4"
+moka = { version = "0.12", features = ["future"] }
