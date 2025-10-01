@@ -28,7 +28,7 @@ impl<C: Chain> DelegatedAccount<C> {
     }
 
     /// Check if the EOA has EIP-7702 delegation to the minimal account implementation
-    pub async fn is_minimal_account(&self) -> Result<bool, EngineError> {
+    pub async fn is_minimal_account(&self, delegation_contract: Option<Address>) -> Result<bool, EngineError> {
         // Get the bytecode at the EOA address using eth_getCode
         let code = self
             .chain
@@ -60,25 +60,28 @@ impl<C: Chain> DelegatedAccount<C> {
         // Extract the target address from bytes 3-23 (20 bytes for address)
         // EIP-7702 format: 0xef0100 + 20 bytes address
 
-        // NOTE!: skip the actual delegated target address check for now
-        // extremely unlikely that an EOA being used with engine is delegated to a non-minimal account
-        // Potential source for fringe edge cases, please verify delegated target address if debugging 7702 execution issues
+        let target_bytes = &code[3..23];
+        let target_address = Address::from_slice(target_bytes);
 
-        // let target_bytes = &code[3..23];
-        // let target_address = Address::from_slice(target_bytes);
+        // Compare with the minimal account implementation address
+        let is_delegated = match delegation_contract {
+            Some(delegation_contract) => {
+                target_address == delegation_contract
+            }
+            None => {
+                true
+            }
+        };
 
-        // // Compare with the minimal account implementation address
-        // let is_delegated = target_address == MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS;
+        tracing::debug!(
+            eoa_address = ?self.eoa_address,
+            target_address = ?target_address,
+            minimal_account_address = ?delegation_contract,
+            has_delegation = is_delegated,
+            "EIP-7702 delegation check result"
+        );
 
-        // tracing::debug!(
-        //     eoa_address = ?self.eoa_address,
-        //     target_address = ?target_address,
-        //     minimal_account_address = ?MINIMAL_ACCOUNT_IMPLEMENTATION_ADDRESS,
-        //     has_delegation = is_delegated,
-        //     "EIP-7702 delegation check result"
-        // );
-
-        Ok(true)
+        Ok(is_delegated)
     }
 
     /// Get the EOA address
