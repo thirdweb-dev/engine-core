@@ -195,7 +195,7 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         credentials: &SigningCredential,
         delegation_contract: Address,
     ) -> Result<Self, EngineError> {
-        if self.account.is_minimal_account().await? {
+        if self.account.is_minimal_account(Some(delegation_contract)).await? {
             return Ok(self);
         }
 

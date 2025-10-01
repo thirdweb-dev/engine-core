@@ -405,7 +405,7 @@ impl ExecutionRouter {
             let delegated_account = DelegatedAccount::new(eoa_execution_options.from, chain);
             let is_minimal_account = self
                 .authorization_cache
-                .is_minimal_account(&delegated_account)
+                .is_minimal_account(&delegated_account, None)
                 .await
                 .map_err(|e| EngineError::InternalError {
                     message: format!("Failed to check 7702 delegation: {e:?}"),

@@ -172,7 +172,7 @@ where
         // if there's an error checking 7702 delegation here, we'll just assume it's not a minimal account for the purposes of max in flight
         let is_minimal_account = self
             .authorization_cache
-            .is_minimal_account(&delegated_account)
+            .is_minimal_account(&delegated_account, None)
             .await
             .inspect_err(|e| {
                 tracing::error!(error = ?e, "Error checking 7702 delegation");
