@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         vault_client: vault_client.clone(),
         iaw_client: iaw_client.clone(),
     });
-    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client, kms_client_cache.clone()));
+    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
     let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
     let authorization_cache = EoaAuthorizationCache::new(
