@@ -398,8 +398,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(request, nonce).await?;
         
-        // Inject KMS cache into the signing credential
-        let credential_with_cache = self.inject_kms_cache_into_credential(request.signing_credential.clone());
+        // Inject KMS cache into the signing credential (after deserialization from Redis)
+        let credential_with_cache = request.signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
         
         self.sign_transaction(typed_tx, &credential_with_cache)
             .await

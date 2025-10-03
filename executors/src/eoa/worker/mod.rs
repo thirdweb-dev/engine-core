@@ -185,8 +185,8 @@ where
 
         let chain_id = chain.chain_id();
 
-        // Inject KMS cache into the noop signing credential
-        let noop_signing_credential = self.inject_kms_cache_into_credential(data.noop_signing_credential.clone());
+        // Inject KMS cache into the noop signing credential (after deserialization from Redis)
+        let noop_signing_credential = data.noop_signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
 
         let worker = EoaExecutorWorker {
             store: scoped,
@@ -285,14 +285,6 @@ impl<CS> EoaExecutorJobHandler<CS>
 where
     CS: ChainService + Send + Sync + 'static,
 {
-    /// Inject KMS cache into AWS KMS credentials
-    fn inject_kms_cache_into_credential(&self, mut credential: SigningCredential) -> SigningCredential {
-        if let SigningCredential::AwsKms(ref mut aws_creds) = credential {
-            aws_creds.kms_client_cache = Some(self.kms_client_cache.clone());
-        }
-        credential
-    }
-
     async fn soft_release_eoa_lock(&self, job_data: &EoaExecutorWorkerJobData) {
         let keys = EoaExecutorStoreKeys::new(
             job_data.eoa_address,
@@ -330,14 +322,6 @@ pub struct EoaExecutorWorker<C: Chain> {
 }
 
 impl<C: Chain> EoaExecutorWorker<C> {
-    /// Inject KMS cache into AWS KMS credentials
-    fn inject_kms_cache_into_credential(&self, mut credential: SigningCredential) -> SigningCredential {
-        if let SigningCredential::AwsKms(ref mut aws_creds) = credential {
-            aws_creds.kms_client_cache = Some(self.kms_client_cache.clone());
-        }
-        credential
-    }
-
     /// Execute the main EOA worker workflow
     async fn execute_main_workflow(
         &self,

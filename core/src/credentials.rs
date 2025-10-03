@@ -21,6 +21,16 @@ impl SigningCredential {
     pub fn random_local() -> Self {
         SigningCredential::PrivateKey(PrivateKeySigner::random())
     }
+
+    /// Inject KMS cache into AWS KMS credentials (useful after deserialization)
+    pub fn with_aws_kms_cache(self, kms_client_cache: &KmsClientCache) -> Self {
+        match self {
+            SigningCredential::AwsKms(creds) => {
+                SigningCredential::AwsKms(creds.with_cache(kms_client_cache.clone()))
+            }
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +115,12 @@ impl AwsKmsCredential {
             region,
             kms_client_cache: None,
         }
+    }
+
+    /// Inject cache into this credential (useful after deserialization)
+    pub fn with_cache(mut self, kms_client_cache: KmsClientCache) -> Self {
+        self.kms_client_cache = Some(kms_client_cache);
+        self
     }
 
     /// Create a cache key from the credential
