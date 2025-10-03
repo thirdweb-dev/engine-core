@@ -11,8 +11,8 @@ interface ImportMeta {
 
 // Types based on events.rs
 interface WebhookEvent {
-    transactionId: string;
-    executorName: string;
+  transactionId: string;
+  executorName: string;
   stageName: string; // "send" | "confirm"
   eventType: string; // "Success" | "Nack" | "Failure"
   payload: any;
@@ -37,9 +37,12 @@ interface BenchmarkConfig {
   from: string;
   chainId: number;
   secretKey: string;
-  vaultAccessToken: string;
+  vaultAccessToken?: string;
   concurrentRequests: number;
   totalRequests: number;
+  awsAccessKeyId?: string;
+  awsKmsArn?: string;
+  awsSecretAccessKey?: string;
 }
 
 interface AggregateResults {
@@ -98,14 +101,19 @@ const config: BenchmarkConfig = {
   from: process.env.FROM!,
   chainId: parseInt(process.env.CHAIN_ID || "1337"),
   secretKey: process.env.SECRET_KEY!,
-  vaultAccessToken: process.env.VAULT_ACCESS_TOKEN!,
+  vaultAccessToken: process.env.VAULT_ACCESS_TOKEN,
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  awsKmsArn: process.env.AWS_KMS_ARN,
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   concurrentRequests: parseInt(process.env.CONCURRENT_REQUESTS || "10"),
   totalRequests: parseInt(process.env.TOTAL_REQUESTS || "100"),
 };
 
 // Validate required env vars
-if (!config.from || !config.secretKey || !config.vaultAccessToken) {
-  console.error("❌ Missing required environment variables: FROM, SECRET_KEY, VAULT_ACCESS_TOKEN");
+if (!config.from || !config.secretKey) {
+  console.error(
+    "❌ Missing required environment variables: FROM, SECRET_KEY"
+  );
   process.exit(1);
 }
 
@@ -127,7 +135,9 @@ const webhookServer = Bun.serve({
   },
 });
 
-console.log(`🎣 Webhook server listening on http://localhost:${webhookServer.port}`);
+console.log(
+  `🎣 Webhook server listening on http://localhost:${webhookServer.port}`
+);
 
 // Handle webhook events
 function handleWebhookEvent(event: WebhookEvent) {
@@ -147,12 +157,20 @@ function handleWebhookEvent(event: WebhookEvent) {
       metrics.submittedTime = now;
       metrics.sentToSubmittedMs = now - metrics.sentTime;
       metrics.status = "submitted";
-      console.log(`✅ Transaction ${txId.slice(0, 8)}... submitted (${metrics.sentToSubmittedMs}ms)`);
+      console.log(
+        `✅ Transaction ${txId.slice(0, 8)}... submitted (${
+          metrics.sentToSubmittedMs
+        }ms)`
+      );
     } else if (event.eventType === "Failure") {
       metrics.status = "failed";
       metrics.error = JSON.stringify(event.payload);
       pendingTransactions.delete(txId);
-      console.log(`❌ Transaction ${txId.slice(0, 8)}... failed at send stage (pending: ${pendingTransactions.size})`);
+      console.log(
+        `❌ Transaction ${txId.slice(0, 8)}... failed at send stage (pending: ${
+          pendingTransactions.size
+        })`
+      );
     }
   } else if (event.stageName === "confirm") {
     if (event.eventType === "SUCCESS") {
@@ -163,12 +181,23 @@ function handleWebhookEvent(event: WebhookEvent) {
       metrics.totalTimeMs = now - metrics.sentTime;
       metrics.status = "confirmed";
       pendingTransactions.delete(txId);
-      console.log(`🎉 Transaction ${txId.slice(0, 8)}... confirmed (total: ${metrics.totalTimeMs}ms, pending: ${pendingTransactions.size})`);
-    } else if (event.eventType === "FAIL" || event.eventType === "NACK") {
+      console.log(
+        `🎉 Transaction ${txId.slice(0, 8)}... confirmed (total: ${
+          metrics.totalTimeMs
+        }ms, pending: ${pendingTransactions.size})`
+      );
+    } else if (event.eventType === "FAIL") {
       metrics.status = "failed";
       metrics.error = JSON.stringify(event.payload);
       pendingTransactions.delete(txId);
-      console.log(`❌ Transaction ${txId.slice(0, 8)}... failed at confirmation stage (pending: ${pendingTransactions.size})`);
+      console.log(
+        `❌ Transaction ${txId.slice(
+          0,
+          8
+        )}... failed at confirmation stage (pending: ${
+          pendingTransactions.size
+        })`
+      );
     }
   }
 }
@@ -183,7 +212,20 @@ async function sendTransaction(): Promise<TransactionMetrics> {
       headers: {
         "Content-Type": "application/json",
         "x-thirdweb-secret-key": config.secretKey,
-        "x-vault-access-token": config.vaultAccessToken,
+        ...(config.vaultAccessToken
+          ? {
+              "x-vault-access-token": config.vaultAccessToken,
+            }
+          : {}),
+        ...(config.awsAccessKeyId &&
+        config.awsKmsArn &&
+        config.awsSecretAccessKey
+          ? {
+              "x-aws-access-key-id": config.awsAccessKeyId,
+              "x-aws-kms-arn": config.awsKmsArn,
+              "x-aws-secret-access-key": config.awsSecretAccessKey,
+            }
+          : {}),
       },
       body: JSON.stringify({
         executionOptions: {
@@ -214,17 +256,20 @@ async function sendTransaction(): Promise<TransactionMetrics> {
       throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
 
-    const res = await response.json() as {
-        result: {
-            transactions: {
-                id: string;
-            }[]
-        }
+    const res = (await response.json()) as {
+      result: {
+        transactions: {
+          id: string;
+        }[];
+      };
     };
     const transactionId = res.result.transactions[0]?.id;
 
     if (!transactionId) {
-      console.error("❌ No transaction ID in response:", JSON.stringify(response, null, 2));
+      console.error(
+        "❌ No transaction ID in response:",
+        JSON.stringify(response, null, 2)
+      );
       throw new Error("No transaction ID in response");
     }
 
@@ -241,8 +286,13 @@ async function sendTransaction(): Promise<TransactionMetrics> {
 
     transactions.set(transactionId, metrics);
     pendingTransactions.add(transactionId);
-    
-    console.log(`📝 Added transaction ${transactionId.slice(0, 8)}... to pending (total: ${pendingTransactions.size})`);
+
+    console.log(
+      `📝 Added transaction ${transactionId.slice(
+        0,
+        8
+      )}... to pending (total: ${pendingTransactions.size})`
+    );
 
     return metrics;
   } catch (error) {
@@ -256,7 +306,11 @@ async function sendTransaction(): Promise<TransactionMetrics> {
       error: error instanceof Error ? error.message : String(error),
     };
     transactions.set(errorMetrics.transactionId, errorMetrics);
-    console.error(`❌ Transaction request failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(
+      `❌ Transaction request failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     return errorMetrics;
   }
 }
@@ -293,7 +347,11 @@ async function runBenchmark() {
 
     // Progress indicator
     if ((i + 1) % 10 === 0) {
-      console.log(`📤 Sent ${i + 1}/${config.totalRequests} requests... (in-flight: ${inFlight.size})`);
+      console.log(
+        `📤 Sent ${i + 1}/${config.totalRequests} requests... (in-flight: ${
+          inFlight.size
+        })`
+      );
     }
   }
 
@@ -313,7 +371,9 @@ async function runBenchmark() {
     waited += pollInterval;
 
     if (waited % 5000 === 0) {
-      console.log(`   Still waiting for ${pendingTransactions.size} transactions...`);
+      console.log(
+        `   Still waiting for ${pendingTransactions.size} transactions...`
+      );
     }
   }
 
@@ -321,7 +381,9 @@ async function runBenchmark() {
   const duration = endTime - startTime;
 
   if (pendingTransactions.size > 0) {
-    console.warn(`\n⚠️  Timeout: ${pendingTransactions.size} transactions still pending`);
+    console.warn(
+      `\n⚠️  Timeout: ${pendingTransactions.size} transactions still pending`
+    );
   } else {
     console.log(`\n🎉 All transactions completed!`);
   }
@@ -411,14 +473,21 @@ async function writeCSV(outputDir: string, timestamp: string) {
     m.error || "",
   ]);
 
-  const csvContent = [headers.join(","), ...rows.map((row) => row.join(","))].join("\n");
+  const csvContent = [
+    headers.join(","),
+    ...rows.map((row) => row.join(",")),
+  ].join("\n");
 
   await Bun.write(csvPath, csvContent);
   console.log(`📄 CSV written to: ${csvPath}`);
 }
 
 // Write JSON results
-async function writeJSON(outputDir: string, timestamp: string, results: AggregateResults) {
+async function writeJSON(
+  outputDir: string,
+  timestamp: string,
+  results: AggregateResults
+) {
   const jsonPath = `${outputDir}/result-${timestamp}.json`;
   await Bun.write(jsonPath, JSON.stringify(results, null, 2));
   console.log(`📊 Results written to: ${jsonPath}`);
@@ -435,7 +504,9 @@ function printResults(results: AggregateResults) {
   console.log(`   Successful:          ${results.successfulRequests}`);
   console.log(`   Failed:              ${results.failedRequests}`);
   console.log(`   Error Rate:          ${results.errorRate.toFixed(2)}%`);
-  console.log(`   Duration:            ${(results.duration / 1000).toFixed(2)}s`);
+  console.log(
+    `   Duration:            ${(results.duration / 1000).toFixed(2)}s`
+  );
   console.log(`   Throughput:          ${results.throughput.toFixed(2)} req/s`);
 
   console.log("\n⏱️  HTTP Response Times (ms):");
@@ -458,7 +529,9 @@ function printResults(results: AggregateResults) {
 
   console.log("\n✅ Submitted to Confirmed Times (ms):");
   console.log(`   Min:    ${results.submittedToConfirmedTimes.min.toFixed(2)}`);
-  console.log(`   Mean:   ${results.submittedToConfirmedTimes.mean.toFixed(2)}`);
+  console.log(
+    `   Mean:   ${results.submittedToConfirmedTimes.mean.toFixed(2)}`
+  );
   console.log(`   P50:    ${results.submittedToConfirmedTimes.p50.toFixed(2)}`);
   console.log(`   P90:    ${results.submittedToConfirmedTimes.p90.toFixed(2)}`);
   console.log(`   P95:    ${results.submittedToConfirmedTimes.p95.toFixed(2)}`);
@@ -513,4 +586,3 @@ async function main() {
 
 // Run the benchmark
 main();
-
