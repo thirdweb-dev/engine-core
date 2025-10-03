@@ -19,7 +19,8 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             // Default to info level if RUST_LOG environment variable is not set
-            "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=debug,engine_executors=debug,thirdweb_core=debug"
+            // Note: engine_executors::webhook=warn overrides the general engine_executors=debug
+            "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=info,engine_executors=debug,engine_executors::webhook=warn,thirdweb_core=debug"
                 .into()
         }));
 

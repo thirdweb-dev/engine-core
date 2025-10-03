@@ -176,7 +176,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Try EIP-1559 fees first, fall back to legacy if unsupported
         match self.chain.provider().estimate_eip1559_fees().await {
             Ok(eip1559_fees) => {
-                tracing::debug!(
+                tracing::trace!(
                     "Using EIP-1559 fees: max_fee={}, max_priority_fee={}",
                     eip1559_fees.max_fee_per_gas,
                     eip1559_fees.max_priority_fee_per_gas
