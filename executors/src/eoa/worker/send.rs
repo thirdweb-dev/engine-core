@@ -262,10 +262,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         if should_update_balance_threshold(inner_error) {
                             balance_threshold_update_needed = true;
                         }
-                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
-                        if should_update_balance_threshold(inner_error) {
-                            balance_threshold_update_needed = true;
-                        }
+                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e
+                        && should_update_balance_threshold(inner_error)
+                    {
+                        balance_threshold_update_needed = true;
                     }
 
                     // For deterministic build failures, fail the transaction immediately
@@ -284,10 +284,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
             }
         }
 
-        if balance_threshold_update_needed {
-            if let Err(e) = self.update_balance_threshold().await {
-                tracing::error!(error = ?e, "Failed to update balance threshold");
-            }
+        if balance_threshold_update_needed && let Err(e) = self.update_balance_threshold().await {
+            tracing::error!(error = ?e, "Failed to update balance threshold");
         }
 
         Ok(cleaned_results)

@@ -961,25 +961,51 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 local job_data_hash = KEYS[3]
                 local results_hash = KEYS[4]
                 local dedupe_set_name = KEYS[5]
+                local lanes_zset = KEYS[6]
 
                 local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
+                local actually_deleted = 0
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
+                        -- Get the lane_id for this job to check if it's active/pending/delayed
                         local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
-                        local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
+                        
+                        local should_delete = true
+                        
+                        if lane_id then
+                            -- Check if job is in any active state for this lane
+                            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                            
+                            local is_active = redis.call('HEXISTS', lane_active_hash, j_id) == 1
+                            local is_pending = redis.call('LPOS', lane_pending_list, j_id) ~= nil
+                            local is_delayed = redis.call('ZSCORE', lane_delayed_zset, j_id) ~= nil
+                            
+                            -- Don't delete if job is currently in the system
+                            if is_active or is_pending or is_delayed then
+                                should_delete = false
+                            end
+                        end
+                        
+                        if should_delete then
+                            local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
-                        redis.call('SREM', dedupe_set_name, j_id)
-                        redis.call('HDEL', job_data_hash, j_id)
-                        redis.call('DEL', job_meta_hash)
-                        redis.call('HDEL', results_hash, j_id)
-                        redis.call('DEL', errors_list_name)
+                            redis.call('SREM', dedupe_set_name, j_id)
+                            redis.call('HDEL', job_data_hash, j_id)
+                            redis.call('DEL', job_meta_hash)
+                            redis.call('HDEL', results_hash, j_id)
+                            redis.call('DEL', errors_list_name)
+                            actually_deleted = actually_deleted + 1
+                        end
                     end
                     redis.call('LTRIM', list_name, 0, max_len - 1)
                 end
-                return #job_ids_to_delete
+                return actually_deleted
             "#,
         );
 
@@ -989,6 +1015,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name())
             .key(self.dedupe_set_name())
+            .key(self.lanes_zset_name()) // Need to check lanes
             .arg(self.options.max_success)
             .invoke_async(&mut self.redis.clone())
             .await?;
@@ -1087,20 +1114,45 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
+                local actually_deleted = 0
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        -- Get the lane_id for this job to check if it's active/pending/delayed
                         local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
+                        
+                        local should_delete = true
+                        
+                        if lane_id then
+                            -- Check if job is in any active state for this lane
+                            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                            
+                            local is_active = redis.call('HEXISTS', lane_active_hash, j_id) == 1
+                            local is_pending = redis.call('LPOS', lane_pending_list, j_id) ~= nil
+                            local is_delayed = redis.call('ZSCORE', lane_delayed_zset, j_id) ~= nil
+                            
+                            -- Don't delete if job is currently in the system
+                            if is_active or is_pending or is_delayed then
+                                should_delete = false
+                            end
+                        end
+                        
+                        if should_delete then
+                            local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
-                        redis.call('SREM', dedupe_set_name, j_id)
-                        redis.call('HDEL', job_data_hash, j_id)
-                        redis.call('DEL', job_meta_hash)
-                        redis.call('DEL', errors_list_name)
+                            redis.call('SREM', dedupe_set_name, j_id)
+                            redis.call('HDEL', job_data_hash, j_id)
+                            redis.call('DEL', job_meta_hash)
+                            redis.call('DEL', errors_list_name)
+                            actually_deleted = actually_deleted + 1
+                        end
                     end
                     redis.call('LTRIM', list_name, 0, max_len - 1)
                 end
-                return #job_ids_to_delete
+                return actually_deleted
             "#,
         );
 
