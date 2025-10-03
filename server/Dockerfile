@@ -1,5 +1,5 @@
 # Use cargo chef for dependency caching
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1-trixie AS chef
 WORKDIR /app
 
 # Install ssh and git for GitHub Actions environment
@@ -26,7 +26,7 @@ COPY . .
 RUN --mount=type=ssh cargo build --release --bin thirdweb-engine
 
 # Runtime stage
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 # Install required system dependencies
 RUN apt-get update && apt-get install -y \
