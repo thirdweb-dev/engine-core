@@ -947,25 +947,39 @@ impl<H: DurableExecution> Queue<H> {
                 local job_data_hash = KEYS[3]
                 local results_hash = KEYS[4] -- e.g., "myqueue:results"
                 local dedupe_set_name = KEYS[5]
+                local active_hash = KEYS[6]
+                local pending_list = KEYS[7]
+                local delayed_zset = KEYS[8]
 
                 local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
+                local actually_deleted = 0
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
-                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                        -- CRITICAL FIX: Check if this job_id is currently active/pending/delayed
+                        -- This prevents the race where we prune metadata for a job that's currently running
+                        local is_active = redis.call('HEXISTS', active_hash, j_id) == 1
+                        local is_pending = redis.call('LPOS', pending_list, j_id) ~= nil
+                        local is_delayed = redis.call('ZSCORE', delayed_zset, j_id) ~= nil
+                        
+                        -- Only delete if the job is NOT currently in the system
+                        if not is_active and not is_pending and not is_delayed then
+                            local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                            local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
-                        redis.call('SREM', dedupe_set_name, j_id)
-                        redis.call('HDEL', job_data_hash, j_id)
-                        redis.call('DEL', job_meta_hash)
-                        redis.call('HDEL', results_hash, j_id)
-                        redis.call('DEL', errors_list_name)
+                            redis.call('SREM', dedupe_set_name, j_id)
+                            redis.call('HDEL', job_data_hash, j_id)
+                            redis.call('DEL', job_meta_hash)
+                            redis.call('HDEL', results_hash, j_id)
+                            redis.call('DEL', errors_list_name)
+                            actually_deleted = actually_deleted + 1
+                        end
                     end
                     redis.call('LTRIM', list_name, 0, max_len - 1)
                 end
-                return #job_ids_to_delete
+                return actually_deleted
             "#,
         );
 
@@ -975,6 +989,9 @@ impl<H: DurableExecution> Queue<H> {
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name()) // results_hash
             .key(self.dedupe_set_name())
+            .key(self.active_hash_name()) // Check if job is active
+            .key(self.pending_list_name()) // Check if job is pending
+            .key(self.delayed_zset_name()) // Check if job is delayed
             .arg(self.options.max_success) // max_len (LTRIM is 0 to max_success-1)
             .invoke_async(&mut self.redis.clone())
             .await?;
@@ -1099,24 +1116,37 @@ impl<H: DurableExecution> Queue<H> {
                 local list_name = KEYS[2]
                 local job_data_hash = KEYS[3]
                 local dedupe_set_name = KEYS[4]
+                local active_hash = KEYS[5]
+                local pending_list = KEYS[6]
+                local delayed_zset = KEYS[7]
 
                 local max_len = tonumber(ARGV[1])
 
                 local job_ids_to_delete = redis.call('LRANGE', list_name, max_len, -1)
+                local actually_deleted = 0
 
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
-                        local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
-                        local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        -- CRITICAL FIX: Check if this job_id is currently active/pending/delayed
+                        local is_active = redis.call('HEXISTS', active_hash, j_id) == 1
+                        local is_pending = redis.call('LPOS', pending_list, j_id) ~= nil
+                        local is_delayed = redis.call('ZSCORE', delayed_zset, j_id) ~= nil
+                        
+                        -- Only delete if the job is NOT currently in the system
+                        if not is_active and not is_pending and not is_delayed then
+                            local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                            local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
 
-                        redis.call('SREM', dedupe_set_name, j_id)
-                        redis.call('HDEL', job_data_hash, j_id)
-                        redis.call('DEL', job_meta_hash)
-                        redis.call('DEL', errors_list_name)
+                            redis.call('SREM', dedupe_set_name, j_id)
+                            redis.call('HDEL', job_data_hash, j_id)
+                            redis.call('DEL', job_meta_hash)
+                            redis.call('DEL', errors_list_name)
+                            actually_deleted = actually_deleted + 1
+                        end
                     end
                     redis.call('LTRIM', list_name, 0, max_len - 1)
                 end
-                return #job_ids_to_delete
+                return actually_deleted
             "#,
         );
 
@@ -1125,6 +1155,9 @@ impl<H: DurableExecution> Queue<H> {
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
             .key(self.dedupe_set_name())
+            .key(self.active_hash_name()) // Check if job is active
+            .key(self.pending_list_name()) // Check if job is pending
+            .key(self.delayed_zset_name()) // Check if job is delayed
             .arg(self.options.max_failed)
             .invoke_async(&mut self.redis.clone())
             .await?;
