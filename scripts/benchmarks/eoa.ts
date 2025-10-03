@@ -1,14 +1,3 @@
-/// <reference lib="dom" />
-
-// Bun globals (runtime will provide these)
-declare const Bun: any;
-declare const process: any;
-
-// Extend ImportMeta for Bun
-interface ImportMeta {
-  dir: string;
-}
-
 // Types based on events.rs
 interface WebhookEvent {
   transactionId: string;

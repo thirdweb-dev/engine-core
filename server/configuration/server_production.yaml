@@ -19,7 +19,7 @@ redis:
 
 queue:
   execution_namespace: "engine-cloud"
-  webhook_workers: 100
+  webhook_workers: 300
   external_bundler_send_workers: 100
   userop_confirm_workers: 100
   local_concurrency: 100

@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 
 use alloy::transports::http::reqwest;
 use engine_core::error::EngineError;
+use engine_core::credentials::KmsClientCache;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
     eoa::{EoaExecutorJobHandler, authorization_cache::EoaAuthorizationCache},
@@ -50,6 +51,7 @@ impl QueueManager {
         userop_signer: Arc<engine_core::userop::UserOpSigner>,
         eoa_signer: Arc<engine_core::signer::EoaSigner>,
         authorization_cache: EoaAuthorizationCache,
+        kms_client_cache: KmsClientCache,
     ) -> Result<Self, EngineError> {
         // Create transaction registry
         let transaction_registry = Arc::new(TransactionRegistry::new(
@@ -247,6 +249,7 @@ impl QueueManager {
             max_inflight: 100,
             max_recycled_nonces: 50,
             eoa_metrics,
+            kms_client_cache,
         };
 
         let eoa_executor_queue = Queue::builder()

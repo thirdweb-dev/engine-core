@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use engine_core::{signer::EoaSigner, userop::UserOpSigner};
+use engine_core::{signer::EoaSigner, userop::UserOpSigner, credentials::KmsClientCache};
 use engine_executors::{eoa::authorization_cache::EoaAuthorizationCache, metrics::{ExecutorMetrics, initialize_metrics}};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
@@ -19,7 +19,8 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             // Default to info level if RUST_LOG environment variable is not set
-            "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=debug,engine_executors=debug,thirdweb_core=debug"
+            // Note: engine_executors::webhook=warn overrides the general engine_executors=debug
+            "thirdweb_engine=debug,tower_http=debug,axum=debug,twmq=info,engine_executors=debug,engine_executors::webhook=warn,thirdweb_core=debug"
                 .into()
         }));
 
@@ -47,6 +48,14 @@ async fn main() -> anyhow::Result<()> {
     let iaw_client = IAWClient::new(&config.thirdweb.urls.iaw_service)?;
     tracing::info!("IAW client initialized");
 
+    let kms_client_cache: KmsClientCache = moka::future::Cache::builder()
+        .max_capacity(100) // Limit number of KMS clients cached
+        .time_to_live(Duration::from_secs(60 * 60)) // 1 hour TTL
+        .time_to_idle(Duration::from_secs(60 * 30)) // 30 minutes idle timeout
+        .build();
+
+    tracing::info!("KMS client cache initialized");
+
     let signer = Arc::new(UserOpSigner {
         vault_client: vault_client.clone(),
         iaw_client: iaw_client.clone(),
@@ -69,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         signer.clone(),
         eoa_signer.clone(),
         authorization_cache.clone(),
+        kms_client_cache.clone(),
     )
     .await?;
 
@@ -119,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
         queue_manager: Arc::new(queue_manager),
         diagnostic_access_password: config.server.diagnostic_access_password,
         metrics_registry,
+        kms_client_cache: kms_client_cache.clone(),
     })
     .await;
 

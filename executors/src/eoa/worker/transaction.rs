@@ -176,7 +176,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Try EIP-1559 fees first, fall back to legacy if unsupported
         match self.chain.provider().estimate_eip1559_fees().await {
             Ok(eip1559_fees) => {
-                tracing::debug!(
+                tracing::trace!(
                     "Using EIP-1559 fees: max_fee={}, max_priority_fee={}",
                     eip1559_fees.max_fee_per_gas,
                     eip1559_fees.max_priority_fee_per_gas
@@ -397,7 +397,11 @@ impl<C: Chain> EoaExecutorWorker<C> {
         nonce: u64,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(request, nonce).await?;
-        self.sign_transaction(typed_tx, &request.signing_credential)
+        
+        // Inject KMS cache into the signing credential (after deserialization from Redis)
+        let credential_with_cache = request.signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
+        
+        self.sign_transaction(typed_tx, &credential_with_cache)
             .await
     }
 

@@ -3,7 +3,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use engine_core::{
     chain::{Chain, ChainService},
-    credentials::SigningCredential,
+    credentials::{SigningCredential, KmsClientCache},
     error::AlloyRpcErrorToEngineError,
     signer::EoaSigner,
 };
@@ -127,6 +127,9 @@ where
 
     // EOA metrics abstraction with encapsulated configuration
     pub eoa_metrics: EoaMetrics,
+    
+    // KMS client cache for AWS KMS credentials
+    pub kms_client_cache: KmsClientCache,
 }
 
 impl<CS> DurableExecution for EoaExecutorJobHandler<CS>
@@ -182,12 +185,15 @@ where
 
         let chain_id = chain.chain_id();
 
+        // Inject KMS cache into the noop signing credential (after deserialization from Redis)
+        let noop_signing_credential = data.noop_signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
+
         let worker = EoaExecutorWorker {
             store: scoped,
             chain,
             eoa: data.eoa_address,
             chain_id: data.chain_id,
-            noop_signing_credential: data.noop_signing_credential.clone(),
+            noop_signing_credential,
 
             max_inflight: if is_minimal_account {
                 1
@@ -199,6 +205,7 @@ where
             max_recycled_nonces: self.max_recycled_nonces,
             webhook_queue: self.webhook_queue.clone(),
             signer: self.eoa_signer.clone(),
+            kms_client_cache: self.kms_client_cache.clone(),
         };
 
         let job_start_time = current_timestamp_ms();
@@ -311,6 +318,7 @@ pub struct EoaExecutorWorker<C: Chain> {
 
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub signer: Arc<EoaSigner>,
+    pub kms_client_cache: KmsClientCache,
 }
 
 impl<C: Chain> EoaExecutorWorker<C> {
