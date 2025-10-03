@@ -101,22 +101,6 @@ impl AwsKmsCredential {
         }
     }
 
-    /// Create a new AwsKmsCredential without cache (for backward compatibility)
-    pub fn without_cache(
-        access_key_id: String,
-        secret_access_key: String,
-        key_id: String,
-        region: String,
-    ) -> Self {
-        Self {
-            access_key_id,
-            secret_access_key,
-            key_id,
-            region,
-            kms_client_cache: None,
-        }
-    }
-
     /// Inject cache into this credential (useful after deserialization)
     pub fn with_cache(mut self, kms_client_cache: KmsClientCache) -> Self {
         self.kms_client_cache = Some(kms_client_cache);
@@ -145,7 +129,7 @@ impl AwsKmsCredential {
         match &self.kms_client_cache {
             Some(cache) => {
                 let cache_key = self.cache_key();
-                
+
                 match cache.get(&cache_key).await {
                     Some(client) => {
                         tracing::debug!("Using cached KMS client for key: {}", cache_key);
