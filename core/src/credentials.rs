@@ -7,6 +7,7 @@ use aws_sdk_kms::config::{Credentials, ProvideCredentials};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use thirdweb_core::auth::ThirdwebAuth;
 use thirdweb_core::iaw::AuthToken;
 use vault_types::enclave::auth::Auth as VaultAuth;
@@ -130,18 +131,13 @@ impl AwsKmsCredential {
             Some(cache) => {
                 let cache_key = self.cache_key();
 
-                match cache.get(&cache_key).await {
-                    Some(client) => {
-                        tracing::debug!("Using cached KMS client for key: {}", cache_key);
-                        Ok(client)
-                    }
-                    None => {
+                cache
+                    .try_get_with(cache_key, async {
                         tracing::debug!("Creating new KMS client for key: {}", cache_key);
-                        let client = self.create_kms_client().await?;
-                        cache.insert(cache_key, client.clone()).await;
-                        Ok(client)
-                    }
-                }
+                        self.create_kms_client().await
+                    })
+                    .await
+                    .map_err(|e| e.deref().clone())
             }
             None => {
                 // Fallback to creating a new client without caching
