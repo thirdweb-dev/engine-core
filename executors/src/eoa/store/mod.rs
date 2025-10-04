@@ -577,24 +577,51 @@ impl EoaExecutorStore {
             pipe.hget(&tx_data_key, "user_request");
         }
 
-        let user_requests: Vec<String> = pipe.query_async(&mut conn).await?;
+        let user_requests: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
 
-        let user_requests: Vec<EoaTransactionRequest> = user_requests
-            .into_iter()
-            .map(|user_request_json| serde_json::from_str(&user_request_json))
-            .collect::<Result<Vec<EoaTransactionRequest>, serde_json::Error>>()?;
+        let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
+        let mut deletion_pipe = twmq::redis::pipe();
 
-        let pending_transactions: Vec<PendingTransaction> = transaction_ids
-            .into_iter()
-            .zip(user_requests)
-            .map(
-                |((transaction_id, queued_at), user_request)| PendingTransaction {
-                    transaction_id,
-                    queued_at,
-                    user_request,
-                },
-            )
-            .collect();
+        for ((transaction_id, queued_at), user_request) in transaction_ids.into_iter().zip(user_requests) {
+            match user_request {
+                Some(user_request) => {
+                    let user_request_parsed = serde_json::from_str(&user_request)?;
+                    pending_transactions.push(PendingTransaction {
+                        transaction_id,
+                        queued_at,
+                        user_request: user_request_parsed,
+                    });
+                }
+                None => {
+                    tracing::warn!(
+                        "Transaction {} data was missing, deleting transaction from redis",
+                        transaction_id
+                    );
+                    deletion_pipe.zrem(self.keys.pending_transactions_zset_name(), transaction_id);
+                }
+            }
+        }
+
+        if !deletion_pipe.is_empty() {
+            deletion_pipe.query_async::<()>(&mut conn).await?;
+        }
+
+        // let user_requests: Vec<EoaTransactionRequest> = user_requests
+        //     .into_iter()
+        //     .map(|user_request_json| serde_json::from_str(&user_request_json))
+        //     .collect::<Result<Vec<EoaTransactionRequest>, serde_json::Error>>()?;
+
+        // let pending_transactions: Vec<PendingTransaction> = transaction_ids
+        //     .into_iter()
+        //     .zip(user_requests)
+        //     .map(
+        //         |((transaction_id, queued_at), user_request)| PendingTransaction {
+        //             transaction_id,
+        //             queued_at,
+        //             user_request,
+        //         },
+        //     )
+        //     .collect();
 
         Ok(pending_transactions)
     }
