@@ -17,7 +17,13 @@ class SimpleRedisCleanup {
   private redis: Redis;
   private stats = {
     useropErrors: 0,
+    useropResults: 0,
     eip7702Errors: 0,
+    eip7702Results: 0,
+    webhookErrors: 0,
+    webhookResults: 0,
+    externalBundlerErrors: 0,
+    externalBundlerResults: 0,
     totalDeleted: 0,
     errors: 0,
   };
@@ -30,15 +36,31 @@ class SimpleRedisCleanup {
     console.log(`🚀 Starting cleanup (DRY_RUN: ${CONFIG.dryRun})`);
     console.log("🎯 Target patterns:");
     console.log("   - twmq:engine-cloud_userop_confirm:job:*:errors");
+    console.log("   - twmq:engine-cloud_userop_confirm:jobs:result (hash)");
     console.log("   - twmq:engine-cloud_eip7702_send:job:*:errors");
+    console.log("   - twmq:engine-cloud_eip7702_send:jobs:result (hash)");
+    console.log("   - twmq:engine-cloud_webhook:job:*:errors");
+    console.log("   - twmq:engine-cloud_webhook:jobs:result (hash)");
+    console.log("   - twmq:engine-cloud_external_bundler_send:job:*:errors");
+    console.log("   - twmq:engine-cloud_external_bundler_send:jobs:result (hash)");
     console.log("");
 
     try {
-      // Clean userop confirm error keys
+      // Clean userop confirm keys
       await this.cleanPattern("twmq:engine-cloud_userop_confirm:job:*:errors");
+      await this.cleanHash("twmq:engine-cloud_userop_confirm:jobs:result", "userop_confirm");
       
-      // Clean eip7702 send error keys
+      // Clean eip7702 send keys
       await this.cleanPattern("twmq:engine-cloud_eip7702_send:job:*:errors");
+      await this.cleanHash("twmq:engine-cloud_eip7702_send:jobs:result", "eip7702_send");
+      
+      // Clean webhook keys
+      await this.cleanPattern("twmq:engine-cloud_webhook:job:*:errors");
+      await this.cleanHash("twmq:engine-cloud_webhook:jobs:result", "webhook");
+      
+      // Clean external bundler send keys
+      await this.cleanPattern("twmq:engine-cloud_external_bundler_send:job:*:errors");
+      await this.cleanHash("twmq:engine-cloud_external_bundler_send:jobs:result", "external_bundler_send");
 
       this.printFinalStats();
     } catch (error) {
@@ -83,6 +105,37 @@ class SimpleRedisCleanup {
     console.log("");
   }
 
+  private async cleanHash(key: string, queueType: string): Promise<void> {
+    console.log(`🔍 Checking hash: ${key}`);
+    
+    try {
+      const exists = await this.redis.exists(key);
+      
+      if (exists) {
+        const fieldCount = await this.redis.hlen(key);
+        console.log(`   Found hash with ${fieldCount} fields`);
+
+        if (CONFIG.dryRun) {
+          console.log(`   [DRY RUN] Would delete hash with ${fieldCount} fields`);
+          this.updateStatsForHash(queueType, fieldCount);
+        } else {
+          await this.redis.del(key);
+          console.log(`   ✅ Deleted hash with ${fieldCount} fields`);
+          this.updateStatsForHash(queueType, fieldCount);
+          this.stats.totalDeleted += 1;
+        }
+      } else {
+        console.log(`   Hash does not exist`);
+      }
+      
+      console.log(`✅ Hash complete: ${key}`);
+      console.log("");
+    } catch (error) {
+      console.error(`   💥 Error handling hash: ${error}`);
+      this.stats.errors += 1;
+    }
+  }
+
   private async deleteKeys(keys: string[]): Promise<void> {
     try {
       const pipeline = this.redis.pipeline();
@@ -112,13 +165,39 @@ class SimpleRedisCleanup {
       this.stats.useropErrors += count;
     } else if (pattern.includes("eip7702_send")) {
       this.stats.eip7702Errors += count;
+    } else if (pattern.includes("webhook")) {
+      this.stats.webhookErrors += count;
+    } else if (pattern.includes("external_bundler_send")) {
+      this.stats.externalBundlerErrors += count;
+    }
+  }
+
+  private updateStatsForHash(queueType: string, count: number): void {
+    if (queueType === "userop_confirm") {
+      this.stats.useropResults += count;
+    } else if (queueType === "eip7702_send") {
+      this.stats.eip7702Results += count;
+    } else if (queueType === "webhook") {
+      this.stats.webhookResults += count;
+    } else if (queueType === "external_bundler_send") {
+      this.stats.externalBundlerResults += count;
     }
   }
 
   private printFinalStats(): void {
     console.log("📈 Final Statistics:");
-    console.log(`   Userop Confirm Errors: ${this.stats.useropErrors.toLocaleString()}`);
-    console.log(`   EIP-7702 Send Errors: ${this.stats.eip7702Errors.toLocaleString()}`);
+    console.log(`   Userop Confirm:`);
+    console.log(`     - Errors: ${this.stats.useropErrors.toLocaleString()}`);
+    console.log(`     - Result Hash Fields: ${this.stats.useropResults.toLocaleString()}`);
+    console.log(`   EIP-7702 Send:`);
+    console.log(`     - Errors: ${this.stats.eip7702Errors.toLocaleString()}`);
+    console.log(`     - Result Hash Fields: ${this.stats.eip7702Results.toLocaleString()}`);
+    console.log(`   Webhook:`);
+    console.log(`     - Errors: ${this.stats.webhookErrors.toLocaleString()}`);
+    console.log(`     - Result Hash Fields: ${this.stats.webhookResults.toLocaleString()}`);
+    console.log(`   External Bundler Send:`);
+    console.log(`     - Errors: ${this.stats.externalBundlerErrors.toLocaleString()}`);
+    console.log(`     - Result Hash Fields: ${this.stats.externalBundlerResults.toLocaleString()}`);
     console.log(`   Total ${CONFIG.dryRun ? 'Would Delete' : 'Deleted'}: ${this.stats.totalDeleted.toLocaleString()}`);
     if (this.stats.errors > 0) {
       console.log(`   Errors: ${this.stats.errors}`);
