@@ -226,11 +226,22 @@ where
             .delegation_contract_cache
             .get_delegation_contract(transactions.account().chain())
             .await
-            .map_err(|e| Eip7702SendError::DelegationCheckFailed { inner_error: e })
-            .map_err_nack(
-                Some(Duration::from_secs(2)),
-                twmq::job::RequeuePosition::Last,
-            )?;
+            .map_err(|e| {
+                let mapped_error = Eip7702SendError::DelegationCheckFailed {
+                    inner_error: e.clone(),
+                };
+                
+                // Retry only if the error is retryable (network issues, 5xx, etc.)
+                // Client errors (4xx) like "Invalid chain" or auth errors fail immediately
+                if is_build_error_retryable(&e) {
+                    mapped_error.nack(
+                        Some(Duration::from_secs(2)),
+                        twmq::job::RequeuePosition::Last,
+                    )
+                } else {
+                    mapped_error.fail()
+                }
+            })?;
 
         let transactions = transactions
             .add_authorization_if_needed(
@@ -249,6 +260,8 @@ where
                     },
                 };
 
+                // Retry only if the error is retryable (network issues, 5xx, etc.)
+                // Client errors (4xx) like "Invalid chain" or auth errors fail immediately
                 if is_build_error_retryable(&e) {
                     mapped_error.nack_with_max_retries(
                         Some(Duration::from_secs(2)),

@@ -332,11 +332,25 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Don't modify transaction registry on NACK - job will be retried
-        if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
-            tracing::error!(
+        
+        // Only queue webhook for actual errors, not for "waiting for receipt" states
+        let should_queue_webhook = !matches!(
+            nack_data.error,
+            Eip7702ConfirmationError::ReceiptNotAvailable { .. }
+        );
+
+        if should_queue_webhook {
+            if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
+                tracing::error!(
+                    transaction_id = job.job.data.transaction_id,
+                    error = ?e,
+                    "Failed to queue nack webhook"
+                );
+            }
+        } else {
+            tracing::debug!(
                 transaction_id = job.job.data.transaction_id,
-                error = ?e,
-                "Failed to queue nack webhook"
+                "Skipping webhook for receipt not available - transaction still mining"
             );
         }
     }

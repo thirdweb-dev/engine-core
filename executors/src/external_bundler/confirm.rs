@@ -124,8 +124,8 @@ where
             deployment_lock,
             webhook_queue,
             transaction_registry,
-            max_confirmation_attempts: 20, // ~5 minutes with 15 second delays
-            confirmation_retry_delay: Duration::from_secs(5),
+            max_confirmation_attempts: 50, // ~100 seconds with 2 second delays
+            confirmation_retry_delay: Duration::from_secs(2),
         }
     }
 
@@ -274,12 +274,26 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // NEVER release lock on NACK - job will be retried with the same lock
-        // Just queue webhook with current status
-        if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
-            tracing::error!(
+        
+        // Only queue webhook for actual errors, not for "waiting for receipt" states
+        let should_queue_webhook = !matches!(
+            nack_data.error,
+            UserOpConfirmationError::ReceiptNotAvailable { .. }
+        );
+
+        if should_queue_webhook {
+            if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
+                tracing::error!(
+                    transaction_id = job.job.data.transaction_id,
+                    error = ?e,
+                    "Failed to queue nack webhook"
+                );
+            }
+        } else {
+            tracing::debug!(
                 transaction_id = job.job.data.transaction_id,
-                error = ?e,
-                "Failed to queue nack webhook"
+                attempt = job.job.attempts,
+                "Skipping webhook for receipt not available - transaction still mining"
             );
         }
 
