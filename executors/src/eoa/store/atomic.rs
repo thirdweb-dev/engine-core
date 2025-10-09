@@ -425,8 +425,18 @@ impl AtomicEoaExecutorStore {
         let health_update = if let Some(mut health) = current_health {
             health.last_nonce_movement_at = now;
             health.last_confirmation_at = now;
+
+            tracing::info!(
+                current_chain_tx_count = current_chain_tx_count,
+                "Updated health data with last nonce movement at {now}"
+            );
+
             Some(serde_json::to_string(&health)?)
         } else {
+            tracing::info!(
+                current_chain_tx_count = current_chain_tx_count,
+                "No health data found, initializing with fresh data"
+            );
             None
         };
 
@@ -464,6 +474,15 @@ impl AtomicEoaExecutorStore {
             if let Some(ref health_json) = health_update {
                 let health_key = self.eoa_health_key_name();
                 pipeline.set(&health_key, health_json);
+                tracing::info!(
+                    current_chain_tx_count = current_chain_tx_count,
+                    "Updated health data with last nonce movement at {now}"
+                );
+            } else {
+                tracing::info!(
+                    current_chain_tx_count = current_chain_tx_count,
+                    "No health data found, skipping health data update"
+                );
             }
         })
         .await
