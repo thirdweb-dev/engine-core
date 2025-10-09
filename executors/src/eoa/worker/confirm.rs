@@ -262,6 +262,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
             )
             .await?;
 
+        // If we confirmed any transactions, update the health timestamp even if latest hasn't caught up yet
+        // This handles the case where flashblocks preconfirmed is ahead of latest
+        if !successes.is_empty() {
+            // Update health timestamp to reflect nonce movement from confirmations
+            if let Ok(mut health) = self.get_eoa_health().await {
+                let now = EoaExecutorStore::now();
+                health.last_nonce_movement_at = now;
+                health.last_confirmation_at = now;
+                if let Err(e) = self.store.update_health_data(&health).await {
+                    tracing::warn!(
+                        error = ?e,
+                        "Failed to update health timestamp after confirming transactions"
+                    );
+                }
+            }
+        }
+
         Ok(report)
     }
 
