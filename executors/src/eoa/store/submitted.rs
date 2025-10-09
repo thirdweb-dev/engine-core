@@ -484,10 +484,10 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
             );
         }
 
-        pipeline.set(
-            self.keys.last_transaction_count_key_name(),
-            self.transaction_counts.latest + 1,
-        );
+        // pipeline.set(
+        //     self.keys.last_transaction_count_key_name(),
+        //     self.transaction_counts.latest + 1,
+        // );
 
         // Finalize report stats
         report.total_hashes_processed = submitted_txs.len();
