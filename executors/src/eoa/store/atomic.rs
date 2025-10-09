@@ -716,6 +716,9 @@ impl SafeRedisTransaction for ResetNoncesTransaction<'_> {
             if health.nonce_resets.len() > 5 {
                 health.nonce_resets.drain(0..health.nonce_resets.len() - 5);
             }
+            // Update nonce movement timestamp since we're resetting to a new chain nonce
+            health.last_nonce_movement_at = now;
+            health.last_confirmation_at = now;
             Some(serde_json::to_string(&health)?)
         } else {
             None
