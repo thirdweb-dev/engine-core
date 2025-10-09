@@ -81,6 +81,9 @@ pub enum Eip7702ConfirmationError {
     #[error("Failed to get transaction hash from bundler: {message}")]
     TransactionHashError { message: String },
 
+    #[error("Transaction hash is pending: {message}")]
+    TransactionHashPending { message: String },
+
     #[error("Failed to confirm transaction: {message}")]
     #[serde(rename_all = "camelCase")]
     ConfirmationError {
@@ -229,8 +232,8 @@ where
             }
 
             TwGetTransactionHashResponse::Pending => {
-                return Err(Eip7702ConfirmationError::TransactionHashError {
-                    message: "Transaction not yet confirmed".to_string(),
+                return Err(Eip7702ConfirmationError::TransactionHashPending {
+                    message: "Transaction hash not yet available".to_string(),
                 })
                 .map_err_nack(Some(Duration::from_secs(1)), RequeuePosition::Last);
             }
@@ -332,11 +335,12 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // Don't modify transaction registry on NACK - job will be retried
-        
+
         // Only queue webhook for actual errors, not for "waiting for receipt" states
         let should_queue_webhook = !matches!(
             nack_data.error,
             Eip7702ConfirmationError::ReceiptNotAvailable { .. }
+                | Eip7702ConfirmationError::TransactionHashPending { .. }
         );
 
         if should_queue_webhook {
