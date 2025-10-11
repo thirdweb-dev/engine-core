@@ -1,10 +1,10 @@
-use base64::{engine::general_purpose::STANDARD as Base64Engine, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as Base64Engine};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::{
     instruction::Instruction,
-    message::{v0, AccountMeta, VersionedMessage},
+    message::{AccountMeta, VersionedMessage, v0},
     pubkey::Pubkey,
     transaction::VersionedTransaction,
 };
@@ -92,11 +92,16 @@ impl SolanaInstructionData {
     pub fn get_data_bytes(&self) -> Result<Vec<u8>, SolanaTransactionError> {
         match self.encoding {
             // try to decode both prefixed and non-prefixed hex
-            InstructionDataEncoding::Hex => Ok(hex::decode(&self.data)
-                .or_else(|_| hex::decode(&self.data[2..]))
-                .map_err(|e| SolanaTransactionError::InvalidData {
+            InstructionDataEncoding::Hex => {
+                let s = self
+                    .data
+                    .strip_prefix("0x")
+                    .or_else(|| self.data.strip_prefix("0X"))
+                    .unwrap_or(self.data.as_str());
+                hex::decode(s).map_err(|e| SolanaTransactionError::InvalidData {
                     error: e.to_string(),
-                })?),
+                })
+            }
             InstructionDataEncoding::Base64 => {
                 Ok(Base64Engine.decode(&self.data).map_err(|e| {
                     SolanaTransactionError::InvalidData {
