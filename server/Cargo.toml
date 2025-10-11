@@ -5,10 +5,10 @@ edition = "2024"
 
 [dependencies]
 alloy = { workspace = true, features = ["serde"] }
-axum = { version = "0.8.4", features = ["macros"] }
-config = "0.15.11"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+axum = { workspace = true, features = ["macros"] }
+config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 vault-sdk = { workspace = true }
 vault-types = { workspace = true }
 engine-core = { path = "../core" }
@@ -16,33 +16,33 @@ engine-aa-core = { path = "../aa-core" }
 engine-executors = { path = "../executors" }
 twmq = { path = "../twmq" }
 thirdweb-core = { path = "../thirdweb-core" }
-tokio = { version = "1.44.2", features = ["full"] }
-tower-http = { version = "0.6.2", features = ["cors", "trace"] }
-tracing = "0.1.41"
-anyhow = "1.0.98"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-rand = "0.9.1"
-futures = "0.3.31"
-serde-bool = "0.1.3"
-aide = { version = "0.14.2", features = [
+tokio = { workspace = true, features = ["full"] }
+tower-http = { workspace = true, features = ["cors", "trace"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+rand = { workspace = true }
+futures = { workspace = true }
+serde-bool = { workspace = true }
+aide = { workspace = true, features = [
     "axum",
     "axum-json",
     "macros",
     "scalar",
 ] }
-schemars = "0.8.22"
-utoipa = { version = "5.4.0", features = [
+schemars = { workspace = true }
+utoipa = { workspace = true, features = [
     "macros",
     "chrono",
     "uuid",
     "axum_extras",
     "preserve_order",
 ] }
-utoipa-axum = "0.2.0"
-utoipa-scalar = { version = "0.3.0", features = ["axum"] }
-serde_with = "3.14.0"
-aws-arn = "0.3.1"
-moka = { version = "0.12.10", features = ["future"] }
+utoipa-axum = { workspace = true }
+utoipa-scalar = { workspace = true, features = ["axum"] }
+serde_with = { workspace = true }
+aws-arn = { workspace = true }
+moka = { workspace = true }
 engine-eip7702-core = { path = "../eip7702-core" }
-prometheus = "0.13.4"
-thiserror = "2.0.12"
+prometheus = { workspace = true }
+thiserror = { workspace = true }

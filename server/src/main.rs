@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let queue_manager = QueueManager::new(
         redis_client.clone(),
         &config.queue,
+        &config.solana,
         chains.clone(),
         signer.clone(),
         eoa_signer.clone(),
@@ -104,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
         eoa_executor_queue: queue_manager.eoa_executor_queue.clone(),
         eip7702_send_queue: queue_manager.eip7702_send_queue.clone(),
         eip7702_confirm_queue: queue_manager.eip7702_confirm_queue.clone(),
+        solana_executor_queue: queue_manager.solana_executor_queue.clone(),
         transaction_registry: queue_manager.transaction_registry.clone(),
         vault_client: Arc::new(vault_client.clone()),
         chains: chains.clone(),

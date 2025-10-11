@@ -2,8 +2,8 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy::transports::http::reqwest;
-use engine_core::error::EngineError;
 use engine_core::credentials::KmsClientCache;
+use engine_core::error::EngineError;
 use engine_executors::{
     eip7702_executor::{confirm::Eip7702ConfirmationHandler, send::Eip7702SendHandler},
     eoa::{EoaExecutorJobHandler, authorization_cache::EoaAuthorizationCache},
@@ -11,6 +11,10 @@ use engine_executors::{
         confirm::UserOpConfirmationHandler,
         deployment::{RedisDeploymentCache, RedisDeploymentLock},
         send::ExternalBundlerSendHandler,
+    },
+    solana_executor::{
+        rpc_cache::SolanaRpcCache, storage::SolanaTransactionStorage,
+        worker::SolanaExecutorJobHandler,
     },
     transaction_registry::TransactionRegistry,
     webhook::{WebhookJobHandler, WebhookRetryConfig},
@@ -26,6 +30,7 @@ pub struct QueueManager {
     pub eoa_executor_queue: Arc<Queue<EoaExecutorJobHandler<ThirdwebChainService>>>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
+    pub solana_executor_queue: Arc<Queue<SolanaExecutorJobHandler>>,
     pub transaction_registry: Arc<TransactionRegistry>,
 }
 
@@ -47,6 +52,7 @@ impl QueueManager {
     pub async fn new(
         redis_client: twmq::redis::Client,
         queue_config: &QueueConfig,
+        solana_config: &crate::config::SolanaConfig,
         chain_service: Arc<ThirdwebChainService>,
         userop_signer: Arc<engine_core::userop::UserOpSigner>,
         eoa_signer: Arc<engine_core::signer::EoaSigner>,
@@ -179,6 +185,11 @@ impl QueueManager {
             .await?
             .arc();
 
+        let solana_signer = Arc::new(engine_core::signer::SolanaSigner::new(
+            userop_signer.vault_client.clone(),
+            userop_signer.iaw_client.clone(),
+        ));
+
         // Create send queues
         let send_handler = ExternalBundlerSendHandler {
             chain_service: chain_service.clone(),
@@ -261,6 +272,39 @@ impl QueueManager {
             .await?
             .arc();
 
+        // Create Solana executor queue
+        let solana_executor_queue_name =
+            get_queue_name_for_namespace(&queue_config.execution_namespace, "solana_executor");
+        let mut solana_executor_queue_opts = base_queue_opts.clone();
+        solana_executor_queue_opts.local_concurrency = queue_config.solana_executor_workers;
+
+        let solana_rpc_urls = engine_executors::solana_executor::rpc_cache::SolanaRpcUrls {
+            devnet: solana_config.devnet.http_url.clone(),
+            mainnet: solana_config.mainnet.http_url.clone(),
+            local: solana_config.local.http_url.clone(),
+        };
+        let solana_rpc_cache = Arc::new(SolanaRpcCache::new(solana_rpc_urls));
+        let solana_storage = SolanaTransactionStorage::new(
+            redis_client.get_connection_manager().await?,
+            queue_config.execution_namespace.clone(),
+        );
+        let solana_executor_handler = SolanaExecutorJobHandler {
+            solana_signer,
+            rpc_cache: solana_rpc_cache,
+            storage: Arc::new(solana_storage),
+            webhook_queue: webhook_queue.clone(),
+            transaction_registry: transaction_registry.clone(),
+        };
+
+        let solana_executor_queue = Queue::builder()
+            .name(solana_executor_queue_name)
+            .options(solana_executor_queue_opts)
+            .handler(solana_executor_handler)
+            .redis_client(redis_client.clone())
+            .build()
+            .await?
+            .arc();
+
         Ok(Self {
             webhook_queue,
             external_bundler_send_queue,
@@ -268,6 +312,7 @@ impl QueueManager {
             eoa_executor_queue,
             eip7702_send_queue,
             eip7702_confirm_queue,
+            solana_executor_queue,
             transaction_registry,
         })
     }
@@ -300,14 +345,19 @@ impl QueueManager {
         tracing::info!("Starting EIP-7702 confirmation worker");
         let eip7702_confirm_worker = self.eip7702_confirm_queue.work();
 
+        // Start Solana executor workers
+        tracing::info!("Starting Solana executor worker");
+        let solana_executor_worker = self.solana_executor_queue.work();
+
         tracing::info!(
-            "Started {} webhook workers, {} send workers, {} confirm workers, {} eoa workers, {} EIP-7702 send workers, {} EIP-7702 confirm workers",
+            "Started {} webhook workers, {} send workers, {} confirm workers, {} eoa workers, {} EIP-7702 send workers, {} EIP-7702 confirm workers, {} solana workers",
             queue_config.webhook_workers,
             queue_config.external_bundler_send_workers,
             queue_config.userop_confirm_workers,
             queue_config.eoa_executor_workers,
             queue_config.external_bundler_send_workers, // Reusing same config for now
-            queue_config.userop_confirm_workers         // Reusing same config for now
+            queue_config.userop_confirm_workers,        // Reusing same config for now
+            queue_config.solana_executor_workers,
         );
 
         ShutdownHandle::with_worker(webhook_worker)
@@ -316,6 +366,7 @@ impl QueueManager {
             .and_worker(eoa_executor_worker)
             .and_worker(eip7702_send_worker)
             .and_worker(eip7702_confirm_worker)
+            .and_worker(solana_executor_worker)
     }
 
     /// Get queue statistics for monitoring

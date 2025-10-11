@@ -548,3 +548,82 @@ pub struct TypedDataSignerParams {
 fn default_account_salt() -> String {
     "0x".to_string()
 }
+
+/// Solana Signer Implementation
+#[derive(Clone)]
+pub struct SolanaSigner {
+    pub vault_client: VaultClient,
+    pub iaw_client: IAWClient,
+}
+
+impl SolanaSigner {
+    /// Create a new Solana signer
+    pub fn new(vault_client: VaultClient, iaw_client: IAWClient) -> Self {
+        Self {
+            vault_client,
+            iaw_client,
+        }
+    }
+
+    /// Sign a Solana transaction using Vault
+    pub async fn sign_transaction(
+        &self,
+        mut transaction: solana_sdk::transaction::VersionedTransaction,
+        from: solana_sdk::pubkey::Pubkey,
+        credentials: &SigningCredential,
+    ) -> Result<solana_sdk::transaction::VersionedTransaction, EngineError> {
+        let signature = match credentials {
+            SigningCredential::Vault(auth_method) => {
+                let vault_result = self
+                    .vault_client
+                    .sign_solana_transaction(auth_method.clone(), transaction.clone(), from)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error signing Solana transaction (Vault): {:?}", e);
+                        e
+                    })?;
+
+                vault_result.signature
+            }
+            SigningCredential::Iaw { .. } => {
+                return Err(EngineError::ValidationError {
+                    message: "IAW does not support Solana transaction signing".to_string(),
+                });
+            }
+            SigningCredential::AwsKms(_) => {
+                // AWS KMS does not support Solana signing yet
+                return Err(EngineError::ValidationError {
+                    message: "AWS KMS does not support Solana transaction signing".to_string(),
+                });
+            }
+            SigningCredential::PrivateKey(_) => {
+                // Private key signing for Solana would require a different signer type
+                return Err(EngineError::ValidationError {
+                    message: "Private key signing not yet implemented for Solana".to_string(),
+                });
+            }
+        };
+
+        // add the signature to the correct position in the transaction
+        // get the index of the signer
+        let signer_index = transaction
+            .message
+            .static_account_keys()
+            .iter()
+            .position(|key| key == &from)
+            .ok_or(EngineError::ValidationError {
+                message: "Signer not found in transaction".to_string(),
+            })?;
+
+        if signer_index >= transaction.signatures.len() {
+            transaction.signatures.resize(
+                signer_index + 1,
+                solana_sdk::signature::Signature::default(),
+            );
+        } else {
+            transaction.signatures[signer_index] = signature;
+        }
+
+        Ok(transaction)
+    }
+}

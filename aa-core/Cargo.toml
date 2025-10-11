@@ -5,10 +5,10 @@ edition = "2024"
 
 [dependencies]
 alloy = { workspace = true, features = ["serde"] }
-tokio = "1.44.2"
+tokio = { workspace = true }
 engine-aa-types = { path = "../aa-types" }
 engine-core = { path = "../core" }
 vault-types = { workspace = true }
 vault-sdk = { workspace = true }
-serde = "1.0.219"
-tracing = "0.1.41"
+serde = { workspace = true }
+tracing = { workspace = true }

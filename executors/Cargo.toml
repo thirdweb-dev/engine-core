@@ -4,26 +4,34 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hex = "0.4.3"
-alloy = { version = "1.0.8", features = ["serde"] }
+hex = { workspace = true }
+alloy = { workspace = true, features = ["serde"] }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
-hmac = "0.12.1"
-reqwest = "0.12.15"
-serde = "1.0.219"
-serde_json = "1.0.140"
-sha2 = "0.10.9"
-thiserror = "2.0.12"
-tracing = "0.1.41"
+hmac = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 twmq = { version = "0.1.0", path = "../twmq" }
 engine-aa-types = { version = "0.1.0", path = "../aa-types" }
 engine-eip7702-core = { version = "0.1.0", path = "../eip7702-core" }
 engine-core = { version = "0.1.0", path = "../core" }
 engine-aa-core = { version = "0.1.0", path = "../aa-core" }
-rand = "0.9.1"
-uuid = { version = "1.17.0", features = ["v4"] }
-chrono = "0.4.41"
-tokio = { version = "1.45.0", features = ["full"] }
-futures = "0.3.31"
-moka = { version = "0.12.10", features = ["future"] }
-prometheus = "0.13.4"
-lazy_static = "1.5.0"
+rand = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+moka = { workspace = true }
+prometheus = { workspace = true }
+lazy_static = { workspace = true }
+engine-solana-core = { version = "0.1.0", path = "../solana-core" }
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+solana-transaction-status = { workspace = true }
+solana-commitment-config = { workspace = true }
+spl-memo-interface = { workspace = true }
+base64 = { workspace = true }
