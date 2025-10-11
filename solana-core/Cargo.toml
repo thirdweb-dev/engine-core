@@ -1,0 +1,23 @@
+[package]
+name = "engine-solana-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+solana-sdk = { workspace = true }
+solana-transaction-status = { workspace = true }
+solana-compute-budget-interface = { workspace = true }
+serde = { workspace = true }
+serde_with = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+utoipa = { workspace = true, features = [
+  "macros",
+  "chrono",
+  "uuid",
+  "axum_extras",
+  "preserve_order",
+] }

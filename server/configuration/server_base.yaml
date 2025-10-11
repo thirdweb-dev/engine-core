@@ -16,11 +16,20 @@ thirdweb:
 redis:
   url: redis://localhost:6379
 
+solana:
+  devnet:
+    http_url: https://api.devnet.solana.com
+    ws_url: wss://api.devnet.solana.com
+  mainnet:
+    http_url: https://api.mainnet-beta.solana.com
+    ws_url: wss://api.mainnet-beta.solana.com
+
 queue:
   webhook_workers: 100
   external_bundler_send_workers: 100
   userop_confirm_workers: 100
   eoa_executor_workers: 100
+  solana_executor_workers: 100
   local_concurrency: 100
   polling_interval_ms: 100
   lease_duration_seconds: 600

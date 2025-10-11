@@ -18,6 +18,95 @@ use twmq::error::TwmqError;
 
 use crate::chain::Chain;
 
+/// Serializable version of Solana's RpcResponseErrorData
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SolanaRpcResponseErrorData {
+    /// Empty error data
+    Empty,
+    /// Transaction simulation/preflight failed
+    SendTransactionPreflightFailure {
+        /// Error message from simulation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        err: Option<String>,
+        /// Logs from simulation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logs: Option<Vec<String>>,
+        /// Accounts used in simulation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        accounts: Option<serde_json::Value>,
+        /// Units consumed during simulation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        units_consumed: Option<u64>,
+        /// Return data from the transaction
+        #[serde(skip_serializing_if = "Option::is_none")]
+        return_data: Option<serde_json::Value>,
+    },
+    /// Node is unhealthy
+    NodeUnhealthy {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        num_slots_behind: Option<u64>,
+    },
+}
+
+/// Solana-specific RPC error types
+#[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SolanaRpcErrorKind {
+    /// IO error (network issues, connection problems)
+    #[error("IO error: {message}")]
+    Io {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+    },
+
+    /// Reqwest HTTP error
+    #[error("HTTP error: {message}")]
+    Reqwest {
+        message: String,
+        #[serde(skip)]
+        url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+    },
+
+    /// RPC protocol error (JSON-RPC error response)
+    #[error("RPC protocol error (code {code}): {message}")]
+    RpcError {
+        code: i64,
+        message: String,
+        /// Structured error data from Solana RPC
+        data: SolanaRpcResponseErrorData,
+    },
+
+    /// JSON serialization/deserialization error
+    #[error("JSON error: {message}")]
+    SerdeJson {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        column: Option<usize>,
+    },
+
+    /// Transaction error from Solana (e.g., insufficient funds, invalid signature)
+    #[error("Transaction error: {error_type}")]
+    TransactionError { error_type: String, message: String },
+
+    /// Signing error
+    #[error("Signing error: {message}")]
+    SigningError { message: String },
+
+    /// Custom error from middleware or validators
+    #[error("Custom error: {message}")]
+    Custom { message: String },
+
+    /// Unknown/other error
+    #[error("Unknown error: {message}")]
+    Unknown { message: String },
+}
+
 #[derive(Debug, Error, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcErrorKind {
@@ -206,6 +295,17 @@ pub enum EngineError {
         kind: RpcErrorKind,
     },
 
+    #[schema(title = "Solana RPC Error")]
+    #[error("Solana RPC error on {chain_id}: {message}")]
+    SolanaRpcError {
+        /// Solana chain identifier
+        chain_id: String,
+        /// Human-readable error message
+        message: String,
+        /// Structured error kind
+        kind: SolanaRpcErrorKind,
+    },
+
     #[schema(title = "Engine Vault KMS Error")]
     #[error("Error interaction with vault: {message}")]
     #[serde(rename_all = "camelCase")]
@@ -325,6 +425,9 @@ pub enum SerialisableAwsSignerError {
 
     #[error("Unknown error: {message}")]
     Unknown { message: String },
+
+    #[error("Signature recovery failed")]
+    SignatureRecoveryFailed,
 }
 
 impl<T: Debug> From<SdkError<T>> for SerialisableAwsSdkError {
@@ -385,6 +488,9 @@ impl From<AwsSignerError> for EngineError {
             },
             AwsSignerError::PublicKeyNotFound => EngineError::AwsKmsSignerError {
                 error: SerialisableAwsSignerError::PublicKeyNotFound,
+            },
+            AwsSignerError::SignatureRecoveryFailed => EngineError::AwsKmsSignerError {
+                error: SerialisableAwsSignerError::SignatureRecoveryFailed,
             },
         }
     }
@@ -457,6 +563,120 @@ pub trait AlloyRpcErrorToEngineError {
     fn to_engine_error(&self, chain: &impl Chain) -> EngineError;
     fn to_engine_bundler_error(&self, chain: &impl Chain) -> EngineError;
     fn to_engine_paymaster_error(&self, chain: &impl Chain) -> EngineError;
+}
+
+/// Trait for converting Solana RPC errors to EngineError
+pub trait SolanaRpcErrorToEngineError {
+    fn to_engine_solana_error(&self, chain_id: &str) -> EngineError;
+}
+
+// Implementation for Solana client errors
+impl SolanaRpcErrorToEngineError for solana_client::client_error::ClientError {
+    fn to_engine_solana_error(&self, chain_id: &str) -> EngineError {
+        use solana_client::client_error::ClientErrorKind;
+
+        let kind = match self.kind() {
+            ClientErrorKind::Io(err) => SolanaRpcErrorKind::Io {
+                message: err.to_string(),
+                kind: Some(format!("{:?}", err.kind())),
+            },
+            ClientErrorKind::Reqwest(err) => {
+                let status = err.status().map(|s| s.as_u16());
+                let url = err.url().map(|u| u.to_string());
+                SolanaRpcErrorKind::Reqwest {
+                    message: err.to_string(),
+                    url,
+                    status,
+                }
+            }
+            ClientErrorKind::RpcError(rpc_err) => {
+                use solana_client::rpc_request::{RpcError, RpcResponseErrorData};
+                match rpc_err {
+                    RpcError::RpcResponseError {
+                        code,
+                        message,
+                        data,
+                    } => {
+                        let structured_data = match data {
+                            RpcResponseErrorData::Empty => SolanaRpcResponseErrorData::Empty,
+                            RpcResponseErrorData::SendTransactionPreflightFailure(result) => {
+                                SolanaRpcResponseErrorData::SendTransactionPreflightFailure {
+                                    err: result.err.as_ref().map(|e| format!("{:?}", e)),
+                                    logs: result.logs.clone(),
+                                    accounts: result.accounts.as_ref().map(|a| {
+                                        serde_json::to_value(a).unwrap_or(serde_json::Value::Null)
+                                    }),
+                                    units_consumed: result.units_consumed,
+                                    return_data: result.return_data.as_ref().map(|d| {
+                                        serde_json::to_value(d).unwrap_or(serde_json::Value::Null)
+                                    }),
+                                }
+                            }
+                            RpcResponseErrorData::NodeUnhealthy { num_slots_behind } => {
+                                SolanaRpcResponseErrorData::NodeUnhealthy {
+                                    num_slots_behind: *num_slots_behind,
+                                }
+                            }
+                        };
+                        SolanaRpcErrorKind::RpcError {
+                            code: *code,
+                            message: message.clone(),
+                            data: structured_data,
+                        }
+                    }
+                    RpcError::RpcRequestError(msg) => SolanaRpcErrorKind::RpcError {
+                        code: -32600,
+                        message: msg.clone(),
+                        data: SolanaRpcResponseErrorData::Empty,
+                    },
+                    RpcError::ParseError(msg) => SolanaRpcErrorKind::SerdeJson {
+                        message: msg.clone(),
+                        line: None,
+                        column: None,
+                    },
+                    RpcError::ForUser(msg) => SolanaRpcErrorKind::Custom {
+                        message: msg.clone(),
+                    },
+                }
+            }
+            ClientErrorKind::SerdeJson(err) => {
+                let line = err.line();
+                let column = err.column();
+                SolanaRpcErrorKind::SerdeJson {
+                    message: err.to_string(),
+                    line: Some(line),
+                    column: Some(column),
+                }
+            }
+            ClientErrorKind::SigningError(err) => SolanaRpcErrorKind::SigningError {
+                message: err.to_string(),
+            },
+            ClientErrorKind::TransactionError(err) => {
+                // Extract structured transaction error information
+                let error_type = format!("{:?}", err)
+                    .split('(')
+                    .next()
+                    .unwrap_or("Unknown")
+                    .to_string();
+                SolanaRpcErrorKind::TransactionError {
+                    error_type,
+                    message: err.to_string(),
+                }
+            }
+            ClientErrorKind::Custom(msg) => SolanaRpcErrorKind::Custom {
+                message: msg.clone(),
+            },
+            _ => SolanaRpcErrorKind::Unknown {
+                message: self.to_string(),
+            },
+        };
+
+        EngineError::SolanaRpcError {
+            chain_id: chain_id.to_string(),
+            message: self.to_string(),
+            kind,
+        }
+    }
 }
 
 fn to_engine_rpc_error_kind(err: &AlloyRpcError<TransportErrorKind>) -> RpcErrorKind {

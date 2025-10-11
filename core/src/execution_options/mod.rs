@@ -9,6 +9,7 @@ pub mod aa;
 pub mod auto;
 pub mod eip7702;
 pub mod eoa;
+pub mod solana;
 
 // Base execution options for all transactions
 // All specific execution options share this

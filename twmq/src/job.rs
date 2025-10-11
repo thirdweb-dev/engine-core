@@ -184,8 +184,11 @@ pub struct Job<T: Clone> {
     pub id: String,
     pub data: T,
     pub attempts: u32,
+    /// Timestamp in seconds
     pub created_at: u64,
+    /// Timestamp in seconds
     pub processed_at: Option<u64>,
+    /// Timestamp in seconds
     pub finished_at: Option<u64>,
 }
 

@@ -9,6 +9,28 @@ pub struct EngineConfig {
     pub thirdweb: ThirdwebConfig,
     pub queue: QueueConfig,
     pub redis: RedisConfig,
+    pub solana: SolanaConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SolanaConfig {
+    pub devnet: SolanRpcConfigData,
+    pub mainnet: SolanRpcConfigData,
+    #[serde(default = "default_local_rpc_config")]
+    pub local: SolanRpcConfigData,
+}
+
+fn default_local_rpc_config() -> SolanRpcConfigData {
+    SolanRpcConfigData {
+        http_url: "http://127.0.0.1:8899".to_string(),
+        ws_url: "ws://127.0.0.1:8900".to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SolanRpcConfigData {
+    pub http_url: String,
+    pub ws_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -18,13 +40,14 @@ pub struct QueueConfig {
     pub external_bundler_send_workers: usize,
     pub userop_confirm_workers: usize,
     pub eoa_executor_workers: usize,
+    pub solana_executor_workers: usize,
 
     pub execution_namespace: Option<String>,
 
     pub local_concurrency: usize,
     pub polling_interval_ms: u64,
     pub lease_duration_seconds: u64,
-    
+
     #[serde(default)]
     pub monitoring: MonitoringConfig,
 }
@@ -42,7 +65,7 @@ impl Default for MonitoringConfig {
         Self {
             eoa_send_degradation_threshold_seconds: 10, // 10 seconds
             eoa_confirmation_degradation_threshold_seconds: 120, // 2 minutes
-            eoa_stuck_threshold_seconds: 600, // 10 minutes
+            eoa_stuck_threshold_seconds: 600,           // 10 minutes
         }
     }
 }

@@ -12,12 +12,12 @@ alloy = { workspace = true, features = [
   "eip712",
 ] }
 engine-aa-types = { path = "../aa-types" }
-moka = { version = "0.12.10", features = ["future"] }
-reqwest = "0.12.18"
-schemars = "0.8.22"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-thiserror = "2.0.12"
-tracing = "0.1.41"
-url = "2.5.4"
-utoipa = "5.4.0"
+moka = { workspace = true }
+reqwest = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+utoipa = { workspace = true }

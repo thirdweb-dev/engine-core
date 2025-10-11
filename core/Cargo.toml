@@ -4,23 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-alloy = { version = "1.0.8", features = ["serde", "json-rpc"] }
+alloy = { workspace = true, features = ["serde", "json-rpc"] }
 engine-aa-types = { path = "../aa-types" }
-schemars = "0.8.22"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-thiserror = "2.0.12"
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 vault-types = { workspace = true }
 vault-sdk = { workspace = true }
-tower = "0.5.2"
-tracing = "0.1.41"
+tower = { workspace = true }
+tracing = { workspace = true }
 twmq = { version = "0.1.0", path = "../twmq" }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
-uuid = { version = "1.17.0", features = ["v4"] }
-utoipa = { version = "5.4.0", features = ["preserve_order"] }
-serde_with = "3.13.0"
-alloy-signer-aws = { version = "1.0.23", features = ["eip712"] }
-aws-config = "1.8.2"
-aws-sdk-kms = "1.79.0"
-aws-credential-types = "1.2.4"
-moka = { version = "0.12", features = ["future"] }
+uuid = { workspace = true }
+utoipa = { workspace = true, features = ["preserve_order"] }
+serde_with = { workspace = true }
+alloy-signer-aws = { workspace = true, features = ["eip712"] }
+aws-config = { workspace = true }
+aws-sdk-kms = { workspace = true }
+aws-credential-types = { workspace = true }
+moka = { workspace = true }
+solana-sdk = { workspace = true }
+solana-commitment-config = { workspace = true }
+solana-client = { workspace = true }
+engine-solana-core = { version = "0.1.0", path = "../solana-core" }

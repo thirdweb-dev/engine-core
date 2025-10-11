@@ -27,6 +27,7 @@ use engine_executors::{
         confirm::UserOpConfirmationHandler,
         send::{ExternalBundlerSendHandler, ExternalBundlerSendJobData},
     },
+    solana_executor::worker::{SolanaExecutorJobData, SolanaExecutorJobHandler},
     transaction_registry::TransactionRegistry,
     webhook::WebhookJobHandler,
 };
@@ -49,6 +50,7 @@ pub struct ExecutionRouter {
     pub eoa_executor_queue: Arc<Queue<EoaExecutorJobHandler<ThirdwebChainService>>>,
     pub eip7702_send_queue: Arc<Queue<Eip7702SendHandler<ThirdwebChainService>>>,
     pub eip7702_confirm_queue: Arc<Queue<Eip7702ConfirmationHandler<ThirdwebChainService>>>,
+    pub solana_executor_queue: Arc<Queue<SolanaExecutorJobHandler>>,
     pub transaction_registry: Arc<TransactionRegistry>,
     pub vault_client: Arc<VaultClient>,
     pub chains: Arc<ThirdwebChainService>,
@@ -498,5 +500,62 @@ impl ExecutionRouter {
         );
 
         Ok(())
+    }
+
+    pub async fn execute_solana(
+        &self,
+        request: engine_core::execution_options::solana::SendSolanaTransactionRequest,
+        signing_credential: SigningCredential,
+    ) -> Result<engine_core::execution_options::solana::QueuedSolanaTransactionResponse, EngineError> {
+        use engine_core::execution_options::solana::{QueuedSolanaTransactionResponse, SolanaTransactionOptions};
+
+        let transaction_id = request.idempotency_key.clone();
+        let chain_id = request.execution_options.chain_id;
+        let signer_address = request.execution_options.signer_address;
+
+        let transaction = SolanaTransactionOptions {
+            instructions: request.instructions,
+            execution_options: request.execution_options,
+        };
+
+        let job_data = SolanaExecutorJobData {
+            transaction_id: transaction_id.clone(),
+            transaction,
+            signing_credential,
+            webhook_options: request.webhook_options,
+        };
+
+        // Register transaction in registry first
+        self.transaction_registry
+            .set_transaction_queue(&transaction_id, "solana_executor")
+            .await
+            .map_err(|e| EngineError::InternalError {
+                message: format!("Failed to register transaction: {e}"),
+            })?;
+
+        // Create job with transaction ID as the job ID for idempotency
+        self.solana_executor_queue
+            .clone()
+            .job(job_data)
+            .with_id(&transaction_id)
+            .push()
+            .await
+            .map_err(|e| EngineError::InternalError {
+                message: format!("Failed to queue Solana transaction: {e}"),
+            })?;
+
+        tracing::debug!(
+            transaction_id = %transaction_id,
+            chain_id = %chain_id.as_str(),
+            signer = %signer_address,
+            queue = "solana_executor",
+            "Solana job queued successfully"
+        );
+
+        Ok(QueuedSolanaTransactionResponse {
+            transaction_id,
+            chain_id,
+            signer_address: signer_address.to_string(),
+        })
     }
 }

@@ -1,5 +1,5 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use engine_core::error::{ContractInteractionErrorKind, EngineError, RpcErrorKind};
+use engine_core::error::{ContractInteractionErrorKind, EngineError, RpcErrorKind, SolanaRpcErrorKind};
 use serde_json::json;
 
 // Extension trait that lets you pair an error with a status code
@@ -84,6 +84,19 @@ impl ApiEngineError {
             EngineError::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             EngineError::ThirdwebError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             EngineError::AwsKmsSignerError { .. } => StatusCode::BAD_GATEWAY,
+            EngineError::SolanaRpcError { kind, .. } => match kind {
+                SolanaRpcErrorKind::Io { .. } => StatusCode::BAD_GATEWAY,
+                SolanaRpcErrorKind::Reqwest { status, .. } => {
+                    status.map(|s| StatusCode::from_u16(s).unwrap_or(StatusCode::BAD_GATEWAY))
+                        .unwrap_or(StatusCode::BAD_GATEWAY)
+                }
+                SolanaRpcErrorKind::RpcError { .. } => StatusCode::BAD_GATEWAY,
+                SolanaRpcErrorKind::SerdeJson { .. } => StatusCode::BAD_GATEWAY,
+                SolanaRpcErrorKind::TransactionError { .. } => StatusCode::BAD_REQUEST,
+                SolanaRpcErrorKind::SigningError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                SolanaRpcErrorKind::Custom { .. } => StatusCode::BAD_GATEWAY,
+                SolanaRpcErrorKind::Unknown { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            },
         }
     }
 }

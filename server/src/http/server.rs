@@ -64,6 +64,9 @@ impl EngineServer {
                 crate::http::routes::transaction_write::write_transaction
             ))
             .routes(routes!(
+                crate::http::routes::solana_transaction::send_solana_transaction
+            ))
+            .routes(routes!(
                 crate::http::routes::transaction::cancel_transaction
             ))
             .routes(routes!(crate::http::routes::sign_message::sign_message))

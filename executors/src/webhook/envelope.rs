@@ -137,15 +137,32 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
         Self::JobData: HasWebhookOptions,
         Self::Output: Serialize + Clone,
     {
+        self.queue_success_webhook_with_stage(job, success_data, tx, None)
+    }
+
+    fn queue_success_webhook_with_stage(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+        success_data: SuccessHookData<'_, Self::Output>,
+        tx: &mut TransactionContext<'_>,
+        stage_override: Option<&str>,
+    ) -> Result<(), TwmqError>
+    where
+        Self::JobData: HasWebhookOptions,
+        Self::Output: Serialize + Clone,
+    {
         let webhook_options = job.job.data.webhook_options();
 
         for w in webhook_options {
+            let stage_name = stage_override
+                .unwrap_or_else(|| Self::stage_name())
+                .to_string();
             let envelope = WebhookNotificationEnvelope {
                 notification_id: Uuid::new_v4().to_string(),
                 transaction_id: job.job.transaction_id(),
                 timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
                 executor_name: Self::executor_name().to_string(),
-                stage_name: Self::stage_name().to_string(),
+                stage_name: stage_name.clone(),
                 event_type: StageEvent::Success,
                 payload: SerializableSuccessData {
                     result: success_data.result.clone(),
@@ -155,6 +172,74 @@ pub trait WebhookCapable: DurableExecution + ExecutorStage {
             };
 
             self.queue_webhook_envelope(envelope, w, job, tx)?
+        }
+
+        Ok(())
+    }
+
+    /// Queue a webhook with custom payload and stage
+    /// This allows sending any serializable data as the webhook payload
+    fn queue_webhook_with_custom_payload<P: Serialize + Clone>(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+        payload: P,
+        event_type: StageEvent,
+        stage_override: &str,
+        tx: &mut TransactionContext<'_>,
+    ) -> Result<(), TwmqError>
+    where
+        Self::JobData: HasWebhookOptions,
+    {
+        let webhook_options = job.job.data.webhook_options();
+
+        for w in webhook_options {
+            let envelope = WebhookNotificationEnvelope {
+                notification_id: Uuid::new_v4().to_string(),
+                transaction_id: job.job.transaction_id(),
+                timestamp: chrono::Utc::now().timestamp().try_into().unwrap(),
+                executor_name: Self::executor_name().to_string(),
+                stage_name: stage_override.to_string(),
+                event_type: event_type.clone(),
+                payload: payload.clone(),
+                delivery_target_url: Some(w.url.clone()),
+                user_metadata: w.user_metadata.clone(),
+            };
+
+            let webhook_payload = crate::webhook::WebhookJobPayload {
+                url: w.url.clone(),
+                body: serde_json::to_string(&envelope)?,
+                headers: Some(
+                    [
+                        ("Content-Type".to_string(), "application/json".to_string()),
+                        (
+                            "User-Agent".to_string(),
+                            format!("{}/{}", Self::executor_name(), stage_override),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                hmac_secret: w.secret.clone(),
+                http_method: Some("POST".to_string()),
+            };
+
+            let mut webhook_job = self.webhook_queue().clone().job(webhook_payload);
+            webhook_job.options.id = format!(
+                "{}_{}_webhook",
+                job.job.transaction_id(),
+                envelope.notification_id
+            );
+
+            tx.queue_job(webhook_job)?;
+
+            tracing::info!(
+                transaction_id = job.job.transaction_id(),
+                executor = Self::executor_name(),
+                stage = stage_override,
+                event = ?event_type,
+                notification_id = envelope.notification_id,
+                "Queued webhook notification with custom payload"
+            );
         }
 
         Ok(())
