@@ -230,7 +230,7 @@ where
                 let mapped_error = Eip7702SendError::DelegationCheckFailed {
                     inner_error: e.clone(),
                 };
-                
+
                 // Retry only if the error is retryable (network issues, 5xx, etc.)
                 // Client errors (4xx) like "Invalid chain" or auth errors fail immediately
                 if is_build_error_retryable(&e) {
@@ -289,23 +289,23 @@ where
                     message: e.to_string(),
                 })
                 .map_err_fail()?;
-            
+
             headers.insert(
                 "x-executor-fleet-id",
-                fleet_id.parse().map_err(|e| {
-                    Eip7702SendError::InvalidRpcCredentials {
+                fleet_id
+                    .parse()
+                    .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
                         message: format!("Invalid fleet_id value: {e}"),
-                    }
-                })
-                .map_err_fail()?,
+                    })
+                    .map_err_fail()?,
             );
-            
-            transactions
+
+            &transactions
                 .account()
                 .chain()
                 .bundler_client_with_headers(headers)
         } else {
-            transactions.account().chain().bundler_client().clone()
+            transactions.account().chain().bundler_client()
         };
 
         let transaction_id = bundler_client
