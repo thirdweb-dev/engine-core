@@ -14,6 +14,16 @@ pub enum Eip7702ExecutionOptions {
     SessionKey(Eip7702SessionKeyExecution),
 }
 
+impl Eip7702ExecutionOptions {
+    /// Get the fleet ID if present
+    pub fn fleet_id(&self) -> Option<&str> {
+        match self {
+            Eip7702ExecutionOptions::Owner(o) => o.fleet_id.as_deref(),
+            Eip7702ExecutionOptions::SessionKey(s) => s.fleet_id.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[schema(title = "EIP-7702 Owner Execution")]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +31,10 @@ pub struct Eip7702OwnerExecution {
     #[schema(value_type = AddressDef)]
     /// The delegated EOA address
     pub from: Address,
+
+    /// Optional fleet ID to route the transaction to a specific bundler fleet
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -30,7 +44,12 @@ pub struct Eip7702SessionKeyExecution {
     #[schema(value_type = AddressDef)]
     /// The session key address is your server wallet, which has been granted a session key to the `account_address`
     pub session_key_address: Address,
+
     #[schema(value_type = AddressDef)]
     /// The account address is the address of a delegated account you want to execute the transaction on. This account has granted a session key to the `session_key_address`
     pub account_address: Address,
+
+    /// Optional fleet ID to route the transaction to a specific bundler fleet
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet_id: Option<String>,
 }
