@@ -192,13 +192,26 @@ where
             })
             .map_err_fail()?;
 
-        let chain_auth_headers = job_data
+        let mut chain_auth_headers = job_data
             .rpc_credentials
             .to_header_map()
             .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
                 message: e.to_string(),
             })
             .map_err_fail()?;
+
+        // Add optional fleet_id header for bundler routing
+        if let Some(fleet_id) = job_data.execution_options.fleet_id() {
+            chain_auth_headers.insert(
+                "x-executor-fleet-id",
+                fleet_id
+                    .parse()
+                    .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
+                        message: format!("Invalid fleet_id value: {e}"),
+                    })
+                    .map_err_fail()?,
+            );
+        }
 
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
@@ -280,35 +293,10 @@ where
             .map_err(|e| Eip7702SendError::SigningFailed { inner_error: e })
             .map_err_fail()?;
 
-        // Create bundler client with optional fleet_id header for tw_execute
-        let bundler_client = if let Some(fleet_id) = job_data.execution_options.fleet_id() {
-            let mut headers = job_data
-                .rpc_credentials
-                .to_header_map()
-                .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
-                    message: e.to_string(),
-                })
-                .map_err_fail()?;
-
-            headers.insert(
-                "x-executor-fleet-id",
-                fleet_id
-                    .parse()
-                    .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
-                        message: format!("Invalid fleet_id value: {e}"),
-                    })
-                    .map_err_fail()?,
-            );
-
-            &transactions
-                .account()
-                .chain()
-                .bundler_client_with_headers(headers)
-        } else {
-            transactions.account().chain().bundler_client()
-        };
-
-        let transaction_id = bundler_client
+        let transaction_id = transactions
+            .account()
+            .chain()
+            .bundler_client()
             .tw_execute(
                 owner_address,
                 &wrapped_calls,
