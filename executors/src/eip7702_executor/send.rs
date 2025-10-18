@@ -192,13 +192,26 @@ where
             })
             .map_err_fail()?;
 
-        let chain_auth_headers = job_data
+        let mut chain_auth_headers = job_data
             .rpc_credentials
             .to_header_map()
             .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
                 message: e.to_string(),
             })
             .map_err_fail()?;
+
+        // Add optional fleet_id header for bundler routing
+        if let Some(fleet_id) = job_data.execution_options.fleet_id() {
+            chain_auth_headers.insert(
+                "x-executor-fleet-id",
+                fleet_id
+                    .parse()
+                    .map_err(|e| Eip7702SendError::InvalidRpcCredentials {
+                        message: format!("Invalid fleet_id value: {e}"),
+                    })
+                    .map_err_fail()?,
+            );
+        }
 
         let chain = chain.with_new_default_headers(chain_auth_headers);
 
@@ -230,7 +243,7 @@ where
                 let mapped_error = Eip7702SendError::DelegationCheckFailed {
                     inner_error: e.clone(),
                 };
-                
+
                 // Retry only if the error is retryable (network issues, 5xx, etc.)
                 // Client errors (4xx) like "Invalid chain" or auth errors fail immediately
                 if is_build_error_retryable(&e) {
