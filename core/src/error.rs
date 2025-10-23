@@ -354,6 +354,13 @@ pub enum EngineError {
         error: SerialisableAwsSignerError,
     },
 
+    #[schema(title = "Solana Program Interaction Error")]
+    #[error("Solana program interaction error: {message}")]
+    SolanaProgramError {
+        message: String,
+        kind: engine_solana_core::error::SolanaProgramError,
+    },
+
     #[schema(title = "Engine Internal Error")]
     #[error("Internal error: {message}")]
     InternalError { message: String },
@@ -828,6 +835,15 @@ impl From<TwmqError> for EngineError {
     fn from(error: TwmqError) -> Self {
         EngineError::InternalError {
             message: error.to_string(),
+        }
+    }
+}
+
+impl From<engine_solana_core::error::SolanaProgramError> for EngineError {
+    fn from(error: engine_solana_core::error::SolanaProgramError) -> Self {
+        EngineError::SolanaProgramError {
+            message: error.to_string(),
+            kind: error,
         }
     }
 }

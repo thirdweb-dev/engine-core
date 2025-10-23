@@ -14,6 +14,7 @@ vault-types = { workspace = true }
 engine-core = { path = "../core" }
 engine-aa-core = { path = "../aa-core" }
 engine-executors = { path = "../executors" }
+engine-solana-core = { path = "../solana-core" }
 twmq = { path = "../twmq" }
 thirdweb-core = { path = "../thirdweb-core" }
 tokio = { workspace = true, features = ["full"] }

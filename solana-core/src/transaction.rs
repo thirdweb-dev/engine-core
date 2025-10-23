@@ -28,7 +28,7 @@ pub struct SolanaInstructionData {
     pub encoding: InstructionDataEncoding,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, PartialEq, Eq)]
 pub enum InstructionDataEncoding {
     #[serde(rename = "hex")]
     Hex,
