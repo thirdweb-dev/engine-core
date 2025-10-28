@@ -229,34 +229,27 @@ impl ContractCall {
         let mut parsed_params = Vec::new();
 
         for (json_value, json_abi_param) in json_values.iter().zip(json_abi_params.iter()) {
-            if json_abi_param.is_complex_type() {
-                let json_value = json_value
-                    .as_array()
-                    .ok_or_else(|| "Expected array for complex type".to_string())?;
+            let sol_type: DynSolType = json_abi_param
+                .ty
+                .parse()
+                .map_err(|e| format!("Invalid Solidity type '{}': {}", json_abi_param.ty, e))?;
 
-                let dyn_sol_value = Self::json_to_sol(json_value, &json_abi_param.components)?;
+            let parsed_value: DynSolValue = sol_type.coerce_json(json_value).map_err(|e| {
+                format!(
+                    "Failed to parse parameter '{}' as {}: {}",
+                    json_abi_param.name, json_abi_param.ty, e
+                )
+            })?;
 
-                parsed_params.push(DynSolValue::Tuple(dyn_sol_value));
-            } else {
-                let sol_type: DynSolType = json_abi_param
-                    .ty
-                    .parse()
-                    .map_err(|e| format!("Invalid Solidity type '{}': {}", json_abi_param.ty, e))?;
-
-                let parsed_value: DynSolValue = sol_type
-                    .coerce_json(json_value)
-                    .map_err(|e| format!("Failed to parse parameter as DynSolValue: {e}"))?;
-
-                if !parsed_value.matches(&sol_type) {
-                    return Err(format!(
-                        "Parameter type mismatch: expected {}, got {:?}",
-                        json_abi_param.ty,
-                        parsed_value.as_type()
-                    ));
-                }
-
-                parsed_params.push(parsed_value);
+            if !parsed_value.matches(&sol_type) {
+                return Err(format!(
+                    "Parameter type mismatch: expected {}, got {:?}",
+                    json_abi_param.ty,
+                    parsed_value.as_type()
+                ));
             }
+
+            parsed_params.push(parsed_value);
         }
 
         Ok(parsed_params)
