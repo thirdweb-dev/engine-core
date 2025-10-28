@@ -234,9 +234,27 @@ impl ContractCall {
                     .as_array()
                     .ok_or_else(|| "Expected array for complex type".to_string())?;
 
-                let dyn_sol_value = Self::json_to_sol(json_value, &json_abi_param.components)?;
+                // if the json_abi_param.ty is tuple[],
+                // then instead of deconstructing the json_value into the components directly,
+                // we treat it as components[]
 
-                parsed_params.push(DynSolValue::Tuple(dyn_sol_value));
+                if json_abi_param.ty == "tuple[]" {
+                    // for each element in json_value, try to parse it as component
+                    let mut components = Vec::new();
+                    for element in json_value {
+                        let component = Self::json_to_sol(
+                            element
+                                .as_array()
+                                .ok_or_else(|| "Expected array for complex type".to_string())?,
+                            &json_abi_param.components,
+                        )?;
+                        components.push(DynSolValue::Tuple(component));
+                    }
+                    parsed_params.push(DynSolValue::Array(components));
+                } else {
+                    let dyn_sol_value = Self::json_to_sol(json_value, &json_abi_param.components)?;
+                    parsed_params.push(DynSolValue::Tuple(dyn_sol_value));
+                }
             } else {
                 let sol_type: DynSolType = json_abi_param
                     .ty
@@ -258,7 +276,6 @@ impl ContractCall {
                 parsed_params.push(parsed_value);
             }
         }
-
         Ok(parsed_params)
     }
 
