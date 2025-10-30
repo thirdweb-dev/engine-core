@@ -33,6 +33,9 @@ pub struct EngineServerState {
     pub diagnostic_access_password: Option<String>,
     pub metrics_registry: Arc<prometheus::Registry>,
     pub kms_client_cache: KmsClientCache,
+    
+    // Solana IDL cache for program interaction
+    pub idl_cache: Arc<engine_solana_core::IdlCache>,
 }
 
 pub struct EngineServer {
@@ -65,6 +68,9 @@ impl EngineServer {
             ))
             .routes(routes!(
                 crate::http::routes::solana_transaction::send_solana_transaction
+            ))
+            .routes(routes!(
+                crate::http::routes::solana_program::send_solana_program
             ))
             .routes(routes!(
                 crate::http::routes::transaction::cancel_transaction

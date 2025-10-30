@@ -7,6 +7,7 @@ edition = "2024"
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
 solana-compute-budget-interface = { workspace = true }
+solana-system-interface = { workspace = true }  # For system program in SDK 3.0
 serde = { workspace = true }
 serde_with = { workspace = true }
 serde_json = { workspace = true }
@@ -14,6 +15,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
+schemars = { workspace = true }
 utoipa = { workspace = true, features = [
   "macros",
   "chrono",
@@ -21,3 +23,25 @@ utoipa = { workspace = true, features = [
   "axum_extras",
   "preserve_order",
 ] }
+
+# IDL and instruction building
+anchor-lang = { version = "0.32.1", features = ["idl-build"], default-features = false }
+bincode = { workspace = true }  # Solana's native serialization format
+borsh = { workspace = true }  # Borsh serialization for Anchor programs
+sha2 = "0.10"  # For calculating Anchor discriminators
+
+# For async IDL fetching and caching
+tokio = { workspace = true, features = ["sync"] }
+reqwest = { workspace = true, features = ["json"] }
+moka = { workspace = true }
+solana-client = { workspace = true }  # For on-chain IDL fetching
+flate2 = "1.0"  # For zlib decompression of on-chain IDLs
+
+# SPL interface crates v2 for SDK 3.0 (not program crates - lighter, supports LTO)
+spl-token-interface = { workspace = true }
+spl-token-2022-interface = { workspace = true }
+spl-associated-token-account-interface = { workspace = true }
+spl-memo-interface = { workspace = true }
+
+[dev-dependencies]
+dotenvy = "0.15"

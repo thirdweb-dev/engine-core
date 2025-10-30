@@ -97,6 +97,7 @@ impl ApiEngineError {
                 SolanaRpcErrorKind::Custom { .. } => StatusCode::BAD_GATEWAY,
                 SolanaRpcErrorKind::Unknown { .. } => StatusCode::SERVICE_UNAVAILABLE,
             },
+            EngineError::SolanaProgramError { .. } => StatusCode::BAD_REQUEST,
         }
     }
 }

@@ -40,9 +40,9 @@ async fn main() -> anyhow::Result<()> {
     let chains = Arc::new(ThirdwebChainService {
         secret_key: config.thirdweb.secret.clone(),
         client_id: config.thirdweb.client_id.clone(),
-        bundler_base_url: config.thirdweb.urls.bundler,
-        paymaster_base_url: config.thirdweb.urls.paymaster,
-        rpc_base_url: config.thirdweb.urls.rpc,
+        bundler_base_url: config.thirdweb.urls.bundler.clone(),
+        paymaster_base_url: config.thirdweb.urls.paymaster.clone(),
+        rpc_base_url: config.thirdweb.urls.rpc.clone(),
     });
 
     let iaw_client = IAWClient::new(&config.thirdweb.urls.iaw_service)?;
@@ -121,6 +121,16 @@ async fn main() -> anyhow::Result<()> {
     
     tracing::info!("Executor metrics initialized");
 
+    // Initialize Solana IDL cache
+    // Use mainnet for IDL fetching since IDLs are typically the same across networks
+    // The cache is shared across all Solana networks
+    let idl_cache = Arc::new(engine_solana_core::IdlCache::new(
+        config.solana.mainnet.http_url.clone(),
+    ));
+    
+    tracing::info!("Solana IDL cache initialized with mainnet RPC");
+
+
     let mut server = EngineServer::new(EngineServerState {
         userop_signer: signer.clone(),
         eoa_signer: eoa_signer.clone(),
@@ -132,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         diagnostic_access_password: config.server.diagnostic_access_password,
         metrics_registry,
         kms_client_cache: kms_client_cache.clone(),
+        idl_cache,
     })
     .await;
 
