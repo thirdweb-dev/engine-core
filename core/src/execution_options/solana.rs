@@ -126,12 +126,14 @@ impl CommitmentLevel {
     }
 }
 
+
 #[derive(Serialize, Deserialize, Clone, Debug, utoipa::ToSchema)]
 #[schema(title = "Solana Transaction Options")]
 #[serde(rename_all = "camelCase")]
 pub struct SolanaTransactionOptions {
-    /// List of instructions to execute in this transaction
-    pub instructions: Vec<SolanaInstructionData>,
+    /// Transaction input
+    #[serde(flatten)]
+    pub input: engine_solana_core::transaction::SolanaTransactionInput,
 
     /// Solana execution options
     pub execution_options: SolanaExecutionOptions,
@@ -145,8 +147,9 @@ pub struct SendSolanaTransactionRequest {
     #[serde(default = "super::default_idempotency_key")]
     pub idempotency_key: String,
 
-    /// List of Solana instructions to execute
-    pub instructions: Vec<SolanaInstructionData>,
+    /// Transaction input (either instructions or serialized transaction)
+    #[serde(flatten)]
+    pub input: engine_solana_core::transaction::SolanaTransactionInput,
 
     /// Solana execution options
     pub execution_options: SolanaExecutionOptions,

@@ -1,7 +1,7 @@
 use engine_core::execution_options::solana::SolanaChainId;
 use moka::future::Cache;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tracing::info;
 
 /// Cache key for RPC clients
