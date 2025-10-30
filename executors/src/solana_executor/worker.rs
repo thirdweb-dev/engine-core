@@ -597,7 +597,39 @@ impl SolanaExecutorJobHandler {
                             .nack(Some(CONFIRMATION_RETRY_DELAY), RequeuePosition::Last));
                         }
                         Ok(false) => {
-                            // Blockhash expired, need to resubmit
+                            // Blockhash expired
+                            
+                            // For serialized transactions with existing signatures, we cannot retry with a new blockhash
+                            // because the signatures will become invalid. Check if there are any non-default signatures.
+                            if let engine_solana_core::transaction::SolanaTransactionInput::Serialized { transaction } = &job_data.transaction.input {
+                                // Deserialize the base64 transaction to check for signatures
+                                if let Ok(tx_bytes) = base64::engine::general_purpose::STANDARD.decode(transaction)
+                                    && let Ok((versioned_tx, _)) = bincode::serde::decode_from_slice::<solana_sdk::transaction::VersionedTransaction, _>(
+                                        &tx_bytes,
+                                        bincode::config::standard()
+                                    ) {
+                                        // Check if any signatures are non-default (not all zeros)
+                                        let has_signatures = versioned_tx.signatures.iter().any(|sig| {
+                                            sig.as_ref() != [0u8; 64]
+                                        });
+                                        
+                                        if has_signatures {
+                                            error!(
+                                                transaction_id = %transaction_id,
+                                                signature = %signature,
+                                                "Blockhash expired for serialized transaction with existing signatures - cannot retry without invalidating them"
+                                            );
+                                            let _ = self.storage.delete_attempt(transaction_id).await;
+                                            return Err(SolanaExecutorError::TransactionFailed {
+                                                reason: "Blockhash expired for serialized transaction with existing signatures. Retrying with a new blockhash would invalidate them.".to_string(),
+                                            }
+                                            .fail());
+                                        }
+                                        // If no signatures, we can retry - will be signed during execution
+                                    }
+                            }
+                            
+                            // For instruction-based transactions or serialized without signatures, we can retry with a new blockhash
                             warn!(
                                 transaction_id = %transaction_id,
                                 signature = %signature,
