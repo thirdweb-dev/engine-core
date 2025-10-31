@@ -11,16 +11,32 @@ use solana_sdk::{
 
 /// Input for Solana transaction - either build from instructions or use pre-built
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase", untagged)]
+#[serde(untagged)]
 pub enum SolanaTransactionInput {
     /// Build transaction from instructions
-    Instructions {
-        instructions: Vec<SolanaInstructionData>,
-    },
+    Instructions(SolanaTransactionInputInstructions),
     /// Use pre-built serialized VersionedTransaction (base64)
-    Serialized {
-        transaction: String,
-    },
+    Serialized(SolanaTransactionInputSerialized),
+}
+
+impl SolanaTransactionInput {
+    pub fn new_with_instructions(instructions: Vec<SolanaInstructionData>) -> Self {
+        Self::Instructions(SolanaTransactionInputInstructions { instructions })
+    }
+
+    pub fn new_with_serialized(transaction: String) -> Self {
+        Self::Serialized(SolanaTransactionInputSerialized { transaction })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SolanaTransactionInputInstructions {
+    pub instructions: Vec<SolanaInstructionData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SolanaTransactionInputSerialized {
+    pub transaction: String,
 }
 
 /// Solana instruction data provided by the user
@@ -142,11 +158,11 @@ impl SolanaTransaction {
         recent_blockhash: solana_sdk::hash::Hash,
     ) -> Result<VersionedTransaction, SolanaTransactionError> {
         match &self.input {
-            SolanaTransactionInput::Instructions { instructions } => {
-                self.build_from_instructions(instructions, payer, recent_blockhash)
+            SolanaTransactionInput::Instructions(i) => {
+                self.build_from_instructions(&i.instructions, payer, recent_blockhash)
             }
-            SolanaTransactionInput::Serialized { transaction } => {
-                self.deserialize_transaction(transaction, payer)
+            SolanaTransactionInput::Serialized(t) => {
+                self.deserialize_transaction(&t.transaction, payer)
             }
         }
     }
@@ -175,15 +191,12 @@ impl SolanaTransaction {
             inst_list.push(inst.to_instruction()?);
         }
 
-        let message = v0::Message::try_compile(
-            &payer,
-            &inst_list,
-            &[],
-            recent_blockhash,
-        )
-        .map_err(|e| SolanaTransactionError::MessageCompilationFailed {
-            error: e.to_string(),
-        })?;
+        let message =
+            v0::Message::try_compile(&payer, &inst_list, &[], recent_blockhash).map_err(|e| {
+                SolanaTransactionError::MessageCompilationFailed {
+                    error: e.to_string(),
+                }
+            })?;
 
         let message = VersionedMessage::V0(message);
         let num_signatures = message.header().num_required_signatures as usize;
@@ -203,17 +216,19 @@ impl SolanaTransaction {
         tx_base64: &str,
         expected_payer: Pubkey,
     ) -> Result<VersionedTransaction, SolanaTransactionError> {
-        let tx_bytes = Base64Engine.decode(tx_base64)
-            .map_err(|e| SolanaTransactionError::DeserializationFailed {
+        let tx_bytes = Base64Engine.decode(tx_base64).map_err(|e| {
+            SolanaTransactionError::DeserializationFailed {
                 error: format!("Invalid base64: {}", e),
-            })?;
+            }
+        })?;
 
         // Deserialize from binary wire format using bincode
         let (transaction, _): (VersionedTransaction, _) =
-            bincode::serde::decode_from_slice(&tx_bytes, bincode::config::standard())
-                .map_err(|e| SolanaTransactionError::DeserializationFailed {
+            bincode::serde::decode_from_slice(&tx_bytes, bincode::config::standard()).map_err(
+                |e| SolanaTransactionError::DeserializationFailed {
                     error: format!("Failed to deserialize VersionedTransaction: {}", e),
-                })?;
+                },
+            )?;
 
         // Verify fee payer
         let fee_payer = transaction.message.static_account_keys()[0];
@@ -245,10 +260,10 @@ pub enum SolanaTransactionError {
 
     #[error("Invalid blockhash: {error}")]
     InvalidBlockhash { error: String },
-    
+
     #[error("Failed to deserialize transaction: {error}")]
     DeserializationFailed { error: String },
-    
+
     #[error("Fee payer mismatch: expected {expected}, got {got}")]
     FeePayerMismatch { expected: String, got: String },
 }

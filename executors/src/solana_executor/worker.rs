@@ -601,9 +601,9 @@ impl SolanaExecutorJobHandler {
                             
                             // For serialized transactions with existing signatures, we cannot retry with a new blockhash
                             // because the signatures will become invalid. Check if there are any non-default signatures.
-                            if let engine_solana_core::transaction::SolanaTransactionInput::Serialized { transaction } = &job_data.transaction.input {
+                            if let engine_solana_core::transaction::SolanaTransactionInput::Serialized (t) = &job_data.transaction.input {
                                 // Deserialize the base64 transaction to check for signatures
-                                if let Ok(tx_bytes) = base64::engine::general_purpose::STANDARD.decode(transaction)
+                                if let Ok(tx_bytes) = base64::engine::general_purpose::STANDARD.decode(&t.transaction)
                                     && let Ok((versioned_tx, _)) = bincode::serde::decode_from_slice::<solana_sdk::transaction::VersionedTransaction, _>(
                                         &tx_bytes,
                                         bincode::config::standard()
@@ -748,10 +748,10 @@ impl SolanaExecutorJobHandler {
 
         // Build transaction - handle execution options differently for instructions vs serialized
         let versioned_tx = match &job_data.transaction.input {
-            engine_solana_core::transaction::SolanaTransactionInput::Instructions { instructions } => {
+            engine_solana_core::transaction::SolanaTransactionInput::Instructions(i) => {
                 // For instruction-based transactions: calculate priority fees and apply execution options
                 let compute_unit_price = if let Some(priority_fee) = &job_data.transaction.execution_options.priority_fee {
-                    Some(self.get_compute_unit_price(priority_fee, instructions, rpc_client, chain_id_str.as_str()).await?)
+                    Some(self.get_compute_unit_price(priority_fee, &i.instructions, rpc_client, chain_id_str.as_str()).await?)
                 } else {
                     None
                 };
@@ -761,7 +761,7 @@ impl SolanaExecutorJobHandler {
                 let memo_data = format!("thirdweb-engine:{}", transaction_id);
                 let memo_ix = build_memo(&spl_memo_interface::v3::id(), memo_data.as_bytes(), &[]);
                 
-                let mut instructions_with_memo = instructions.clone();
+                let mut instructions_with_memo = i.instructions.clone();
                 let memo_data_base64 = base64::engine::general_purpose::STANDARD.encode(memo_data.as_bytes());
                 instructions_with_memo.push(SolanaInstructionData {
                     program_id: memo_ix.program_id,
@@ -771,9 +771,7 @@ impl SolanaExecutorJobHandler {
                 });
                 
                 let solana_tx = SolanaTransaction {
-                    input: engine_solana_core::transaction::SolanaTransactionInput::Instructions {
-                        instructions: instructions_with_memo,
-                    },
+                    input: engine_solana_core::transaction::SolanaTransactionInput::new_with_instructions(instructions_with_memo),
                     compute_unit_limit: job_data.transaction.execution_options.compute_unit_limit,
                     compute_unit_price,
                 };
