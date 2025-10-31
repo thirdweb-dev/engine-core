@@ -514,7 +514,7 @@ impl ExecutionRouter {
         let signer_address = request.execution_options.signer_address;
 
         let transaction = SolanaTransactionOptions {
-            instructions: request.instructions,
+            input: request.input,
             execution_options: request.execution_options,
         };
 

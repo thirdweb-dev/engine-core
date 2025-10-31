@@ -2,3 +2,4 @@
 /target/
 .DS_Store
 coverage
+.env.test

@@ -130,8 +130,9 @@ impl CommitmentLevel {
 #[schema(title = "Solana Transaction Options")]
 #[serde(rename_all = "camelCase")]
 pub struct SolanaTransactionOptions {
-    /// List of instructions to execute in this transaction
-    pub instructions: Vec<SolanaInstructionData>,
+    /// Transaction input
+    #[serde(flatten)]
+    pub input: engine_solana_core::transaction::SolanaTransactionInput,
 
     /// Solana execution options
     pub execution_options: SolanaExecutionOptions,
@@ -139,20 +140,24 @@ pub struct SolanaTransactionOptions {
 
 /// Request to send a Solana transaction
 #[derive(Serialize, Deserialize, Clone, Debug, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
+// #[serde(rename_all = "camelCase")]
 pub struct SendSolanaTransactionRequest {
     /// Idempotency key for this transaction (defaults to random UUID)
     #[serde(default = "super::default_idempotency_key")]
+    #[serde(rename = "idempotencyKey")]
     pub idempotency_key: String,
 
-    /// List of Solana instructions to execute
-    pub instructions: Vec<SolanaInstructionData>,
+    /// Transaction input (either instructions or serialized transaction)
+    #[serde(flatten)]
+    pub input: engine_solana_core::transaction::SolanaTransactionInput,
 
     /// Solana execution options
+    #[serde(rename = "executionOptions")]
     pub execution_options: SolanaExecutionOptions,
 
     /// Webhook options for transaction status notifications
     #[serde(default)]
+    #[serde(rename = "webhookOptions")]
     pub webhook_options: Vec<super::WebhookOptions>,
 }
 

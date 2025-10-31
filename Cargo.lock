@@ -2970,6 +2970,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "base64 0.22.1",
+ "bincode 2.0.1",
  "chrono",
  "engine-aa-core",
  "engine-aa-types",
@@ -3006,6 +3007,7 @@ name = "engine-solana-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bincode 2.0.1",
  "hex",
  "serde",
  "serde_json",

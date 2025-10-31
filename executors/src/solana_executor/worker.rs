@@ -1,4 +1,3 @@
-use base64::Engine;
 use engine_core::{
     credentials::SigningCredential,
     error::{EngineError, SolanaRpcErrorToEngineError},
@@ -12,16 +11,13 @@ use solana_client::{
     rpc_config::{RpcSendTransactionConfig, RpcTransactionConfig},
 };
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
-use solana_sdk::{
-    hash::Hash,
-    pubkey::Pubkey,
-    transaction::VersionedTransaction,
-};
+use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, UiTransactionEncoding
 };
 use spl_memo_interface::instruction::build_memo;
 use std::{sync::Arc, time::Duration};
+use base64::Engine;
 use tracing::{error, info, warn};
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
@@ -437,15 +433,11 @@ impl SolanaExecutorJobHandler {
         Ok(result)
     }
 
-    fn get_writable_accounts(
-        &self,
-        transaction: &SolanaTransactionOptions,
-    ) -> Vec<Pubkey> {
-        transaction
-            .instructions
+    fn get_writable_accounts(instructions: &[SolanaInstructionData]) -> Vec<Pubkey> {
+        instructions
             .iter()
-            .flat_map(|i| {
-                i.accounts
+            .flat_map(|inst| {
+                inst.accounts
                     .iter()
                     .filter(|a| a.is_writable)
                     .map(|a| a.pubkey)
@@ -453,83 +445,38 @@ impl SolanaExecutorJobHandler {
             .collect()
     }
 
-    /// Compile a Solana transaction with priority fees and memo instruction
-    /// ALWAYS NACK on error - network operations can be retried
-    /// 
-    /// Adds a memo instruction with the transaction_id to ensure unique signatures
-    /// even when rapidly resubmitting with the same blockhash
-    async fn compile_transaction(
+    async fn get_compute_unit_price(
         &self,
-        transaction: &SolanaTransactionOptions,
+        priority_fee: &SolanaPriorityFee,
+        instructions: &[SolanaInstructionData],
         rpc_client: &RpcClient,
-        recent_blockhash: Hash,
         chain_id: &str,
-        transaction_id: &str,
-    ) -> JobResult<VersionedTransaction, SolanaExecutorError> {
-        let compute_unit_price = if let Some(price_config) = &transaction.execution_options.priority_fee {
-            let price = match price_config {
-                SolanaPriorityFee::Auto => {
-                    self.get_percentile_compute_unit_price(
-                        rpc_client,
-                        &self.get_writable_accounts(transaction),
-                        75,
-                        chain_id,
-                    )
-                    .await?
-                }
-                SolanaPriorityFee::Manual { micro_lamports_per_unit } => {
-                    *micro_lamports_per_unit
-                }
-                SolanaPriorityFee::Percentile { percentile } => {
-                    self.get_percentile_compute_unit_price(
-                        rpc_client,
-                        &self.get_writable_accounts(transaction),
-                        *percentile,
-                        chain_id,
-                    )
-                    .await?
-                }
-            };
-            Some(price)
-        } else {
-            None
-        };
-
-        // Add memo instruction with transaction_id for unique signatures
-        let memo_data = format!("thirdweb-engine:{}", transaction_id);
-        let memo_ix = build_memo(&spl_memo_interface::v3::id(), memo_data.as_bytes(), &[]);
+    ) -> JobResult<u64, SolanaExecutorError> {
+        let writable_accounts = Self::get_writable_accounts(instructions);
         
-        let mut instructions = transaction.instructions.clone();
-        let memo_data_base64 = base64::engine::general_purpose::STANDARD.encode(memo_data.as_bytes());
-        instructions.push(SolanaInstructionData {
-            program_id: memo_ix.program_id,
-            accounts: vec![],
-            data: memo_data_base64,
-            encoding: InstructionDataEncoding::Base64,
-        });
-
-        let solana_transaction = SolanaTransaction {
-            instructions,
-            compute_unit_price,
-            compute_unit_limit: transaction.execution_options.compute_unit_limit,
-            recent_blockhash,
-        };
-
-        let versioned_tx = solana_transaction
-            .to_versioned_transaction(transaction.execution_options.signer_address, recent_blockhash)
-            .map_err(|e| {
-                error!(
-                    transaction_id = %transaction_id,
-                    error = %e,
-                    "Failed to build transaction"
-                );
-                SolanaExecutorError::TransactionBuildFailed {
-                    inner_error: e.to_string(),
-                }
-                .fail()
-            })?;
-        
-        Ok(versioned_tx)
+        match priority_fee {
+            SolanaPriorityFee::Auto => {
+                self.get_percentile_compute_unit_price(
+                    rpc_client,
+                    &writable_accounts,
+                    75,
+                    chain_id,
+                )
+                .await
+            }
+            SolanaPriorityFee::Manual { micro_lamports_per_unit } => {
+                Ok(*micro_lamports_per_unit)
+            }
+            SolanaPriorityFee::Percentile { percentile } => {
+                self.get_percentile_compute_unit_price(
+                    rpc_client,
+                    &writable_accounts,
+                    *percentile,
+                    chain_id,
+                )
+                .await
+            }
+        }
     }
 
 
@@ -650,7 +597,39 @@ impl SolanaExecutorJobHandler {
                             .nack(Some(CONFIRMATION_RETRY_DELAY), RequeuePosition::Last));
                         }
                         Ok(false) => {
-                            // Blockhash expired, need to resubmit
+                            // Blockhash expired
+                            
+                            // For serialized transactions with existing signatures, we cannot retry with a new blockhash
+                            // because the signatures will become invalid. Check if there are any non-default signatures.
+                            if let engine_solana_core::transaction::SolanaTransactionInput::Serialized (t) = &job_data.transaction.input {
+                                // Deserialize the base64 transaction to check for signatures
+                                if let Ok(tx_bytes) = base64::engine::general_purpose::STANDARD.decode(&t.transaction)
+                                    && let Ok((versioned_tx, _)) = bincode::serde::decode_from_slice::<solana_sdk::transaction::VersionedTransaction, _>(
+                                        &tx_bytes,
+                                        bincode::config::standard()
+                                    ) {
+                                        // Check if any signatures are non-default (not all zeros)
+                                        let has_signatures = versioned_tx.signatures.iter().any(|sig| {
+                                            sig.as_ref() != [0u8; 64]
+                                        });
+                                        
+                                        if has_signatures {
+                                            error!(
+                                                transaction_id = %transaction_id,
+                                                signature = %signature,
+                                                "Blockhash expired for serialized transaction with existing signatures - cannot retry without invalidating them"
+                                            );
+                                            let _ = self.storage.delete_attempt(transaction_id).await;
+                                            return Err(SolanaExecutorError::TransactionFailed {
+                                                reason: "Blockhash expired for serialized transaction with existing signatures. Retrying with a new blockhash would invalidate them.".to_string(),
+                                            }
+                                            .fail());
+                                        }
+                                        // If no signatures, we can retry - will be signed during execution
+                                    }
+                            }
+                            
+                            // For instruction-based transactions or serialized without signatures, we can retry with a new blockhash
                             warn!(
                                 transaction_id = %transaction_id,
                                 signature = %signature,
@@ -767,16 +746,73 @@ impl SolanaExecutorJobHandler {
                 .nack(Some(NETWORK_ERROR_RETRY_DELAY), RequeuePosition::Last)
             })?;
 
-        // Compile and sign transaction
-        let versioned_tx = self
-            .compile_transaction(
-                &job_data.transaction,
-                rpc_client,
-                recent_blockhash,
-                chain_id_str.as_str(),
-                transaction_id,
-            )
-            .await?;
+        // Build transaction - handle execution options differently for instructions vs serialized
+        let versioned_tx = match &job_data.transaction.input {
+            engine_solana_core::transaction::SolanaTransactionInput::Instructions(i) => {
+                // For instruction-based transactions: calculate priority fees and apply execution options
+                let compute_unit_price = if let Some(priority_fee) = &job_data.transaction.execution_options.priority_fee {
+                    Some(self.get_compute_unit_price(priority_fee, &i.instructions, rpc_client, chain_id_str.as_str()).await?)
+                } else {
+                    None
+                };
+                
+                // Add memo instruction with transaction_id for unique signatures
+                // This ensures that even with the same blockhash, each resubmission has a unique signature
+                let memo_data = format!("thirdweb-engine:{}", transaction_id);
+                let memo_ix = build_memo(&spl_memo_interface::v3::id(), memo_data.as_bytes(), &[]);
+                
+                let mut instructions_with_memo = i.instructions.clone();
+                let memo_data_base64 = base64::engine::general_purpose::STANDARD.encode(memo_data.as_bytes());
+                instructions_with_memo.push(SolanaInstructionData {
+                    program_id: memo_ix.program_id,
+                    accounts: vec![],
+                    data: memo_data_base64,
+                    encoding: InstructionDataEncoding::Base64,
+                });
+                
+                let solana_tx = SolanaTransaction {
+                    input: engine_solana_core::transaction::SolanaTransactionInput::new_with_instructions(instructions_with_memo),
+                    compute_unit_limit: job_data.transaction.execution_options.compute_unit_limit,
+                    compute_unit_price,
+                };
+
+                solana_tx
+                    .to_versioned_transaction(signer_address, recent_blockhash)
+                    .map_err(|e| {
+                        error!(
+                            transaction_id = %transaction_id,
+                            error = %e,
+                            "Failed to build transaction from instructions"
+                        );
+                        SolanaExecutorError::TransactionBuildFailed {
+                            inner_error: e.to_string(),
+                        }
+                        .fail()
+                    })?
+            }
+            engine_solana_core::transaction::SolanaTransactionInput::Serialized { .. } => {
+                // For serialized transactions: ignore execution options to avoid invalidating signatures
+                let solana_tx = SolanaTransaction {
+                    input: job_data.transaction.input.clone(),
+                    compute_unit_limit: None,
+                    compute_unit_price: None,
+                };
+
+                solana_tx
+                    .to_versioned_transaction(signer_address, recent_blockhash)
+                    .map_err(|e| {
+                        error!(
+                            transaction_id = %transaction_id,
+                            error = %e,
+                            "Failed to deserialize compiled transaction"
+                        );
+                        SolanaExecutorError::TransactionBuildFailed {
+                            inner_error: e.to_string(),
+                        }
+                        .fail()
+                    })?
+            }
+        };
 
         let signed_tx = self
             .solana_signer

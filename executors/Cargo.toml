@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 hex = { workspace = true }
 alloy = { workspace = true, features = ["serde"] }
+bincode = { workspace = true, features = ["serde"] }
 thirdweb-core = { version = "0.1.0", path = "../thirdweb-core" }
 hmac = { workspace = true }
 reqwest = { workspace = true }
