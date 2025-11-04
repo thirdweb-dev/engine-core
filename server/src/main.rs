@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use engine_core::{signer::EoaSigner, userop::UserOpSigner, credentials::KmsClientCache};
+use engine_core::{signer::{EoaSigner, SolanaSigner}, userop::UserOpSigner, credentials::KmsClientCache};
 use engine_executors::{eoa::authorization_cache::EoaAuthorizationCache, metrics::{ExecutorMetrics, initialize_metrics}};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
@@ -60,7 +60,8 @@ async fn main() -> anyhow::Result<()> {
         vault_client: vault_client.clone(),
         iaw_client: iaw_client.clone(),
     });
-    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client));
+    let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client.clone()));
+    let solana_signer = Arc::new(SolanaSigner::new(vault_client.clone(), iaw_client));
     let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
     let authorization_cache = EoaAuthorizationCache::new(
@@ -124,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
     let mut server = EngineServer::new(EngineServerState {
         userop_signer: signer.clone(),
         eoa_signer: eoa_signer.clone(),
+        solana_signer: solana_signer.clone(),
         abi_service: Arc::new(abi_service),
         vault_client: Arc::new(vault_client),
         chains,

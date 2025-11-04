@@ -13,6 +13,7 @@ vault-sdk = { workspace = true }
 vault-types = { workspace = true }
 engine-core = { path = "../core" }
 engine-aa-core = { path = "../aa-core" }
+engine-solana-core = { path = "../solana-core" }
 engine-executors = { path = "../executors" }
 twmq = { path = "../twmq" }
 thirdweb-core = { path = "../thirdweb-core" }
@@ -24,6 +25,10 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 rand = { workspace = true }
 futures = { workspace = true }
 serde-bool = { workspace = true }
+base64 = { workspace = true }
+bincode = { workspace = true }
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
 aide = { workspace = true, features = [
     "axum",
     "axum-json",
