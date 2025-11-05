@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{Json, Router, routing::get};
 use engine_core::{signer::{EoaSigner, SolanaSigner}, userop::UserOpSigner, credentials::KmsClientCache};
+use engine_executors::solana_executor::rpc_cache::SolanaRpcCache;
 use serde_json::json;
 use thirdweb_core::abi::ThirdwebAbiService;
 use tokio::{sync::watch, task::JoinHandle};
@@ -25,6 +26,7 @@ pub struct EngineServerState {
     pub userop_signer: Arc<UserOpSigner>,
     pub eoa_signer: Arc<EoaSigner>,
     pub solana_signer: Arc<SolanaSigner>,
+    pub solana_rpc_cache: Arc<SolanaRpcCache>,
     pub abi_service: Arc<ThirdwebAbiService>,
     pub vault_client: Arc<VaultClient>,
 

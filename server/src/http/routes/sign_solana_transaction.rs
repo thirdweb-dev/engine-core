@@ -5,14 +5,10 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Engine};
 use bincode::config::standard as bincode_standard;
-use engine_core::{
-    error::EngineError,
-    execution_options::solana::SolanaChainId,
-};
+use engine_core::error::EngineError;
 use engine_solana_core::transaction::SolanaTransaction;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use solana_client::nonblocking::rpc_client::RpcClient;
 
 use crate::http::{
     error::ApiEngineError,
@@ -77,11 +73,8 @@ pub async fn sign_solana_transaction(
         "Processing Solana transaction signing request"
     );
 
-    // Get RPC URL for the chain
-    let rpc_url = get_rpc_url(chain_id);
-
-    // Create RPC client
-    let rpc_client = RpcClient::new(rpc_url.to_string());
+    // Get RPC client from cache (same as executor)
+    let rpc_client = state.solana_rpc_cache.get_or_create(chain_id).await;
 
     // Get recent blockhash
     let recent_blockhash = rpc_client
@@ -141,9 +134,4 @@ pub async fn sign_solana_transaction(
     );
 
     Ok((StatusCode::OK, Json(SuccessResponse::new(response))))
-}
-
-/// Get RPC URL for a Solana chain
-fn get_rpc_url(chain_id: SolanaChainId) -> &'static str {
-    chain_id.default_rpc_url()
 }
