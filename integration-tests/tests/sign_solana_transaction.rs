@@ -114,8 +114,6 @@ async fn test_partial_signature_spl_transfer() -> Result<()> {
 
     info!("Sending transaction to engine for signing...");
 
-    dbg!(admin_key);
-
     let response = client
         .post(&sign_url)
         .header("x-vault-access-token", admin_key)

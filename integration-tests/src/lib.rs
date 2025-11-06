@@ -15,29 +15,26 @@ pub fn create_spl_token_transfer_transaction(
     token_authority: Pubkey, // User wallet (will sign first)
     token_account: Pubkey,   // Source token account
     destination: Pubkey,     // Destination token account
+    mint: Pubkey,            // Token mint address
     amount: u64,
+    decimals: u8,
     recent_blockhash: Hash,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     // SPL Token 2022 program ID
     let token_program_id = Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")?;
 
-    // Build transfer instruction (simplified - in real usage would use spl-token-interface-2022)
-    // Transfer instruction layout: [1, amount_bytes]
-    let mut transfer_data = vec![3u8]; // Transfer instruction discriminator
-    transfer_data.extend_from_slice(&amount.to_le_bytes());
-
-    let transfer_ix = Instruction {
-        program_id: token_program_id,
-        accounts: vec![
-            // Source account
-            solana_sdk::instruction::AccountMeta::new(token_account, false),
-            // Destination account
-            solana_sdk::instruction::AccountMeta::new(destination, false),
-            // Authority
-            solana_sdk::instruction::AccountMeta::new_readonly(token_authority, true), // Signer!
-        ],
-        data: transfer_data,
-    };
+    // Use the proper spl-token-2022-interface helper for transfer_checked
+    // This ensures correct instruction layout with decimals and proper discriminator
+    let transfer_ix = spl_token_2022_interface::instruction::transfer_checked(
+        &token_program_id,
+        &token_account,       // Source account
+        &mint,                // Token mint
+        &destination,         // Destination account  
+        &token_authority,     // Authority (will be a required signer)
+        &[],                  // No multisig signers
+        amount,
+        decimals,
+    )?;
 
     // Create the message with fee payer
     let message = v0::Message::try_compile(

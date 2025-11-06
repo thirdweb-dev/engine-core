@@ -118,7 +118,6 @@ Fill in these values in `configuration/test_local.yaml`:
 ### Run all integration tests
 
 ```bash
-cd /Users/d4mr/work/thirdweb/engine-core
 cargo test -p engine-integration-tests
 ```
 
@@ -305,8 +304,6 @@ This captures:
 
 ## Future Enhancements
 
-- [ ] Add tests for multi-signature scenarios with multiple wallets
-- [ ] Test with actual SPL token transfers (using spl-token-interface-2022)
 - [ ] Add tests for transaction broadcast to local Solana validator
 - [ ] Test different chain IDs (mainnet, devnet, testnet, local)
 - [ ] Add performance/benchmarking tests
