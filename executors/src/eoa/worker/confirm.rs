@@ -389,24 +389,77 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         inner_error, ..
                     } = &e
                     {
-                        if should_update_balance_threshold(inner_error) {
-                            if let Err(e) = self.update_balance_threshold().await {
-                                tracing::error!("Failed to update balance threshold: {}", e);
+                        if should_update_balance_threshold(inner_error)
+                            && let Err(e) = self.update_balance_threshold().await
+                        {
+                            tracing::error!("Failed to update balance threshold: {}", e);
+                        }
+                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e
+                        && should_update_balance_threshold(inner_error)
+                        && let Err(e) = self.update_balance_threshold().await
+                    {
+                        tracing::error!("Failed to update balance threshold: {}", e);
+                    }
+                    // Check if nonce has moved ahead since we started the gas bump
+                    // This handles the race condition where the original transaction
+                    // confirmed between our initial nonce check and the gas bump attempt
+                    let fresh_transaction_counts = match self
+                        .chain
+                        .provider()
+                        .get_transaction_counts_with_flashblocks_support(
+                            self.eoa,
+                            self.chain.chain_id(),
+                        )
+                        .await
+                    {
+                        Ok(counts) => counts,
+                        Err(rpc_error) => {
+                            tracing::warn!(
+                                transaction_id = ?newest_transaction_data.transaction_id,
+                                nonce = expected_nonce,
+                                error = ?e,
+                                rpc_check_error = ?rpc_error,
+                                "Failed to build typed transaction for gas bump and also failed to check nonce"
+                            );
+                            return Err(e);
+                        }
+                    };
+
+                    // If nonce has moved ahead, the transaction likely confirmed
+                    // Break out of gas bump flow and let regular confirmation flow handle it
+                    if fresh_transaction_counts.preconfirmed > expected_nonce {
+                        tracing::info!(
+                            transaction_id = ?newest_transaction_data.transaction_id,
+                            nonce = expected_nonce,
+                            current_preconfirmed_nonce = fresh_transaction_counts.preconfirmed,
+                            current_latest_nonce = fresh_transaction_counts.latest,
+                            "Gas bump simulation failed but nonce has moved ahead - transaction likely confirmed. Breaking out of gas bump flow."
+                        );
+
+                        if let Ok(mut health) = self.get_eoa_health().await {
+                            let now = EoaExecutorStore::now();
+                            health.last_nonce_movement_at = now;
+                            health.last_confirmation_at = now;
+                            if let Err(update_err) = self.store.update_health_data(&health).await {
+                                tracing::warn!(
+                                    error = ?update_err,
+                                    nonce = expected_nonce,
+                                    "Detected nonce movement but failed to refresh health data"
+                                );
                             }
                         }
-                    } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e {
-                        if should_update_balance_threshold(inner_error) {
-                            if let Err(e) = self.update_balance_threshold().await {
-                                tracing::error!("Failed to update balance threshold: {}", e);
-                            }
-                        }
+                        // Return success to break out of gas bump flow
+                        // The regular confirmation flow will handle the confirmed transaction
+                        return Ok(true);
                     }
 
                     tracing::warn!(
                         transaction_id = ?newest_transaction_data.transaction_id,
                         nonce = expected_nonce,
+                        current_preconfirmed_nonce = fresh_transaction_counts.preconfirmed,
+                        current_latest_nonce = fresh_transaction_counts.latest,
                         error = ?e,
-                        "Failed to build typed transaction for gas bump"
+                        "Failed to build typed transaction for gas bump and nonce has not moved ahead"
                     );
                     return Err(e);
                 }
