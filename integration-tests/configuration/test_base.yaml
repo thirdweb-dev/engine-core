@@ -1,0 +1,56 @@
+# Base configuration for Engine integration tests
+# This file contains default values and structure
+# Override specific values in test_local.yaml
+
+# Vault configuration
+vault:
+  # REQUIRED: Admin key or access token for signing
+  admin_key: null
+  # REQUIRED: Pre-existing Solana wallet address to use for tests
+  # This wallet must exist in Vault and be accessible with the admin_key
+  # Example: 5ZWj7a1f8tWkjBESHKgrLmXshuXxqeY9SYcfbshpAqPG
+  test_solana_wallet: null
+
+# Redis configuration for test queues
+redis:
+  url: redis://127.0.0.1:6379
+
+# Thirdweb service configuration
+thirdweb:
+  urls:
+    rpc: rpc.thirdweb-dev.com
+    bundler: bundler.thirdweb-dev.com
+    paymaster: bundler.thirdweb-dev.com
+    vault: https://d2w4ge7u2axqfk.cloudfront.net
+    abi_service: https://contract.thirdweb.com/abi/
+    iaw_service: https://embedded-wallet.thirdweb-dev.com
+  secret: read_from_env
+  client_id: read_from_env
+
+# Solana RPC URLs for testing
+solana:
+  devnet:
+    http_url: https://api.devnet.solana.com
+    ws_url: wss://api.devnet.solana.com
+  mainnet:
+    http_url: https://api.mainnet-beta.solana.com
+    ws_url: wss://api.mainnet-beta.solana.com
+  local:
+    http_url: http://127.0.0.1:8899
+    ws_url: ws://127.0.0.1:8900
+
+# Test queue configuration (minimal for tests)
+queue:
+  webhook_workers: 1
+  external_bundler_send_workers: 1
+  userop_confirm_workers: 1
+  eoa_executor_workers: 1
+  solana_executor_workers: 1
+  local_concurrency: 1
+  polling_interval_ms: 100
+  lease_duration_seconds: 10
+  monitoring:
+    eoa_send_degradation_threshold_seconds: 10
+    eoa_confirmation_degradation_threshold_seconds: 120
+    eoa_stuck_threshold_seconds: 600
+
