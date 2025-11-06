@@ -376,6 +376,19 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 "Found newest transaction for gas bump"
             );
 
+            let time_since_queuing = EoaExecutorStore::now().saturating_sub(newest_transaction_data.created_at);
+
+            if time_since_queuing < NONCE_STALL_LIMIT_MS {
+                tracing::warn!(
+                    transaction_id = ?newest_transaction_data.transaction_id,
+                    nonce = expected_nonce,
+                    time_since_queuing = time_since_queuing,
+                    stall_timeout = NONCE_STALL_LIMIT_MS,
+                    "Transaction has not been queued for long enough, skipping gas bump"
+                );
+                return Ok(false);
+            }
+
             // Get the latest attempt to extract gas values from
             // Build typed transaction -> manually bump -> sign
             let typed_tx = match self
