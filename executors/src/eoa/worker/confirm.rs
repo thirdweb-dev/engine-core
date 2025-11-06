@@ -435,6 +435,19 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             current_latest_nonce = fresh_transaction_counts.latest,
                             "Gas bump simulation failed but nonce has moved ahead - transaction likely confirmed. Breaking out of gas bump flow."
                         );
+
+                        if let Ok(mut health) = self.get_eoa_health().await {
+                            let now = EoaExecutorStore::now();
+                            health.last_nonce_movement_at = now;
+                            health.last_confirmation_at = now;
+                            if let Err(update_err) = self.store.update_health_data(&health).await {
+                                tracing::warn!(
+                                    error = ?update_err,
+                                    nonce = expected_nonce,
+                                    "Detected nonce movement but failed to refresh health data"
+                                );
+                            }
+                        }
                         // Return success to break out of gas bump flow
                         // The regular confirmation flow will handle the confirmed transaction
                         return Ok(true);
