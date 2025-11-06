@@ -24,8 +24,8 @@ config = { workspace = true }
 # Solana dependencies
 solana-sdk = { workspace = true, features = ["full"] }
 solana-client = { workspace = true }
-solana-system-interface = { version = "2.0", features = ["bincode"] }
-spl-token-2022-interface = "2.1"
+solana-system-interface = { workspace = true }
+spl-token-2022-interface = { workspace = true }
 
 # Vault/Engine dependencies
 vault-sdk = { workspace = true }
