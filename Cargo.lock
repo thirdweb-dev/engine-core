@@ -3003,6 +3003,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bincode 2.0.1",
+ "config",
+ "engine-core",
+ "engine-executors",
+ "engine-solana-core",
+ "moka",
+ "once_cell",
+ "prometheus",
+ "rand 0.9.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "solana-client",
+ "solana-sdk",
+ "solana-system-interface",
+ "thirdweb-core",
+ "thirdweb-engine",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "twmq",
+ "vault-sdk",
+ "vault-types",
+]
+
+[[package]]
 name = "engine-solana-core"
 version = "0.1.0"
 dependencies = [
