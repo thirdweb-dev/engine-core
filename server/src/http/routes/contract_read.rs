@@ -455,11 +455,7 @@ async fn execute_direct_contract_calls<C: engine_core::chain::Chain>(
                     call_request = call_request.from(*from_address);
                 }
 
-                match provider
-                    .call(call_request)
-                    .block(BlockNumberOrTag::Latest.into())
-                    .await
-                {
+                match provider.call(call_request).await {
                     Ok(result) => {
                         // Decode the result
                         match prepared_call.function.abi_decode_output(&result) {
@@ -516,13 +512,9 @@ async fn execute_multicall(
         .to(*multicall_address)
         .input(multicall_call.abi_encode().into());
 
-    let result = provider
-        .call(call_request)
-        .block(BlockNumberOrTag::Latest.into())
-        .await
-        .map_err(|e| {
-            EngineError::contract_multicall_error(chain_id, format!("Multicall failed: {e}"))
-        })?;
+    let result = provider.call(call_request).await.map_err(|e| {
+        EngineError::contract_multicall_error(chain_id, format!("Multicall failed: {e}"))
+    })?;
 
     let decoded = aggregate3Call::abi_decode_returns(&result).map_err(|e| {
         EngineError::contract_multicall_error(

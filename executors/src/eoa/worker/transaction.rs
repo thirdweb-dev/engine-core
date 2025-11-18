@@ -4,7 +4,6 @@ use alloy::{
     consensus::{
         SignableTransaction, Signed, TxEip4844Variant, TxEip4844WithSidecar, TypedTransaction,
     },
-    eips::BlockNumberOrTag,
     network::{TransactionBuilder, TransactionBuilder7702},
     primitives::{Bytes, U256},
     providers::Provider,
@@ -21,16 +20,11 @@ use engine_core::{
 };
 
 use crate::eoa::{
-    EoaTransactionRequest,
     store::{
         BorrowedTransaction, BorrowedTransactionData, PendingTransaction, SubmittedNoopTransaction,
-    },
-    worker::{
-        EoaExecutorWorker,
-        error::{
-            EoaExecutorWorkerError, is_retryable_preparation_error, is_unsupported_eip1559_error,
-        },
-    },
+    }, worker::{
+        error::{is_retryable_preparation_error, is_unsupported_eip1559_error, EoaExecutorWorkerError}, EoaExecutorWorker
+    }, EoaTransactionRequest
 };
 
 // Retry constants for preparation phase
@@ -309,13 +303,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
         // Estimate gas if needed
         if tx_request.gas.is_none() {
-            match self
-                .chain
-                .provider()
-                .estimate_gas(tx_request.clone())
-                .block(BlockNumberOrTag::Latest.into())
-                .await
-            {
+            match self.chain.provider().estimate_gas(tx_request.clone()).await {
                 Ok(gas_limit) => {
                     tx_request = tx_request.with_gas_limit(gas_limit * 110 / 100); // 10% buffer
                 }
@@ -409,13 +397,10 @@ impl<C: Chain> EoaExecutorWorker<C> {
         nonce: u64,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(request, nonce).await?;
-
+        
         // Inject KMS cache into the signing credential (after deserialization from Redis)
-        let credential_with_cache = request
-            .signing_credential
-            .clone()
-            .with_aws_kms_cache(&self.kms_client_cache);
-
+        let credential_with_cache = request.signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
+        
         self.sign_transaction(typed_tx, &credential_with_cache)
             .await
     }
