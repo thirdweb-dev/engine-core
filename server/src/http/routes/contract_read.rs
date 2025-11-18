@@ -1,7 +1,6 @@
 // 8:12 PM - COLOCATION: Contract Read Operations
 
 use alloy::dyn_abi::FunctionExt;
-use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{Address, ChainId, address};
 
 use alloy::{
