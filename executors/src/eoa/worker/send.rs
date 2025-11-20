@@ -275,9 +275,22 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             transaction_id = pending.transaction_id,
                             "Transaction permanently failed due to non-retryable preparation error",
                         );
-                        self.store
-                            .fail_pending_transaction(pending, e, self.webhook_queue.clone())
-                            .await?;
+                        if let Err(e) = self
+                            .store
+                            .fail_pending_transaction(
+                                pending,
+                                e.clone(),
+                                self.webhook_queue.clone(),
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                error = ?e,
+                                transaction_id = pending.transaction_id,
+                                "Failed to mark transaction as failed - transaction may be stuck in pending state"
+                            );
+                            // Don't propagate the error, continue processing
+                        }
                     }
                 }
                 (true, Ok(_)) => continue,
