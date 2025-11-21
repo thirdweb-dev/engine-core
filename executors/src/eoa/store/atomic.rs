@@ -574,39 +574,54 @@ impl AtomicEoaExecutorStore {
         error: EoaExecutorWorkerError,
         webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     ) -> Result<(), TransactionStoreError> {
-        self.with_lock_check(|pipeline| {
-            let pending_key = self.pending_transactions_zset_name();
-            let tx_data_key = self.transaction_data_key_name(&pending_transaction.transaction_id);
-            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let mut pipeline = twmq::redis::pipe();
+        pipeline.atomic();
 
-            // Remove from pending state
-            pipeline.zrem(&pending_key, &pending_transaction.transaction_id);
+        let pending_key = self.pending_transactions_zset_name();
+        let tx_data_key = self.transaction_data_key_name(&pending_transaction.transaction_id);
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
 
-            // Update transaction data with failure
-            pipeline.hset(&tx_data_key, "completed_at", now);
-            pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
-            pipeline.hset(&tx_data_key, "status", "failed");
+        // Remove from pending state
+        pipeline.zrem(&pending_key, &pending_transaction.transaction_id);
 
-            let event = EoaExecutorEvent {
-                transaction_id: pending_transaction.transaction_id.clone(),
-                address: pending_transaction.user_request.from,
-            };
+        // Update transaction data with failure
+        pipeline.hset(&tx_data_key, "completed_at", now);
+        pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
+        pipeline.hset(&tx_data_key, "status", "failed");
 
-            let fail_envelope = event.transaction_failed_envelope(error.clone(), 1);
+        let event = EoaExecutorEvent {
+            transaction_id: pending_transaction.transaction_id.clone(),
+            address: pending_transaction.user_request.from,
+        };
 
-            if !pending_transaction.user_request.webhook_options.is_empty() {
-                let mut tx_context = webhook_queue.transaction_context_from_pipeline(pipeline);
-                if let Err(e) = queue_webhook_envelopes(
-                    fail_envelope,
-                    pending_transaction.user_request.webhook_options.clone(),
-                    &mut tx_context,
-                    webhook_queue.clone(),
-                ) {
-                    tracing::error!("Failed to queue webhook for fail: {}", e);
-                }
+        let fail_envelope = event.transaction_failed_envelope(error.clone(), 1);
+
+        if !pending_transaction.user_request.webhook_options.is_empty() {
+            let mut tx_context = webhook_queue.transaction_context_from_pipeline(&mut pipeline);
+            if let Err(e) = queue_webhook_envelopes(
+                fail_envelope,
+                pending_transaction.user_request.webhook_options.clone(),
+                &mut tx_context,
+                webhook_queue.clone(),
+            ) {
+                tracing::error!("Failed to queue webhook for fail: {}", e);
             }
-        })
-        .await
+        }
+
+        let mut conn = self.redis.clone();
+        pipeline
+            .query_async::<Vec<twmq::redis::Value>>(&mut conn)
+            .await?;
+
+        tracing::info!(
+            transaction_id = %pending_transaction.transaction_id,
+            eoa = ?self.eoa(),
+            chain_id = self.chain_id(),
+            error = %error,
+            "JOB_LIFECYCLE - Deleted failed pending transaction from EOA"
+        );
+
+        Ok(())
     }
 
     pub async fn clean_submitted_transactions(
