@@ -399,41 +399,30 @@ impl<C: Chain> EoaExecutorWorker<C> {
 
             let iteration_start = current_timestamp_ms();
 
-            // Get pending transactions
-            let pending_start = current_timestamp_ms();
-            let pending_txs = self
+            // Get pending transactions and optimistic nonce in one operation
+            let fetch_start = current_timestamp_ms();
+            let (pending_txs, optimistic_nonce) = self
                 .store
-                .peek_pending_transactions(remaining_budget)
+                .peek_pending_transactions_with_optimistic_nonce(remaining_budget)
                 .await?;
 
-            tracing::info!(
-                duration_seconds = calculate_duration_seconds(pending_start, current_timestamp_ms()),
-                iteration = iteration,
-                pending_count = pending_txs.len(),
-                eoa = ?self.eoa,
-                chain_id = self.chain_id,
-                worker_id = %self.store.worker_id,
-                "JOB_LIFECYCLE - process_new_transactions: Got pending transactions"
-            );
-
-            if pending_txs.is_empty() {
-                break;
-            }
-
-            let nonce_start = current_timestamp_ms();
-            let optimistic_nonce = self.store.get_optimistic_transaction_count().await?;
             let batch_size = pending_txs.len().min(remaining_budget as usize);
 
             tracing::info!(
-                duration_seconds = calculate_duration_seconds(nonce_start, current_timestamp_ms()),
+                duration_seconds = calculate_duration_seconds(fetch_start, current_timestamp_ms()),
                 iteration = iteration,
+                pending_count = pending_txs.len(),
                 optimistic_nonce = optimistic_nonce,
                 batch_size = batch_size,
                 eoa = ?self.eoa,
                 chain_id = self.chain_id,
                 worker_id = %self.store.worker_id,
-                "JOB_LIFECYCLE - process_new_transactions: Got optimistic nonce"
+                "JOB_LIFECYCLE - process_new_transactions: Got pending transactions and optimistic nonce"
             );
+
+            if pending_txs.is_empty() {
+                break;
+            }
 
             tracing::debug!(
                 iteration = iteration,
