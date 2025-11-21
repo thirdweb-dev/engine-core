@@ -95,12 +95,25 @@ impl<C: Chain> EoaExecutorWorker<C> {
         );
 
         // 3. Only proceed to new nonces if we successfully used all recycled nonces
+        let clean_start = current_timestamp_ms();
         let remaining_recycled = self.store.clean_and_get_recycled_nonces().await?.len();
+
+        tracing::info!(
+            duration_seconds = calculate_duration_seconds(clean_start, current_timestamp_ms()),
+            remaining_recycled = remaining_recycled,
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - send_flow: Cleaned and got recycled nonces"
+        );
+
         if remaining_recycled == 0 {
+            let budget_start = current_timestamp_ms();
             let inflight_budget = self.store.get_inflight_budget(self.max_inflight).await?;
 
             tracing::info!(
-                duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+                duration_seconds = calculate_duration_seconds(budget_start, current_timestamp_ms()),
+                total_duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
                 inflight_budget = inflight_budget,
                 eoa = ?self.eoa,
                 chain_id = self.chain_id,
@@ -304,6 +317,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         let mut cleaned_results = Vec::new();
         let mut balance_threshold_update_needed = false;
         let mut failure_occurred = false;
+        let mut non_retryable_failures = Vec::new();
 
         for (pending, result) in results.into_iter() {
             match (failure_occurred, result) {
@@ -330,32 +344,32 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         balance_threshold_update_needed = true;
                     }
 
-                    // For deterministic build failures, fail the transaction immediately
+                    // For deterministic build failures, collect for batch processing
                     if !is_retryable_preparation_error(&e) {
                         tracing::error!(
                             error = ?e,
                             transaction_id = pending.transaction_id,
                             "Transaction permanently failed due to non-retryable preparation error",
                         );
-                        if let Err(e) = self
-                            .store
-                            .fail_pending_transaction(
-                                pending,
-                                e.clone(),
-                                self.webhook_queue.clone(),
-                            )
-                            .await
-                        {
-                            tracing::error!(
-                                error = ?e,
-                                transaction_id = pending.transaction_id,
-                                "Failed to mark transaction as failed - transaction may be stuck in pending state"
-                            );
-                            // Don't propagate the error, continue processing
-                        }
+                        non_retryable_failures.push((pending, e.clone()));
                     }
                 }
                 (true, Ok(_)) => continue,
+            }
+        }
+
+        // Batch fail all non-retryable failures in a single Redis pipeline
+        if !non_retryable_failures.is_empty() {
+            if let Err(e) = self
+                .store
+                .fail_pending_transactions_batch(non_retryable_failures, self.webhook_queue.clone())
+                .await
+            {
+                tracing::error!(
+                    error = ?e,
+                    "Failed to batch mark transactions as failed - some transactions may be stuck in pending state"
+                );
+                // Don't propagate the error, continue processing
             }
         }
 
