@@ -288,9 +288,7 @@ async fn load_test_throughput(
     let success_rate = metrics.success_rate();
     let avg_processing_time = metrics.avg_processing_time_ms();
 
-    println!(
-        "Load Test Results - {jobs_per_second}jobs/s for {duration_seconds}s:"
-    );
+    println!("Load Test Results - {jobs_per_second}jobs/s for {duration_seconds}s:");
     println!("  Jobs pushed: {jobs_pushed}");
     println!("  Jobs processed: {total_processed}");
     println!("  Simulated success rate: {:.1}%", success_rate * 100.0);

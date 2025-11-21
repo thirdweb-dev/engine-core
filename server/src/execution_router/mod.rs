@@ -506,8 +506,11 @@ impl ExecutionRouter {
         &self,
         request: engine_core::execution_options::solana::SendSolanaTransactionRequest,
         signing_credential: SigningCredential,
-    ) -> Result<engine_core::execution_options::solana::QueuedSolanaTransactionResponse, EngineError> {
-        use engine_core::execution_options::solana::{QueuedSolanaTransactionResponse, SolanaTransactionOptions};
+    ) -> Result<engine_core::execution_options::solana::QueuedSolanaTransactionResponse, EngineError>
+    {
+        use engine_core::execution_options::solana::{
+            QueuedSolanaTransactionResponse, SolanaTransactionOptions,
+        };
 
         let transaction_id = request.idempotency_key.clone();
         let chain_id = request.execution_options.chain_id;

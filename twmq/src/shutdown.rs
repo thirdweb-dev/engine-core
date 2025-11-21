@@ -63,7 +63,9 @@ impl<Q: QueueIdentifier> WorkerHandle<Q> {
                     self.queue.queue_name(),
                     e
                 );
-                Err(TwmqError::Runtime { message: format!("Worker panic: {e}") })
+                Err(TwmqError::Runtime {
+                    message: format!("Worker panic: {e}"),
+                })
             }
         }
     }
@@ -117,7 +119,9 @@ impl ShutdownHandle {
                     errors.push(e);
                 }
                 Err(e) => {
-                    let runtime_error = TwmqError::Runtime { message: format!("Worker {i} panic: {e}") };
+                    let runtime_error = TwmqError::Runtime {
+                        message: format!("Worker {i} panic: {e}"),
+                    };
                     tracing::error!("Worker {} task panicked during shutdown: {:?}", i, e);
                     errors.push(runtime_error);
                 }
@@ -156,10 +160,7 @@ impl ShutdownHandle {
     }
 
     /// Add multiple workers at once
-    pub fn add_workers<Q>(
-        &mut self,
-        workers: impl IntoIterator<Item = WorkerHandle<Q>>,
-    ) {
+    pub fn add_workers<Q>(&mut self, workers: impl IntoIterator<Item = WorkerHandle<Q>>) {
         for worker in workers {
             self.add_worker(worker);
         }

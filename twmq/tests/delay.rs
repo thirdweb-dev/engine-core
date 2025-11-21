@@ -60,7 +60,10 @@ impl DurableExecution for DelayTestJobHandler {
     type ErrorData = TestJobErrorData;
     type JobData = DelayTestJobData;
 
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

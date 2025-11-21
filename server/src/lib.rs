@@ -7,8 +7,8 @@ pub mod queue;
 // Re-export commonly used types for integration tests and external usage
 pub use chains::ThirdwebChainService;
 pub use config::{
-    EngineConfig, MonitoringConfig, QueueConfig, RedisConfig, ServerConfig, SolanaConfig,
-    SolanRpcConfigData, ThirdwebConfig, ThirdwebUrls,
+    EngineConfig, MonitoringConfig, QueueConfig, RedisConfig, ServerConfig, SolanRpcConfigData,
+    SolanaConfig, ThirdwebConfig, ThirdwebUrls,
 };
 pub use execution_router::ExecutionRouter;
 pub use http::server::{EngineServer, EngineServerState};

@@ -621,7 +621,7 @@ impl SolanaSigner {
                 solana_sdk::signature::Signature::default(),
             );
         };
-        
+
         transaction.signatures[signer_index] = signature;
 
         Ok(transaction)

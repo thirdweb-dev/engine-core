@@ -150,7 +150,9 @@ impl DeploymentLock for RedisDeploymentLock {
         let lock_id = Uuid::new_v4().to_string();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|e| EngineError::InternalError { message: format!("System time error: {e}") })?
+            .map_err(|e| EngineError::InternalError {
+                message: format!("System time error: {e}"),
+            })?
             .as_secs();
 
         let lock_data = LockData {
@@ -158,22 +160,29 @@ impl DeploymentLock for RedisDeploymentLock {
             acquired_at: now,
         };
 
-        let lock_data_str = serde_json::to_string(&lock_data)
-            .map_err(|e| EngineError::InternalError { message: format!("Serialization failed: {e}") })?;
+        let lock_data_str =
+            serde_json::to_string(&lock_data).map_err(|e| EngineError::InternalError {
+                message: format!("Serialization failed: {e}"),
+            })?;
 
         // Use SET NX EX for atomic acquire
-        let result: Option<String> = conn
-            .set_nx(&key, &lock_data_str)
-            .await
-            .map_err(|e| EngineError::InternalError { message: format!("Lock acquire failed: {e}") })?;
+        let result: Option<String> =
+            conn.set_nx(&key, &lock_data_str)
+                .await
+                .map_err(|e| EngineError::InternalError {
+                    message: format!("Lock acquire failed: {e}"),
+                })?;
 
         match result {
             Some(_) => Ok(AcquireLockResult::Acquired),
             None => {
                 // Lock already exists, get the lock_id
-                let existing_data: Option<String> = conn.get(&key).await.map_err(|e| {
-                    EngineError::InternalError { message: format!("Failed to read existing lock: {e}") }
-                })?;
+                let existing_data: Option<String> =
+                    conn.get(&key)
+                        .await
+                        .map_err(|e| EngineError::InternalError {
+                            message: format!("Failed to read existing lock: {e}"),
+                        })?;
 
                 let existing_lock_id = existing_data
                     .and_then(|data| serde_json::from_str::<LockData>(&data).ok())
@@ -194,11 +203,12 @@ impl DeploymentLock for RedisDeploymentLock {
 
         let key = self.lock_key(chain_id, account_address);
 
-        let deleted = conn.del::<&str, usize>(&key).await.map_err(|e| {
-            EngineError::InternalError { message: format!(
-                "Failed to delete lock for account {account_address}: {e}"
-            ) }
-        })?;
+        let deleted =
+            conn.del::<&str, usize>(&key)
+                .await
+                .map_err(|e| EngineError::InternalError {
+                    message: format!("Failed to delete lock for account {account_address}: {e}"),
+                })?;
 
         Ok(deleted > 0)
     }

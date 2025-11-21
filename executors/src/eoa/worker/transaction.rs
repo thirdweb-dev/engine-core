@@ -20,11 +20,16 @@ use engine_core::{
 };
 
 use crate::eoa::{
+    EoaTransactionRequest,
     store::{
         BorrowedTransaction, BorrowedTransactionData, PendingTransaction, SubmittedNoopTransaction,
-    }, worker::{
-        error::{is_retryable_preparation_error, is_unsupported_eip1559_error, EoaExecutorWorkerError}, EoaExecutorWorker
-    }, EoaTransactionRequest
+    },
+    worker::{
+        EoaExecutorWorker,
+        error::{
+            EoaExecutorWorkerError, is_retryable_preparation_error, is_unsupported_eip1559_error,
+        },
+    },
 };
 
 // Retry constants for preparation phase
@@ -397,10 +402,13 @@ impl<C: Chain> EoaExecutorWorker<C> {
         nonce: u64,
     ) -> Result<Signed<TypedTransaction>, EoaExecutorWorkerError> {
         let typed_tx = self.build_typed_transaction(request, nonce).await?;
-        
+
         // Inject KMS cache into the signing credential (after deserialization from Redis)
-        let credential_with_cache = request.signing_credential.clone().with_aws_kms_cache(&self.kms_client_cache);
-        
+        let credential_with_cache = request
+            .signing_credential
+            .clone()
+            .with_aws_kms_cache(&self.kms_client_cache);
+
         self.sign_transaction(typed_tx, &credential_with_cache)
             .await
     }

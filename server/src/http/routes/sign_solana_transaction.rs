@@ -77,14 +77,11 @@ pub async fn sign_solana_transaction(
     let rpc_client = state.solana_rpc_cache.get_or_create(chain_id).await;
 
     // Get recent blockhash
-    let recent_blockhash = rpc_client
-        .get_latest_blockhash()
-        .await
-        .map_err(|e| {
-            ApiEngineError(EngineError::ValidationError {
-                message: format!("Failed to get recent blockhash: {}", e),
-            })
-        })?;
+    let recent_blockhash = rpc_client.get_latest_blockhash().await.map_err(|e| {
+        ApiEngineError(EngineError::ValidationError {
+            message: format!("Failed to get recent blockhash: {}", e),
+        })
+    })?;
 
     // Build the transaction
     let solana_tx = SolanaTransaction {
@@ -113,13 +110,12 @@ pub async fn sign_solana_transaction(
     let signature = signed_tx.signatures[0];
 
     // Serialize the signed transaction to base64
-    let signed_tx_bytes = bincode::serde::encode_to_vec(&signed_tx, bincode_standard()).map_err(
-        |e| {
+    let signed_tx_bytes =
+        bincode::serde::encode_to_vec(&signed_tx, bincode_standard()).map_err(|e| {
             ApiEngineError(EngineError::ValidationError {
                 message: format!("Failed to serialize signed transaction: {}", e),
             })
-        },
-    )?;
+        })?;
     let signed_tx_base64 = Base64Engine.encode(&signed_tx_bytes);
 
     let response = SignSolanaTransactionResponse {

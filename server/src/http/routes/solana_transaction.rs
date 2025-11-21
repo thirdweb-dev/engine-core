@@ -60,9 +60,5 @@ pub async fn send_solana_transaction(
         "Solana transaction queued successfully"
     );
 
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(SuccessResponse::new(response)),
-    ))
+    Ok((StatusCode::ACCEPTED, Json(SuccessResponse::new(response))))
 }
-

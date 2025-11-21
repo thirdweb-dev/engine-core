@@ -256,9 +256,7 @@ async fn test_cross_queue_job_scheduling() {
     let webhook_pending = webhook_queue.count(JobStatus::Pending).await.unwrap();
     let webhook_success = webhook_queue.count(JobStatus::Success).await.unwrap();
 
-    println!(
-        "Webhook queue - Pending: {webhook_pending}, Success: {webhook_success}"
-    );
+    println!("Webhook queue - Pending: {webhook_pending}, Success: {webhook_success}");
 
     // Either the webhook job is still pending or already succeeded
     assert!(

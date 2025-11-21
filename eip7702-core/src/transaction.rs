@@ -195,11 +195,18 @@ impl<C: Chain> MinimalAccountTransaction<C> {
         credentials: &SigningCredential,
         delegation_contract: Address,
     ) -> Result<Self, EngineError> {
-        if self.account.is_minimal_account(Some(delegation_contract)).await? {
+        if self
+            .account
+            .is_minimal_account(Some(delegation_contract))
+            .await?
+        {
             return Ok(self);
         }
 
-        let authorization = self.account.sign_authorization(signer, credentials, delegation_contract).await?;
+        let authorization = self
+            .account
+            .sign_authorization(signer, credentials, delegation_contract)
+            .await?;
         self.authorization = Some(authorization);
         Ok(self)
     }

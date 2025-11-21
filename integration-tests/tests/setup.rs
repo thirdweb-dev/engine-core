@@ -14,10 +14,15 @@ use serde::Deserialize;
 use std::{env, sync::Arc, time::Duration};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
-    EngineServer, EngineServerState, QueueManager, ThirdwebChainService,
+    EngineServer,
+    EngineServerState,
+    QueueConfig,
+    QueueManager,
+    RedisConfig as ServerRedisConfig,
+    SolanaConfig,
+    ThirdwebChainService,
     // Import config types instead of duplicating them
-    ThirdwebConfig, RedisConfig as ServerRedisConfig, 
-    SolanaConfig, QueueConfig,
+    ThirdwebConfig,
 };
 use tokio::net::TcpListener;
 use tracing::info;

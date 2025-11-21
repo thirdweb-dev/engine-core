@@ -582,7 +582,9 @@ impl EoaExecutorStore {
         let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
         let mut deletion_pipe = twmq::redis::pipe();
 
-        for ((transaction_id, queued_at), user_request) in transaction_ids.into_iter().zip(user_requests) {
+        for ((transaction_id, queued_at), user_request) in
+            transaction_ids.into_iter().zip(user_requests)
+        {
             match user_request {
                 Some(user_request) => {
                     let user_request_parsed = serde_json::from_str(&user_request)?;
