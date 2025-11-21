@@ -376,7 +376,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 "Found newest transaction for gas bump"
             );
 
-            let time_since_queuing = EoaExecutorStore::now().saturating_sub(newest_transaction_data.created_at);
+            let time_since_queuing =
+                EoaExecutorStore::now().saturating_sub(newest_transaction_data.created_at);
 
             if time_since_queuing < NONCE_STALL_LIMIT_MS {
                 tracing::warn!(

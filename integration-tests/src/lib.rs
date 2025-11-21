@@ -1,7 +1,7 @@
 use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
-    message::{v0, VersionedMessage},
+    message::{VersionedMessage, v0},
     pubkey::Pubkey,
     signature::Signature,
     transaction::VersionedTransaction,
@@ -11,7 +11,7 @@ use std::str::FromStr;
 /// Helper function to create a simple SPL token transfer transaction
 /// This creates a transaction that requires multiple signers (partial signature scenario)
 pub fn create_spl_token_transfer_transaction(
-    fee_payer: Pubkey,      // Engine wallet (will sign second)
+    fee_payer: Pubkey,       // Engine wallet (will sign second)
     token_authority: Pubkey, // User wallet (will sign first)
     token_account: Pubkey,   // Source token account
     destination: Pubkey,     // Destination token account
@@ -27,28 +27,28 @@ pub fn create_spl_token_transfer_transaction(
     // This ensures correct instruction layout with decimals and proper discriminator
     let transfer_ix = spl_token_2022_interface::instruction::transfer_checked(
         &token_program_id,
-        &token_account,       // Source account
-        &mint,                // Token mint
-        &destination,         // Destination account  
-        &token_authority,     // Authority (will be a required signer)
-        &[],                  // No multisig signers
+        &token_account,   // Source account
+        &mint,            // Token mint
+        &destination,     // Destination account
+        &token_authority, // Authority (will be a required signer)
+        &[],              // No multisig signers
         amount,
         decimals,
     )?;
 
     // Create the message with fee payer
     let message = v0::Message::try_compile(
-        &fee_payer,            // Fee payer (engine wallet)
+        &fee_payer, // Fee payer (engine wallet)
         &[transfer_ix],
-        &[],                   // No address lookup tables
+        &[], // No address lookup tables
         recent_blockhash,
     )?;
 
     let message = VersionedMessage::V0(message);
-    
+
     // Calculate number of required signatures
     let num_signatures = message.header().num_required_signatures as usize;
-    
+
     // Initialize with default (empty) signatures
     let signatures = vec![Signature::default(); num_signatures];
 
@@ -60,23 +60,20 @@ pub fn create_spl_token_transfer_transaction(
 
 /// Helper function to verify transaction signature
 /// Returns true if the signature at the given index is valid
-pub fn verify_signature(
-    transaction: &VersionedTransaction,
-    signer_pubkey: &Pubkey,
-) -> bool {
+pub fn verify_signature(transaction: &VersionedTransaction, signer_pubkey: &Pubkey) -> bool {
     // Find the signer's index in the account keys
     let account_keys = transaction.message.static_account_keys();
-    
-    let signer_index = account_keys
-        .iter()
-        .position(|key| key == signer_pubkey);
 
-    if let Some(index) = signer_index && index < transaction.signatures.len() {
+    let signer_index = account_keys.iter().position(|key| key == signer_pubkey);
+
+    if let Some(index) = signer_index
+        && index < transaction.signatures.len()
+    {
         // Check if the signature is not default (i.e., has been signed)
         let sig = &transaction.signatures[index];
         return sig != &Signature::default();
     }
-    
+
     false
 }
 
@@ -93,15 +90,10 @@ pub fn create_system_transfer(
     recent_blockhash: Hash,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     use solana_system_interface::instruction as system_instruction;
-    
+
     let transfer_ix = system_instruction::transfer(&from, &to, lamports);
-    
-    let message = v0::Message::try_compile(
-        &from,
-        &[transfer_ix],
-        &[],
-        recent_blockhash,
-    )?;
+
+    let message = v0::Message::try_compile(&from, &[transfer_ix], &[], recent_blockhash)?;
 
     let message = VersionedMessage::V0(message);
     let num_signatures = message.header().num_required_signatures as usize;
@@ -112,4 +104,3 @@ pub fn create_system_transfer(
         message,
     })
 }
-

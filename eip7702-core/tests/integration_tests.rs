@@ -657,7 +657,9 @@ impl TestSetup {
 async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     // Set up test environment
     let mut setup = TestSetup::new().await?;
-    let delegation_contract = setup.delegation_contract.expect("Delegation contract should be set");
+    let delegation_contract = setup
+        .delegation_contract
+        .expect("Delegation contract should be set");
 
     // Step 1: Fetch and set bytecode from Base Sepolia
     setup.fetch_and_set_bytecode().await?;
@@ -667,11 +669,15 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Test is_minimal_account - all should be false initially
     assert!(
-        !developer_account.is_minimal_account(Some(delegation_contract)).await?,
+        !developer_account
+            .is_minimal_account(Some(delegation_contract))
+            .await?,
         "Developer should not be minimal account initially"
     );
     assert!(
-        !user_account.is_minimal_account(Some(delegation_contract)).await?,
+        !user_account
+            .is_minimal_account(Some(delegation_contract))
+            .await?,
         "User should not be minimal account initially"
     );
     println!("✓ All accounts are not minimal accounts initially");
@@ -696,9 +702,11 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .owner_transaction(&[mint_transaction])
         .add_authorization_if_needed(
-            &setup.signer, 
+            &setup.signer,
             &setup.developer_credentials,
-            setup.delegation_contract.expect("Delegation contract should be set")
+            setup
+                .delegation_contract
+                .expect("Delegation contract should be set"),
         )
         .await?;
 
@@ -732,7 +740,9 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     assert!(
-        developer_account.is_minimal_account(Some(delegation_contract)).await?,
+        developer_account
+            .is_minimal_account(Some(delegation_contract))
+            .await?,
         "Developer should be minimal account after minting"
     );
 
@@ -740,9 +750,11 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
     // User signs authorization but executor broadcasts it (user has no funds)
     let user_authorization = user_account
         .sign_authorization(
-            &setup.signer, 
+            &setup.signer,
             &setup.user_credentials,
-            setup.delegation_contract.expect("Delegation contract should be set")
+            setup
+                .delegation_contract
+                .expect("Delegation contract should be set"),
         )
         .await?;
 
@@ -752,14 +764,18 @@ async fn test_eip7702_integration() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     assert!(
-        user_account.is_minimal_account(Some(delegation_contract)).await?,
+        user_account
+            .is_minimal_account(Some(delegation_contract))
+            .await?,
         "User (session key granter) should be minimal account after delegation"
     );
     println!("✓ User (session key granter) is now a minimal account (delegated by executor)");
 
     // Step 9: Developer is already delegated via add_authorization_if_needed in owner_transaction
     assert!(
-        developer_account.is_minimal_account(Some(delegation_contract)).await?,
+        developer_account
+            .is_minimal_account(Some(delegation_contract))
+            .await?,
         "Developer (session key grantee) should already be minimal account from earlier delegation"
     );
     println!("✓ Developer (session key grantee) was already delegated in previous step");

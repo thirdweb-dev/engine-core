@@ -27,7 +27,10 @@ use twmq::{
 };
 
 use crate::{
-    metrics::{record_transaction_queued_to_sent, current_timestamp_ms, calculate_duration_seconds_from_twmq},
+    metrics::{
+        calculate_duration_seconds_from_twmq, current_timestamp_ms,
+        record_transaction_queued_to_sent,
+    },
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -350,9 +353,7 @@ where
             DeploymentStatus::BeingDeployed { stale, lock_id } => {
                 return Err(ExternalBundlerSendError::DeploymentLocked {
                     account_address: smart_account.address,
-                    message: format!(
-                        "Deployment in progress (stale: {stale}, lock_id: {lock_id})"
-                    ),
+                    message: format!("Deployment in progress (stale: {stale}, lock_id: {lock_id})"),
                 })
                 .map_err_nack(
                     Some(Duration::from_secs(if stale { 5 } else { 30 })),
@@ -504,10 +505,15 @@ where
 
         tracing::debug!(userop_hash = ?user_op_hash, "User operation sent to bundler");
 
-                    // Record metrics: transaction queued to sent
-            let sent_timestamp = current_timestamp_ms();
-            let queued_to_sent_duration = calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
-            record_transaction_queued_to_sent("erc4337-external", job_data.chain_id, queued_to_sent_duration);
+        // Record metrics: transaction queued to sent
+        let sent_timestamp = current_timestamp_ms();
+        let queued_to_sent_duration =
+            calculate_duration_seconds_from_twmq(job.job.created_at, sent_timestamp);
+        record_transaction_queued_to_sent(
+            "erc4337-external",
+            job_data.chain_id,
+            queued_to_sent_duration,
+        );
 
         Ok(ExternalBundlerSendResult {
             account_address: smart_account.address,

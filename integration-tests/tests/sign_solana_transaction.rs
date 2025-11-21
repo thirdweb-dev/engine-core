@@ -216,11 +216,7 @@ async fn test_transaction_signature_verification() -> Result<()> {
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await?;
-        anyhow::bail!(
-            "Request failed with status {}: {}",
-            status,
-            error_body
-        );
+        anyhow::bail!("Request failed with status {}: {}", status, error_body);
     }
 
     let sign_response: SignSolanaTransactionResponse = response.json().await?;

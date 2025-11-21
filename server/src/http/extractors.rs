@@ -7,7 +7,7 @@ use axum::{
 };
 use engine_core::{
     chain::RpcCredentials,
-    credentials::{AwsKmsCredential, SigningCredential, KmsClientCache},
+    credentials::{AwsKmsCredential, KmsClientCache, SigningCredential},
     error::EngineError,
 };
 use thirdweb_core::auth::ThirdwebAuth;
@@ -109,7 +109,9 @@ impl FromRequestParts<EngineServerState> for SigningCredentialsExtractor {
         state: &EngineServerState,
     ) -> Result<Self, Self::Rejection> {
         // Try AWS KMS credentials first (with cache)
-        if let Some(aws_kms) = Self::try_extract_aws_kms_with_cache(parts, state.kms_client_cache.clone())? {
+        if let Some(aws_kms) =
+            Self::try_extract_aws_kms_with_cache(parts, state.kms_client_cache.clone())?
+        {
             return Ok(SigningCredentialsExtractor(SigningCredential::AwsKms(
                 aws_kms,
             )));

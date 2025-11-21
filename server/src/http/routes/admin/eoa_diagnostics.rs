@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::{consensus::Transaction, primitives::Address};
 use axum::{
     Router, debug_handler,
@@ -5,9 +7,15 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
-use engine_executors::eoa::store::{EoaExecutorStore, EoaHealth, TransactionData};
+use engine_core::{credentials::SigningCredential, error::EngineError};
+use engine_executors::eoa::{
+    EoaExecutorWorkerJobData,
+    store::{EoaExecutorStore, EoaHealth, TransactionData},
+};
 use serde::{Deserialize, Serialize};
+use twmq::{Queue, redis::AsyncCommands};
 
+use crate::chains::ThirdwebChainService;
 use crate::http::{
     error::ApiEngineError, extractors::DiagnosticAuthExtractor, server::EngineServerState,
     types::SuccessResponse,
@@ -71,6 +79,12 @@ pub struct BorrowedTransactionResponse {
     pub nonce: u64,
     pub queued_at: u64,
     pub borrowed_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualResetResponse {
+    pub job_enqueued: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,7 +419,25 @@ pub async fn schedule_manual_reset(
         })
     })?;
 
-    Ok((StatusCode::OK, Json(SuccessResponse::new(()))))
+    let job_enqueued = ensure_eoa_executor_job(
+        &state.queue_manager.eoa_executor_queue,
+        &store,
+        eoa_address,
+        chain_id,
+    )
+    .await?;
+
+    tracing::info!(
+        eoa = ?eoa_address,
+        chain_id,
+        job_enqueued,
+        "Manual reset scheduled via admin endpoint"
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(SuccessResponse::new(ManualResetResponse { job_enqueued })),
+    ))
 }
 
 // ===== HELPER FUNCTIONS =====
@@ -429,6 +461,97 @@ fn parse_eoa_chain(eoa_chain: &str) -> Result<(String, u64), ApiEngineError> {
     })?;
 
     Ok((eoa, chain_id))
+}
+
+async fn ensure_eoa_executor_job(
+    queue: &Arc<Queue<engine_executors::eoa::EoaExecutorJobHandler<ThirdwebChainService>>>,
+    store: &EoaExecutorStore,
+    eoa: Address,
+    chain_id: u64,
+) -> Result<bool, ApiEngineError> {
+    let job_id = format!("eoa_{}_{}", eoa, chain_id);
+
+    if job_exists_in_queue(queue, &job_id).await? {
+        return Ok(false);
+    }
+
+    let signing_credential = find_signing_credential(store).await?;
+
+    let job_data = EoaExecutorWorkerJobData {
+        eoa_address: eoa,
+        chain_id,
+        noop_signing_credential: signing_credential,
+    };
+
+    queue
+        .clone()
+        .job(job_data)
+        .with_id(&job_id)
+        .push()
+        .await
+        .map_err(|e| {
+            ApiEngineError(EngineError::InternalError {
+                message: format!("Failed to enqueue EOA executor job: {e}"),
+            })
+        })?;
+
+    Ok(true)
+}
+
+async fn job_exists_in_queue(
+    queue: &Arc<Queue<engine_executors::eoa::EoaExecutorJobHandler<ThirdwebChainService>>>,
+    job_id: &str,
+) -> Result<bool, ApiEngineError> {
+    let mut conn = queue.redis.clone();
+    let dedupe_key = queue.dedupe_set_name();
+
+    conn.sismember(&dedupe_key, job_id).await.map_err(|e| {
+        ApiEngineError(EngineError::InternalError {
+            message: format!("Failed to query queue dedupe set: {e}"),
+        })
+    })
+}
+
+async fn find_signing_credential(
+    store: &EoaExecutorStore,
+) -> Result<SigningCredential, ApiEngineError> {
+    if let Some(pending) = store
+        .peek_pending_transactions(1)
+        .await
+        .map_err(|e| {
+            ApiEngineError(EngineError::InternalError {
+                message: format!("Failed to inspect pending transactions: {e}"),
+            })
+        })?
+        .into_iter()
+        .next()
+    {
+        return Ok(pending.user_request.signing_credential.clone());
+    }
+
+    let borrowed_transactions = store.peek_borrowed_transactions().await.map_err(|e| {
+        ApiEngineError(EngineError::InternalError {
+            message: format!("Failed to inspect borrowed transactions: {e}"),
+        })
+    })?;
+
+    for borrowed in borrowed_transactions {
+        if let Some(tx_data) = store
+            .get_transaction_data(&borrowed.transaction_id)
+            .await
+            .map_err(|e| {
+                ApiEngineError(EngineError::InternalError {
+                    message: format!("Failed to hydrate transaction data: {e}"),
+                })
+            })?
+        {
+            return Ok(tx_data.user_request.signing_credential.clone());
+        }
+    }
+
+    Err(ApiEngineError(EngineError::ValidationError {
+        message: "Unable to determine signing credential for this EOA; no pending or borrowed transactions found".to_string(),
+    }))
 }
 
 pub fn eoa_diagnostics_router() -> Router<EngineServerState> {

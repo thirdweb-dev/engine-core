@@ -1249,7 +1249,10 @@ impl<H: DurableExecution> Queue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = job.job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(
+                    job_id = job.job.id,
+                    "Lease no longer exists, job was cancelled or timed out"
+                );
                 return Ok(());
             }
 
@@ -1275,7 +1278,10 @@ impl<H: DurableExecution> Queue<H> {
                 }
                 Err(_) => {
                     // WATCH failed (lease key changed), retry
-                    tracing::debug!(job_id = job.job.id, "WATCH failed during completion, retrying");
+                    tracing::debug!(
+                        job_id = job.job.id,
+                        "WATCH failed during completion, retrying"
+                    );
                     continue;
                 }
             }
@@ -1349,7 +1355,10 @@ impl<H: DurableExecution> Queue<H> {
             let lease_exists: bool = conn.exists(&lease_key).await?;
             if !lease_exists {
                 redis::cmd("UNWATCH").query_async::<()>(&mut conn).await?;
-                tracing::warn!(job_id = job.id, "Lease no longer exists, job was cancelled or timed out");
+                tracing::warn!(
+                    job_id = job.id,
+                    "Lease no longer exists, job was cancelled or timed out"
+                );
                 return Ok(());
             }
 
@@ -1370,7 +1379,10 @@ impl<H: DurableExecution> Queue<H> {
                 }
                 Err(_) => {
                     // WATCH failed (lease key changed), retry
-                    tracing::debug!(job_id = job.id, "WATCH failed during queue error completion, retrying");
+                    tracing::debug!(
+                        job_id = job.id,
+                        "WATCH failed during queue error completion, retrying"
+                    );
                     continue;
                 }
             }

@@ -1,16 +1,19 @@
 use alloy::{consensus::Transaction, providers::Provider};
 use engine_core::{chain::Chain, error::AlloyRpcErrorToEngineError};
 
-use crate::eoa::{
-    EoaExecutorStore,
-    store::{BorrowedTransaction, PendingTransaction, SubmissionResult, SubmissionResultType},
-    worker::{
-        EoaExecutorWorker,
-        error::{
-            EoaExecutorWorkerError, SendContext, is_retryable_preparation_error,
-            should_update_balance_threshold,
+use crate::{
+    eoa::{
+        EoaExecutorStore,
+        store::{BorrowedTransaction, PendingTransaction, SubmissionResult, SubmissionResultType},
+        worker::{
+            EoaExecutorWorker,
+            error::{
+                EoaExecutorWorkerError, SendContext, is_retryable_preparation_error,
+                should_update_balance_threshold,
+            },
         },
     },
+    metrics::{calculate_duration_seconds, current_timestamp_ms},
 };
 
 const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in milliseconds
@@ -19,9 +22,19 @@ impl<C: Chain> EoaExecutorWorker<C> {
     // ========== SEND FLOW ==========
     #[tracing::instrument(skip_all, fields(worker_id = self.store.worker_id))]
     pub async fn send_flow(&self) -> Result<u32, EoaExecutorWorkerError> {
+        let start_time = current_timestamp_ms();
+
         // 1. Get EOA health (initializes if needed) and check if we should update balance
         let mut health = self.get_eoa_health().await?;
         let now = EoaExecutorStore::now();
+
+        tracing::info!(
+            duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - send_flow: Got EOA health"
+        );
 
         // Update balance if it's stale
         // TODO: refactor this, very ugly
@@ -57,17 +70,57 @@ impl<C: Chain> EoaExecutorWorker<C> {
             }
         }
 
+        tracing::info!(
+            duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - send_flow: Completed balance check"
+        );
+
         let mut total_sent = 0;
 
         // 2. Process recycled nonces first
+        let recycled_start = current_timestamp_ms();
         total_sent += self.process_recycled_nonces().await?;
+
+        tracing::info!(
+            duration_seconds = calculate_duration_seconds(recycled_start, current_timestamp_ms()),
+            total_duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+            transactions_sent = total_sent,
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - send_flow: Completed processing recycled nonces"
+        );
 
         // 3. Only proceed to new nonces if we successfully used all recycled nonces
         let remaining_recycled = self.store.clean_and_get_recycled_nonces().await?.len();
         if remaining_recycled == 0 {
             let inflight_budget = self.store.get_inflight_budget(self.max_inflight).await?;
+
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+                inflight_budget = inflight_budget,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - send_flow: Got inflight budget"
+            );
+
             if inflight_budget > 0 {
+                let new_tx_start = current_timestamp_ms();
                 total_sent += self.process_new_transactions(inflight_budget).await?;
+
+                tracing::info!(
+                    duration_seconds = calculate_duration_seconds(new_tx_start, current_timestamp_ms()),
+                    total_duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+                    transactions_sent = total_sent,
+                    eoa = ?self.eoa,
+                    chain_id = self.chain_id,
+                    worker_id = %self.store.worker_id,
+                    "JOB_LIFECYCLE - send_flow: Completed processing new transactions"
+                );
             } else {
                 tracing::warn!("No inflight budget, not sending new transactions");
             }
@@ -77,6 +130,15 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 remaining_recycled
             );
         }
+
+        tracing::info!(
+            total_sent = total_sent,
+            total_duration_seconds = calculate_duration_seconds(start_time, current_timestamp_ms()),
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - send_flow: Completed send flow"
+        );
 
         Ok(total_sent)
     }
@@ -311,6 +373,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             return Ok(0);
         }
 
+        let function_start = current_timestamp_ms();
         let mut total_sent: usize = 0;
         let mut remaining_budget = budget;
 
@@ -320,18 +383,43 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 break;
             }
 
+            let iteration_start = current_timestamp_ms();
+
             // Get pending transactions
+            let pending_start = current_timestamp_ms();
             let pending_txs = self
                 .store
                 .peek_pending_transactions(remaining_budget)
                 .await?;
 
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(pending_start, current_timestamp_ms()),
+                iteration = iteration,
+                pending_count = pending_txs.len(),
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Got pending transactions"
+            );
+
             if pending_txs.is_empty() {
                 break;
             }
 
+            let nonce_start = current_timestamp_ms();
             let optimistic_nonce = self.store.get_optimistic_transaction_count().await?;
             let batch_size = pending_txs.len().min(remaining_budget as usize);
+
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(nonce_start, current_timestamp_ms()),
+                iteration = iteration,
+                optimistic_nonce = optimistic_nonce,
+                batch_size = batch_size,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Got optimistic nonce"
+            );
 
             tracing::debug!(
                 iteration = iteration,
@@ -342,6 +430,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             );
 
             // Build and sign all transactions in parallel with sequential nonces
+            let build_start = current_timestamp_ms();
             let build_tasks: Vec<_> = pending_txs
                 .iter()
                 .take(batch_size)
@@ -353,6 +442,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .collect();
 
             let prepared_results = futures::future::join_all(build_tasks).await;
+
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(build_start, current_timestamp_ms()),
+                iteration = iteration,
+                batch_size = batch_size,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Built and signed transactions"
+            );
+
             let prepared_results_with_pending = pending_txs
                 .iter()
                 .take(batch_size)
@@ -360,9 +460,20 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .collect::<Vec<_>>();
 
             // Clean preparation results (handles failures and removes bad transactions)
+            let clean_start = current_timestamp_ms();
             let cleaned_results = self
                 .clean_prepration_results(prepared_results_with_pending, true)
                 .await?;
+
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(clean_start, current_timestamp_ms()),
+                iteration = iteration,
+                cleaned_count = cleaned_results.len(),
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Cleaned preparation results"
+            );
 
             if cleaned_results.is_empty() {
                 // No successful preparations, reduce budget and continue
@@ -370,6 +481,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             }
 
             // Move prepared transactions to borrowed state with incremented nonces
+            let move_start = current_timestamp_ms();
             let moved_count = self
                 .store
                 .atomic_move_pending_to_borrowed_with_incremented_nonces(
@@ -380,13 +492,19 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 )
                 .await?;
 
-            tracing::debug!(
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(move_start, current_timestamp_ms()),
+                iteration = iteration,
                 moved_count = moved_count,
                 total_prepared = cleaned_results.len(),
-                "Moved transactions to borrowed state using incremented nonces"
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Moved transactions to borrowed state"
             );
 
             // Send the transactions to the blockchain
+            let send_start = current_timestamp_ms();
             let send_tasks: Vec<_> = cleaned_results
                 .iter()
                 .map(|borrowed_tx| {
@@ -401,6 +519,16 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .collect();
 
             let send_results = futures::future::join_all(send_tasks).await;
+
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(send_start, current_timestamp_ms()),
+                iteration = iteration,
+                transactions_sent = cleaned_results.len(),
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Sent transactions to blockchain"
+            );
 
             // Process send results and update states
             let submission_results = send_results
@@ -429,17 +557,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 .collect();
 
             // Use batch processing to handle all submission results
+            let process_start = current_timestamp_ms();
             let processing_report = self
                 .store
                 .process_borrowed_transactions(submission_results, self.webhook_queue.clone())
                 .await?;
 
-            tracing::debug!(
-                "Processed {} borrowed transactions: {} moved to submitted, {} moved to pending, {} failed",
-                processing_report.total_processed,
-                processing_report.moved_to_submitted,
-                processing_report.moved_to_pending,
-                processing_report.failed_transactions
+            tracing::info!(
+                duration_seconds = calculate_duration_seconds(process_start, current_timestamp_ms()),
+                iteration = iteration,
+                total_processed = processing_report.total_processed,
+                moved_to_submitted = processing_report.moved_to_submitted,
+                moved_to_pending = processing_report.moved_to_pending,
+                failed_transactions = processing_report.failed_transactions,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Processed submission results"
             );
 
             total_sent += processing_report.moved_to_submitted;
@@ -447,7 +581,28 @@ impl<C: Chain> EoaExecutorWorker<C> {
             // Update remaining budget by actual nonce consumption
             remaining_budget =
                 remaining_budget.saturating_sub(processing_report.moved_to_submitted as u64);
+
+            tracing::info!(
+                iteration_duration_seconds = calculate_duration_seconds(iteration_start, current_timestamp_ms()),
+                total_duration_seconds = calculate_duration_seconds(function_start, current_timestamp_ms()),
+                iteration = iteration,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                worker_id = %self.store.worker_id,
+                "JOB_LIFECYCLE - process_new_transactions: Completed iteration"
+            );
         }
+
+        tracing::info!(
+            total_sent = total_sent,
+            initial_budget = budget,
+            remaining_budget = remaining_budget,
+            total_duration_seconds = calculate_duration_seconds(function_start, current_timestamp_ms()),
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = %self.store.worker_id,
+            "JOB_LIFECYCLE - process_new_transactions: Completed processing new transactions"
+        );
 
         Ok(total_sent as u32)
     }

@@ -1,10 +1,17 @@
+use base64::Engine;
 use engine_core::{
     credentials::SigningCredential,
     error::{EngineError, SolanaRpcErrorToEngineError},
-    execution_options::{solana::{SolanaPriorityFee, SolanaTransactionOptions}, WebhookOptions},
+    execution_options::{
+        WebhookOptions,
+        solana::{SolanaPriorityFee, SolanaTransactionOptions},
+    },
     signer::SolanaSigner,
 };
-use engine_solana_core::{transaction::{InstructionDataEncoding, SolanaTransaction}, SolanaInstructionData};
+use engine_solana_core::{
+    SolanaInstructionData,
+    transaction::{InstructionDataEncoding, SolanaTransaction},
+};
 use serde::{Deserialize, Serialize};
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -12,12 +19,9 @@ use solana_client::{
 };
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_sdk::pubkey::Pubkey;
-use solana_transaction_status::{
-    EncodedTransactionWithStatusMeta, UiTransactionEncoding
-};
+use solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding};
 use spl_memo_interface::instruction::build_memo;
 use std::{sync::Arc, time::Duration};
-use base64::Engine;
 use tracing::{error, info, warn};
 use twmq::{
     DurableExecution, FailHookData, NackHookData, Queue, SuccessHookData, UserCancellable,
@@ -107,7 +111,9 @@ pub enum SolanaExecutorError {
     #[serde(rename_all = "camelCase")]
     PriorityFeeError { inner_error: EngineError },
 
-    #[error("Blockhash expired, retrying with new blockhash (resubmission {submission_attempt_number})")]
+    #[error(
+        "Blockhash expired, retrying with new blockhash (resubmission {submission_attempt_number})"
+    )]
     #[serde(rename_all = "camelCase")]
     BlockhashExpired { submission_attempt_number: u32 },
 
@@ -173,7 +179,7 @@ impl SolanaExecutorError {
     pub fn is_send_success(&self) -> bool {
         matches!(self, SolanaExecutorError::TransactionSent { .. })
     }
-    
+
     /// Get the signature if this error contains one
     pub fn signature(&self) -> Option<&str> {
         match self {
@@ -249,9 +255,14 @@ impl DurableExecution for SolanaExecutorJobHandler {
 
         info!(transaction_id = %transaction_id, "Acquired lock");
 
-        let rpc_client = self.rpc_cache.get_or_create(data.transaction.execution_options.chain_id).await;
+        let rpc_client = self
+            .rpc_cache
+            .get_or_create(data.transaction.execution_options.chain_id)
+            .await;
 
-        let result = self.execute_transaction(&rpc_client, data, &lock, job.job.attempts).await;
+        let result = self
+            .execute_transaction(&rpc_client, data, &lock, job.job.attempts)
+            .await;
 
         if let Err(e) = lock.release().await {
             warn!(transaction_id = %transaction_id, error = ?e, "Failed to release lock");
@@ -259,8 +270,6 @@ impl DurableExecution for SolanaExecutorJobHandler {
 
         result
     }
-
-
 
     async fn on_success(
         &self,
@@ -322,10 +331,13 @@ impl DurableExecution for SolanaExecutorJobHandler {
         tx: &mut TransactionContext<'_>,
     ) {
         let transaction_id = &job.job.data.transaction_id;
-        
+
         match nack_data.error {
             // Special case: TransactionSent is actually a success, send success webhook with stage="send"
-            SolanaExecutorError::TransactionSent { signature, submission_attempt_number } => {
+            SolanaExecutorError::TransactionSent {
+                signature,
+                submission_attempt_number,
+            } => {
                 info!(
                     transaction_id = %transaction_id,
                     signature = %signature,
@@ -339,12 +351,12 @@ impl DurableExecution for SolanaExecutorJobHandler {
                     signature: String,
                     submission_attempt_number: u32,
                 }
-                
+
                 let payload = TransactionSentPayload {
                     signature: signature.clone(),
                     submission_attempt_number: *submission_attempt_number,
                 };
-                
+
                 if let Err(e) = self.queue_webhook_with_custom_payload(
                     job,
                     payload,
@@ -359,10 +371,10 @@ impl DurableExecution for SolanaExecutorJobHandler {
                     );
                 }
             }
-            
+
             // Don't send webhook for NotYetConfirmed - silent retry
             SolanaExecutorError::NotYetConfirmed { .. } => {}
-            
+
             // For all other errors (network errors, RPC errors, etc.), send nack webhook
             _ => {
                 warn!(
@@ -384,7 +396,11 @@ impl DurableExecution for SolanaExecutorJobHandler {
 
 impl SolanaExecutorJobHandler {
     /// Helper to convert Solana RPC errors with context
-    fn to_engine_solana_error(&self, e: &solana_client::client_error::ClientError, chain_id: &str) -> EngineError {
+    fn to_engine_solana_error(
+        &self,
+        e: &solana_client::client_error::ClientError,
+        chain_id: &str,
+    ) -> EngineError {
         e.to_engine_solana_error(chain_id)
     }
 
@@ -406,21 +422,25 @@ impl SolanaExecutorJobHandler {
                     error = %e,
                     "Failed to get priority fees"
                 );
-                let engine_error = self.to_engine_solana_error(&e, chain_id,);
+                let engine_error = self.to_engine_solana_error(&e, chain_id);
                 SolanaExecutorError::PriorityFeeError {
                     inner_error: engine_error,
                 }
                 .nack(Some(NETWORK_ERROR_RETRY_DELAY), RequeuePosition::Last)
             })?;
-        
+
         fee_history.sort_by_key(|a| a.prioritization_fee);
-        let percentile_index = ((percentile as f64 / 100.0) * fee_history.len() as f64).round() as usize;
-        
+        let percentile_index =
+            ((percentile as f64 / 100.0) * fee_history.len() as f64).round() as usize;
+
         let result = if percentile_index < fee_history.len() {
             fee_history[percentile_index].prioritization_fee
         } else {
             // Fallback to max if index out of bounds
-            let fallback = fee_history.last().map(|f| f.prioritization_fee).unwrap_or(0);
+            let fallback = fee_history
+                .last()
+                .map(|f| f.prioritization_fee)
+                .unwrap_or(0);
             warn!(
                 chain_id = %chain_id,
                 percentile_index = percentile_index,
@@ -453,20 +473,15 @@ impl SolanaExecutorJobHandler {
         chain_id: &str,
     ) -> JobResult<u64, SolanaExecutorError> {
         let writable_accounts = Self::get_writable_accounts(instructions);
-        
+
         match priority_fee {
             SolanaPriorityFee::Auto => {
-                self.get_percentile_compute_unit_price(
-                    rpc_client,
-                    &writable_accounts,
-                    75,
-                    chain_id,
-                )
-                .await
+                self.get_percentile_compute_unit_price(rpc_client, &writable_accounts, 75, chain_id)
+                    .await
             }
-            SolanaPriorityFee::Manual { micro_lamports_per_unit } => {
-                Ok(*micro_lamports_per_unit)
-            }
+            SolanaPriorityFee::Manual {
+                micro_lamports_per_unit,
+            } => Ok(*micro_lamports_per_unit),
             SolanaPriorityFee::Percentile { percentile } => {
                 self.get_percentile_compute_unit_price(
                     rpc_client,
@@ -478,7 +493,6 @@ impl SolanaExecutorJobHandler {
             }
         }
     }
-
 
     /// Main execution flow:
     /// 1. Fetch last attempt from storage
@@ -497,8 +511,14 @@ impl SolanaExecutorJobHandler {
         let transaction_id = &job_data.transaction_id;
         let chain_id_str = &job_data.transaction.execution_options.chain_id;
         let signer_address = job_data.transaction.execution_options.signer_address;
-        let commitment_level = job_data.transaction.execution_options.commitment.to_commitment_level();
-        let commitment = CommitmentConfig { commitment: commitment_level };
+        let commitment_level = job_data
+            .transaction
+            .execution_options
+            .commitment
+            .to_commitment_level();
+        let commitment = CommitmentConfig {
+            commitment: commitment_level,
+        };
         let max_retries = job_data.transaction.execution_options.max_blockhash_retries;
 
         // Verify we still hold the lock
@@ -517,7 +537,10 @@ impl SolanaExecutorJobHandler {
             let submission_attempt_number = attempt.submission_attempt_number;
 
             // Step 3: Check if transaction is confirmed
-            match rpc_client.get_signature_status_with_commitment(&signature, commitment).await {
+            match rpc_client
+                .get_signature_status_with_commitment(&signature, commitment)
+                .await
+            {
                 Ok(Some(Ok(()))) => {
                     // Transaction confirmed! Fetch full transaction details
                     info!(
@@ -526,13 +549,16 @@ impl SolanaExecutorJobHandler {
                         submission_attempt_number = submission_attempt_number,
                         "Transaction confirmed, fetching details"
                     );
-                    
+
                     let transaction_details = rpc_client
-                        .get_transaction_with_config(&signature, RpcTransactionConfig {
-                            encoding: Some(UiTransactionEncoding::Json),
-                            commitment: Some(commitment),
-                            max_supported_transaction_version: Some(0),
-                        })
+                        .get_transaction_with_config(
+                            &signature,
+                            RpcTransactionConfig {
+                                encoding: Some(UiTransactionEncoding::Json),
+                                commitment: Some(commitment),
+                                max_supported_transaction_version: Some(0),
+                            },
+                        )
                         .await
                         .map_err(|e| {
                             error!(
@@ -541,7 +567,8 @@ impl SolanaExecutorJobHandler {
                                 error = %e,
                                 "Failed to fetch transaction details"
                             );
-                            let engine_error = self.to_engine_solana_error(&e, chain_id_str.as_str());
+                            let engine_error =
+                                self.to_engine_solana_error(&e, chain_id_str.as_str());
                             SolanaExecutorError::RpcError {
                                 inner_error: engine_error,
                             }
@@ -576,7 +603,8 @@ impl SolanaExecutorJobHandler {
                 }
                 Ok(None) => {
                     // Step 4: Not confirmed yet, check if blockhash is still valid
-                    let time_since_sent = crate::metrics::current_timestamp_ms().saturating_sub(attempt.sent_at);
+                    let time_since_sent =
+                        crate::metrics::current_timestamp_ms().saturating_sub(attempt.sent_at);
                     let min_wait_before_resubmit_ms = 30_000; // Wait at least 30 seconds before resubmitting
 
                     if time_since_sent < min_wait_before_resubmit_ms {
@@ -586,9 +614,17 @@ impl SolanaExecutorJobHandler {
                         }
                         .nack(Some(CONFIRMATION_RETRY_DELAY), RequeuePosition::Last));
                     }
-                    
+
                     // Check blockhash validity
-                    match rpc_client.is_blockhash_valid(&attempt.blockhash, CommitmentConfig { commitment: CommitmentLevel::Finalized }).await {
+                    match rpc_client
+                        .is_blockhash_valid(
+                            &attempt.blockhash,
+                            CommitmentConfig {
+                                commitment: CommitmentLevel::Finalized,
+                            },
+                        )
+                        .await
+                    {
                         Ok(true) => {
                             // Blockhash still valid, not confirmed yet - retry
                             return Err(SolanaExecutorError::NotYetConfirmed {
@@ -598,7 +634,7 @@ impl SolanaExecutorJobHandler {
                         }
                         Ok(false) => {
                             // Blockhash expired
-                            
+
                             // For serialized transactions with existing signatures, we cannot retry with a new blockhash
                             // because the signatures will become invalid. Check if there are any non-default signatures.
                             if let engine_solana_core::transaction::SolanaTransactionInput::Serialized (t) = &job_data.transaction.input {
@@ -628,7 +664,7 @@ impl SolanaExecutorJobHandler {
                                         // If no signatures, we can retry - will be signed during execution
                                     }
                             }
-                            
+
                             // For instruction-based transactions or serialized without signatures, we can retry with a new blockhash
                             warn!(
                                 transaction_id = %transaction_id,
@@ -675,7 +711,8 @@ impl SolanaExecutorJobHandler {
                                 error = %e,
                                 "RPC error checking blockhash"
                             );
-                            let engine_error = self.to_engine_solana_error(&e, chain_id_str.as_str());
+                            let engine_error =
+                                self.to_engine_solana_error(&e, chain_id_str.as_str());
                             return Err(SolanaExecutorError::RpcError {
                                 inner_error: engine_error,
                             }
@@ -700,7 +737,10 @@ impl SolanaExecutorJobHandler {
         }
 
         // Step 5: No attempt exists or blockhash expired - send new transaction
-        let submission_attempt_number = stored_attempt.as_ref().map(|a| a.submission_attempt_number + 1).unwrap_or(1);
+        let submission_attempt_number = stored_attempt
+            .as_ref()
+            .map(|a| a.submission_attempt_number + 1)
+            .unwrap_or(1);
 
         // Check job attempt limits
         if stored_attempt.is_none() && job_attempt_number > MAX_SEND_ATTEMPTS_WITHOUT_TRANSACTION {
@@ -709,11 +749,12 @@ impl SolanaExecutorJobHandler {
                 job_attempt_number = job_attempt_number,
                 "Max send attempts exceeded"
             );
-            return Err(SolanaExecutorError::MaxRetriesExceeded { 
-                max_retries: MAX_SEND_ATTEMPTS_WITHOUT_TRANSACTION 
-            }.fail());
+            return Err(SolanaExecutorError::MaxRetriesExceeded {
+                max_retries: MAX_SEND_ATTEMPTS_WITHOUT_TRANSACTION,
+            }
+            .fail());
         }
-        
+
         if submission_attempt_number > max_retries + 1 {
             error!(
                 transaction_id = %transaction_id,
@@ -750,26 +791,37 @@ impl SolanaExecutorJobHandler {
         let versioned_tx = match &job_data.transaction.input {
             engine_solana_core::transaction::SolanaTransactionInput::Instructions(i) => {
                 // For instruction-based transactions: calculate priority fees and apply execution options
-                let compute_unit_price = if let Some(priority_fee) = &job_data.transaction.execution_options.priority_fee {
-                    Some(self.get_compute_unit_price(priority_fee, &i.instructions, rpc_client, chain_id_str.as_str()).await?)
+                let compute_unit_price = if let Some(priority_fee) =
+                    &job_data.transaction.execution_options.priority_fee
+                {
+                    Some(
+                        self.get_compute_unit_price(
+                            priority_fee,
+                            &i.instructions,
+                            rpc_client,
+                            chain_id_str.as_str(),
+                        )
+                        .await?,
+                    )
                 } else {
                     None
                 };
-                
+
                 // Add memo instruction with transaction_id for unique signatures
                 // This ensures that even with the same blockhash, each resubmission has a unique signature
                 let memo_data = format!("thirdweb-engine:{}", transaction_id);
                 let memo_ix = build_memo(&spl_memo_interface::v3::id(), memo_data.as_bytes(), &[]);
-                
+
                 let mut instructions_with_memo = i.instructions.clone();
-                let memo_data_base64 = base64::engine::general_purpose::STANDARD.encode(memo_data.as_bytes());
+                let memo_data_base64 =
+                    base64::engine::general_purpose::STANDARD.encode(memo_data.as_bytes());
                 instructions_with_memo.push(SolanaInstructionData {
                     program_id: memo_ix.program_id,
                     accounts: vec![],
                     data: memo_data_base64,
                     encoding: InstructionDataEncoding::Base64,
                 });
-                
+
                 let solana_tx = SolanaTransaction {
                     input: engine_solana_core::transaction::SolanaTransactionInput::new_with_instructions(instructions_with_memo),
                     compute_unit_limit: job_data.transaction.execution_options.compute_unit_limit,
@@ -861,7 +913,10 @@ impl SolanaExecutorJobHandler {
             ..Default::default()
         };
 
-        match rpc_client.send_transaction_with_config(&signed_tx, config).await {
+        match rpc_client
+            .send_transaction_with_config(&signed_tx, config)
+            .await
+        {
             Ok(_) => {
                 info!(
                     transaction_id = %transaction_id,
@@ -930,7 +985,8 @@ impl SolanaExecutorJobHandler {
     ) -> JobError<SolanaExecutorError> {
         if error.to_string().contains("lock lost") {
             warn!(transaction_id = %transaction_id, "Lock lost during Redis operation");
-            SolanaExecutorError::LockLost.nack(Some(CONFIRMATION_RETRY_DELAY), RequeuePosition::Last)
+            SolanaExecutorError::LockLost
+                .nack(Some(CONFIRMATION_RETRY_DELAY), RequeuePosition::Last)
         } else {
             SolanaExecutorError::InternalError {
                 message: format!("Redis error: {error}"),
@@ -945,20 +1001,20 @@ impl SolanaExecutorJobHandler {
 /// Bad transactions (invalid signature, insufficient funds, etc.) should not be retried
 fn is_send_error_retryable(error: &EngineError) -> bool {
     use engine_core::error::{SolanaRpcErrorKind, SolanaRpcResponseErrorData};
-    
+
     match error {
-        EngineError::SolanaRpcError { kind,  .. } => match kind {
+        EngineError::SolanaRpcError { kind, .. } => match kind {
             // Network/IO errors are always retryable
             SolanaRpcErrorKind::Io { .. } => true,
             SolanaRpcErrorKind::Reqwest { .. } => true,
-            
+
             // RPC errors need more inspection
             SolanaRpcErrorKind::RpcError { data, message, .. } => {
                 // Check if it's a preflight failure
                 if let SolanaRpcResponseErrorData::SendTransactionPreflightFailure { .. } = data {
                     return false;
                 }
-                
+
                 // Check message for permanent errors
                 let msg_lower = message.to_lowercase();
                 if msg_lower.contains("invalid signature")
@@ -970,27 +1026,25 @@ fn is_send_error_retryable(error: &EngineError) -> bool {
                 {
                     return false;
                 }
-                
+
                 true
             }
-            
+
             // Transaction errors are permanent
             SolanaRpcErrorKind::TransactionError { .. } => false,
-            
+
             // Signing errors are permanent
             SolanaRpcErrorKind::SigningError { .. } => false,
-            
+
             // JSON/parse errors might be temporary
             SolanaRpcErrorKind::SerdeJson { .. } => true,
-            
+
             // Custom errors - check message
-            SolanaRpcErrorKind::Custom { message } => {
-                !message.to_lowercase().contains("invalid")
-            }
-            
+            SolanaRpcErrorKind::Custom { message } => !message.to_lowercase().contains("invalid"),
+
             // Unknown errors - be conservative and retry
             SolanaRpcErrorKind::Unknown { .. } => true,
-        }
+        },
         // Other engine errors - be conservative and retry
         _ => true,
     }

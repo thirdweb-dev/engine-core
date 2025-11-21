@@ -4,7 +4,7 @@
 
 mod fixtures;
 use fixtures::TestJobErrorData;
-use redis::{aio::ConnectionManager, AsyncCommands};
+use redis::{AsyncCommands, aio::ConnectionManager};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use std::{
@@ -17,7 +17,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use twmq::{
-    DurableExecution, Queue, NackHookData, SuccessHookData, IdempotencyMode,
+    DurableExecution, IdempotencyMode, NackHookData, Queue, SuccessHookData,
     hooks::TransactionContext,
     job::{BorrowedJob, JobError, JobResult, RequeuePosition},
     queue::QueueOptions,
@@ -64,7 +64,7 @@ impl DurableExecution for RandomJobHandler {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let should_nack = SHOULD_NACK.load(Ordering::SeqCst);
-        
+
         if should_nack {
             let nack_num = NACK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             tracing::debug!(
@@ -72,7 +72,7 @@ impl DurableExecution for RandomJobHandler {
                 nack_count = nack_num,
                 "Job nacking"
             );
-            
+
             Err(JobError::Nack {
                 error: TestJobErrorData {
                     reason: format!("Work remaining (nack #{})", nack_num),
@@ -87,7 +87,7 @@ impl DurableExecution for RandomJobHandler {
                 success_count = success_num,
                 "Job succeeding"
             );
-            
+
             Ok(RandomJobOutput {
                 message: format!("Success #{}", success_num),
                 success_number: success_num,
@@ -152,11 +152,11 @@ async fn test_prune_with_random_ids() {
         .try_init();
 
     let queue_name = format!("test_random_ids_{}", nanoid::nanoid!(6));
-    
+
     // Aggressive pruning settings - only keep 1 successful job
     let queue_options = QueueOptions {
         local_concurrency: 2,
-        max_success: 1,  // Aggressive pruning
+        max_success: 1, // Aggressive pruning
         max_failed: 10,
         lease_duration: Duration::from_secs(3),
         idempotency_mode: IdempotencyMode::Active,
@@ -167,24 +167,19 @@ async fn test_prune_with_random_ids() {
     tracing::info!("Queue: {}", queue_name);
     tracing::info!("Max success jobs: {}", queue_options.max_success);
     tracing::info!("Testing pruning behavior with unique random job IDs");
-    
+
     // Reset test state
-    SHOULD_NACK.store(false, Ordering::SeqCst);  // Start with successes
+    SHOULD_NACK.store(false, Ordering::SeqCst); // Start with successes
     SUCCESS_COUNT.store(0, Ordering::SeqCst);
     NACK_COUNT.store(0, Ordering::SeqCst);
 
     let handler = RandomJobHandler;
-    
+
     // Create queue
     let queue = Arc::new(
-        Queue::new(
-            REDIS_URL,
-            &queue_name,
-            Some(queue_options),
-            handler,
-        )
-        .await
-        .expect("Failed to create queue"),
+        Queue::new(REDIS_URL, &queue_name, Some(queue_options), handler)
+            .await
+            .expect("Failed to create queue"),
     );
 
     cleanup_redis_keys(&queue.redis, &queue_name).await;
@@ -192,13 +187,13 @@ async fn test_prune_with_random_ids() {
     // Start two workers
     let worker1 = queue.work();
     let worker2 = queue.work();
-    
+
     tracing::info!("Two workers started!");
 
     // Push jobs with random IDs and let them succeed
     for i in 0..100 {
-        let random_job_id = nanoid::nanoid!(16);  // Random unique ID
-        
+        let random_job_id = nanoid::nanoid!(16); // Random unique ID
+
         let job_payload = RandomJobPayload {
             eoa: format!("0x{}", nanoid::nanoid!(8)),
             chain_id: 137,
@@ -212,15 +207,15 @@ async fn test_prune_with_random_ids() {
             .push()
             .await
             .expect("Failed to push job");
-        
+
         if i % 10 == 0 {
             tracing::info!("Pushed {} jobs", i + 1);
         }
-        
+
         // Small delay between pushes
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    
+
     // Wait for jobs to complete
     tracing::info!("Waiting for jobs to complete...");
     for _ in 0..100 {
@@ -230,19 +225,19 @@ async fn test_prune_with_random_ids() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    
+
     let final_success = SUCCESS_COUNT.load(Ordering::SeqCst);
-    
+
     // Check Redis directly to see if pruning occurred
     let mut conn = queue.redis.clone();
     let success_list_len: usize = conn.llen(queue.success_list_name()).await.unwrap();
     let pending_list_len: usize = conn.llen(queue.pending_list_name()).await.unwrap();
     let delayed_zset_len: usize = conn.zcard(queue.delayed_zset_name()).await.unwrap();
     let active_hash_len: usize = conn.hlen(queue.active_hash_name()).await.unwrap();
-    
+
     // Get actual job IDs in success list
     let success_job_ids: Vec<String> = conn.lrange(queue.success_list_name(), 0, -1).await.unwrap();
-    
+
     // Count how many job metadata hashes still exist (should match success list length if pruning works)
     let meta_pattern = format!("twmq:{}:job:*:meta", queue.name());
     let meta_keys: Vec<String> = redis::cmd("KEYS")
@@ -251,12 +246,15 @@ async fn test_prune_with_random_ids() {
         .await
         .unwrap_or_default();
     let metadata_count = meta_keys.len();
-    
+
     // Count job data entries
     let job_data_count: usize = conn.hlen(queue.job_data_hash_name()).await.unwrap();
-    
+
     // Get what's in pending/delayed/active to understand why pruning might be blocked
-    let pending_jobs: Vec<String> = conn.lrange(queue.pending_list_name(), 0, -1).await.unwrap_or_default();
+    let pending_jobs: Vec<String> = conn
+        .lrange(queue.pending_list_name(), 0, -1)
+        .await
+        .unwrap_or_default();
     let delayed_jobs: Vec<String> = redis::cmd("ZRANGE")
         .arg(queue.delayed_zset_name())
         .arg(0)
@@ -264,18 +262,45 @@ async fn test_prune_with_random_ids() {
         .query_async(&mut conn)
         .await
         .unwrap_or_default();
-    let active_jobs: Vec<String> = conn.hkeys(queue.active_hash_name()).await.unwrap_or_default();
-    
+    let active_jobs: Vec<String> = conn
+        .hkeys(queue.active_hash_name())
+        .await
+        .unwrap_or_default();
+
     // Get debug info from Lua script
-    let debug_candidates: String = conn.get("debug:candidates_count").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_active_count: String = conn.get("debug:active_count").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_delayed_count: String = conn.get("debug:delayed_count").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_blocked_job: String = conn.get("debug:last_blocked_job_id").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_hexists: String = conn.get("debug:last_hexists_result").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_zscore: String = conn.get("debug:last_zscore_result").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_is_active: String = conn.get("debug:last_is_active").await.unwrap_or_else(|_| "N/A".to_string());
-    let debug_is_delayed: String = conn.get("debug:last_is_delayed").await.unwrap_or_else(|_| "N/A".to_string());
-    
+    let debug_candidates: String = conn
+        .get("debug:candidates_count")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_active_count: String = conn
+        .get("debug:active_count")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_delayed_count: String = conn
+        .get("debug:delayed_count")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_blocked_job: String = conn
+        .get("debug:last_blocked_job_id")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_hexists: String = conn
+        .get("debug:last_hexists_result")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_zscore: String = conn
+        .get("debug:last_zscore_result")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_is_active: String = conn
+        .get("debug:last_is_active")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+    let debug_is_delayed: String = conn
+        .get("debug:last_is_delayed")
+        .await
+        .unwrap_or_else(|_| "N/A".to_string());
+
     tracing::info!("=== RESULTS ===");
     tracing::info!("Total successes: {}", final_success);
     tracing::info!("Total nacks: {}", NACK_COUNT.load(Ordering::SeqCst));
@@ -305,25 +330,34 @@ async fn test_prune_with_random_ids() {
     tracing::info!("  is_delayed (ZSCORE~=nil): {}", debug_is_delayed);
     tracing::info!("");
     tracing::info!("Max success setting: {}", queue.options.max_success);
-    
+
     if success_list_len <= queue.options.max_success {
         tracing::info!("✅ List pruning is working - success list is within max_success limit");
     } else {
-        tracing::warn!("⚠️  Success list ({}) exceeds max_success ({})", 
-            success_list_len, queue.options.max_success);
+        tracing::warn!(
+            "⚠️  Success list ({}) exceeds max_success ({})",
+            success_list_len,
+            queue.options.max_success
+        );
         tracing::warn!("   This might indicate list pruning is not working correctly");
     }
-    
+
     if metadata_count == success_list_len {
         tracing::info!("✅ Metadata cleanup is working - metadata count matches list length");
     } else {
         tracing::warn!("⚠️  Metadata leak detected!");
-        tracing::warn!("   Job metadata hashes: {}, Success list length: {}", metadata_count, success_list_len);
-        tracing::warn!("   {} job metadata entries were not cleaned up", metadata_count.saturating_sub(success_list_len));
+        tracing::warn!(
+            "   Job metadata hashes: {}, Success list length: {}",
+            metadata_count,
+            success_list_len
+        );
+        tracing::warn!(
+            "   {} job metadata entries were not cleaned up",
+            metadata_count.saturating_sub(success_list_len)
+        );
     }
 
     worker1.shutdown().await.unwrap();
     worker2.shutdown().await.unwrap();
     cleanup_redis_keys(&queue.redis, &queue_name).await;
 }
-

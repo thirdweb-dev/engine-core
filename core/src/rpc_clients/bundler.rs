@@ -177,8 +177,11 @@ impl BundlerClient {
         Ok(response)
     }
 
-    pub async fn tw_get_delegation_contract(&self) -> TransportResult<TwGetDelegationContractResponse> {
-        let response: TwGetDelegationContractResponse = self.inner.request("tw_getDelegationContract", ()).await?;
+    pub async fn tw_get_delegation_contract(
+        &self,
+    ) -> TransportResult<TwGetDelegationContractResponse> {
+        let response: TwGetDelegationContractResponse =
+            self.inner.request("tw_getDelegationContract", ()).await?;
         Ok(response)
     }
 }

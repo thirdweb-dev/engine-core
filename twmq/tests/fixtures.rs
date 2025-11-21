@@ -57,7 +57,10 @@ impl DurableExecution for TestJobHandler {
 
     // If not using async_trait, the signature is:
     // fn process(&self) -> impl std::future::Future<Output = JobResult<Self::Output, Self::ErrorData>> + Send + Sync {
-    async fn process(&self, job: &BorrowedJob<Self::JobData>) -> JobResult<Self::Output, Self::ErrorData> {
+    async fn process(
+        &self,
+        job: &BorrowedJob<Self::JobData>,
+    ) -> JobResult<Self::Output, Self::ErrorData> {
         println!(
             "TEST_JOB: Processing job with id_to_check: {}",
             job.job.data.id_to_check

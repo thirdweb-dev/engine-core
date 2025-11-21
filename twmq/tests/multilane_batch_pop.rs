@@ -327,9 +327,7 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
         .await
         .expect("First batch pop should complete within 10 seconds");
     let duration1 = start.elapsed();
-    println!(
-        "[200 jobs - 200/100k lanes] ✅ First batch pop completed in {duration1:?}"
-    );
+    println!("[200 jobs - 200/100k lanes] ✅ First batch pop completed in {duration1:?}");
 
     let new_lanes_count = harness.queue.lanes_count().await.unwrap();
     println!(
@@ -355,9 +353,7 @@ async fn multilane_test_batch_pop_distributed_jobs_across_100k_lanes() {
         .await
         .expect("Second batch pop should complete within 10 seconds");
     let duration2 = start.elapsed();
-    println!(
-        "[200 jobs - 200/100k lanes] ✅ Second batch pop completed in {duration2:?}"
-    );
+    println!("[200 jobs - 200/100k lanes] ✅ Second batch pop completed in {duration2:?}");
 
     let total_jobs_2: usize = result2.values().map(|jobs| jobs.len()).sum();
     assert_eq!(total_jobs_2, 100, "Second batch should return 100 jobs");

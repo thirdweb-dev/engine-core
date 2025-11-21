@@ -15,7 +15,10 @@ use twmq::{
 };
 
 use crate::{
-    metrics::{record_transaction_queued_to_confirmed, current_timestamp_ms, calculate_duration_seconds_from_twmq},
+    metrics::{
+        calculate_duration_seconds_from_twmq, current_timestamp_ms,
+        record_transaction_queued_to_confirmed,
+    },
     transaction_registry::TransactionRegistry,
     webhook::{
         WebhookJobHandler,
@@ -215,12 +218,17 @@ where
             "User operation confirmed on-chain"
         );
 
-                    // 4. Record metrics if original timestamp is available
-            if let Some(original_timestamp) = job_data.original_queued_timestamp {
-                let confirmed_timestamp = current_timestamp_ms();
-                let queued_to_confirmed_duration = calculate_duration_seconds_from_twmq(original_timestamp, confirmed_timestamp);
-                record_transaction_queued_to_confirmed("erc4337-external", job_data.chain_id, queued_to_confirmed_duration);
-            }
+        // 4. Record metrics if original timestamp is available
+        if let Some(original_timestamp) = job_data.original_queued_timestamp {
+            let confirmed_timestamp = current_timestamp_ms();
+            let queued_to_confirmed_duration =
+                calculate_duration_seconds_from_twmq(original_timestamp, confirmed_timestamp);
+            record_transaction_queued_to_confirmed(
+                "erc4337-external",
+                job_data.chain_id,
+                queued_to_confirmed_duration,
+            );
+        }
 
         // 5. Success! Lock cleanup will happen atomically in on_success hook
         Ok(UserOpConfirmationResult {
@@ -274,7 +282,7 @@ where
         tx: &mut TransactionContext<'_>,
     ) {
         // NEVER release lock on NACK - job will be retried with the same lock
-        
+
         // Only queue webhook for actual errors, not for "waiting for receipt" states
         let should_queue_webhook = !matches!(
             nack_data.error,

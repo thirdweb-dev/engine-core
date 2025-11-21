@@ -1,19 +1,21 @@
-use twmq::redis::{AsyncCommands, aio::ConnectionManager, Pipeline};
 use engine_core::error::EngineError;
 use thiserror::Error;
+use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 #[derive(Debug, Error)]
 pub enum TransactionRegistryError {
     #[error("Redis error: {0}")]
     RedisError(#[from] twmq::redis::RedisError),
-    
+
     #[error("Transaction not found: {transaction_id}")]
     TransactionNotFound { transaction_id: String },
 }
 
 impl From<TransactionRegistryError> for EngineError {
     fn from(err: TransactionRegistryError) -> Self {
-        EngineError::InternalError { message: err.to_string() }
+        EngineError::InternalError {
+            message: err.to_string(),
+        }
     }
 }
 
@@ -34,7 +36,10 @@ impl TransactionRegistry {
         }
     }
 
-    pub async fn get_transaction_queue(&self, transaction_id: &str) -> Result<Option<String>, TransactionRegistryError> {
+    pub async fn get_transaction_queue(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<String>, TransactionRegistryError> {
         let mut conn = self.redis.clone();
         let queue_name: Option<String> = conn.hget(self.registry_key(), transaction_id).await?;
         Ok(queue_name)
@@ -46,11 +51,16 @@ impl TransactionRegistry {
         queue_name: &str,
     ) -> Result<(), TransactionRegistryError> {
         let mut conn = self.redis.clone();
-        let _: () = conn.hset(self.registry_key(), transaction_id, queue_name).await?;
+        let _: () = conn
+            .hset(self.registry_key(), transaction_id, queue_name)
+            .await?;
         Ok(())
     }
 
-    pub async fn remove_transaction(&self, transaction_id: &str) -> Result<(), TransactionRegistryError> {
+    pub async fn remove_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<(), TransactionRegistryError> {
         let mut conn = self.redis.clone();
         let _: u32 = conn.hdel(self.registry_key(), transaction_id).await?;
         Ok(())

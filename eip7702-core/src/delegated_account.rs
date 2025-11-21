@@ -28,7 +28,10 @@ impl<C: Chain> DelegatedAccount<C> {
     }
 
     /// Check if the EOA has EIP-7702 delegation to the minimal account implementation
-    pub async fn is_minimal_account(&self, delegation_contract: Option<Address>) -> Result<bool, EngineError> {
+    pub async fn is_minimal_account(
+        &self,
+        delegation_contract: Option<Address>,
+    ) -> Result<bool, EngineError> {
         // Get the bytecode at the EOA address using eth_getCode
         let code = self
             .chain
@@ -65,12 +68,8 @@ impl<C: Chain> DelegatedAccount<C> {
 
         // Compare with the minimal account implementation address
         let is_delegated = match delegation_contract {
-            Some(delegation_contract) => {
-                target_address == delegation_contract
-            }
-            None => {
-                true
-            }
+            Some(delegation_contract) => target_address == delegation_contract,
+            None => true,
         };
 
         tracing::debug!(
