@@ -617,6 +617,7 @@ impl AtomicEoaExecutorStore {
             transaction_id = %pending_transaction.transaction_id,
             eoa = ?self.eoa(),
             chain_id = self.chain_id(),
+            worker_id = %self.worker_id(),
             error = %error,
             "JOB_LIFECYCLE - Deleted failed pending transaction from EOA"
         );
