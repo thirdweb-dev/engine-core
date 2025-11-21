@@ -230,7 +230,7 @@ where
             job_duration_seconds = job_duration,
             work_remaining = result.is_work_remaining(),
             result = ?result,
-            "EOA executor job completed"
+            "JOB_LIFECYCLE - EOA executor job completed"
         );
 
         let delay = if is_minimal_account {
@@ -305,6 +305,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         &self,
     ) -> JobResult<EoaExecutorWorkerResult, EoaExecutorWorkerError> {
         // 1. CRASH RECOVERY
+        let start_time = current_timestamp_ms();
         let recovered = self
             .recover_borrowed_state()
             .await
@@ -312,8 +313,18 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!(error = ?e, "Error in recover_borrowed_state");
             })
             .map_err(|e| e.handle())?;
+        let duration = calculate_duration_seconds(start_time, current_timestamp_ms());
+        tracing::info!(
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = self.store.worker_id(),
+            duration_seconds = duration,
+            recovered_count = recovered,
+            "JOB_LIFECYCLE - Crash recovery completed"
+        );
 
         // 2. CONFIRM FLOW
+        let start_time = current_timestamp_ms();
         let confirmations_report = self
             .confirm_flow()
             .await
@@ -321,8 +332,19 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!(error = ?e, "Error in confirm flow");
             })
             .map_err(|e| e.handle())?;
+        let duration = calculate_duration_seconds(start_time, current_timestamp_ms());
+        tracing::info!(
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = self.store.worker_id(),
+            duration_seconds = duration,
+            confirmed = confirmations_report.moved_to_success,
+            failed = confirmations_report.moved_to_pending,
+            "JOB_LIFECYCLE - Confirm flow completed"
+        );
 
         // 3. SEND FLOW
+        let start_time = current_timestamp_ms();
         let sent = self
             .send_flow()
             .await
@@ -330,6 +352,15 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 tracing::error!(error = ?e, "Error in send_flow");
             })
             .map_err(|e| e.handle())?;
+        let duration = calculate_duration_seconds(start_time, current_timestamp_ms());
+        tracing::info!(
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            worker_id = self.store.worker_id(),
+            duration_seconds = duration,
+            sent_count = sent,
+            "JOB_LIFECYCLE - Send flow completed"
+        );
 
         // 4. CHECK FOR REMAINING WORK
         let counts = self
@@ -351,6 +382,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
             currently_pending = counts.pending_transactions,
             currently_borrowed = counts.borrowed_transactions,
             currently_recycled = counts.recycled_nonces,
+            "JOB_LIFECYCLE - Check for remaining work completed"
         );
 
         Ok(EoaExecutorWorkerResult {
