@@ -10,7 +10,7 @@ if (!process.env.REDIS_URL) {
 const CONFIG = {
   redisUrl: process.env.REDIS_URL,
   chainId: 8453,
-  walletAddress: "0x80c08de1a05Df2bD633CF520754e40fdE3C794d3",
+  walletAddress: "0xAACa1Ba9d2627cbc0739BA69890c30F95de046E4",
   fetchBatchSize: 1000, // batch size for fetching pending txs from sorted set
   deleteBatchSize: 100, // batch size for deletions
   dryRun: true, // Set to false to actually delete

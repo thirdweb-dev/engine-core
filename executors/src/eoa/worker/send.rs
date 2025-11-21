@@ -251,10 +251,6 @@ impl<C: Chain> EoaExecutorWorker<C> {
                 (_, Err(e)) => {
                     // Track balance threshold issues
 
-                    if should_break_on_failure {
-                        failure_occurred = true;
-                    }
-
                     if let EoaExecutorWorkerError::TransactionSimulationFailed {
                         inner_error, ..
                     } = &e
@@ -291,6 +287,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
                             );
                             // Don't propagate the error, continue processing
                         }
+                    } else if should_break_on_failure {
+                        failure_occurred = true;
                     }
                 }
                 (true, Ok(_)) => continue,
