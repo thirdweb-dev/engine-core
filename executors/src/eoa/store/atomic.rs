@@ -625,6 +625,84 @@ impl AtomicEoaExecutorStore {
         Ok(())
     }
 
+    /// Fail multiple transactions that are in the pending state in a single batch operation
+    /// This is more efficient than calling fail_pending_transaction multiple times
+    /// when there are many failures at once
+    pub async fn fail_pending_transactions_batch(
+        &self,
+        failures: Vec<(&PendingTransaction, EoaExecutorWorkerError)>,
+        webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
+    ) -> Result<(), TransactionStoreError> {
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        let mut pipeline = twmq::redis::pipe();
+        pipeline.atomic();
+
+        let pending_key = self.pending_transactions_zset_name();
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+        // Remove all transaction IDs from pending state in a single ZREM operation
+        let transaction_ids: Vec<&str> = failures
+            .iter()
+            .map(|(p, _)| p.transaction_id.as_str())
+            .collect();
+        pipeline.zrem(&pending_key, &transaction_ids);
+
+        // Update transaction data with failure for each transaction
+        for (pending_transaction, error) in &failures {
+            let tx_data_key = self.transaction_data_key_name(&pending_transaction.transaction_id);
+
+            pipeline.hset(&tx_data_key, "completed_at", now);
+            pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
+            pipeline.hset(&tx_data_key, "status", "failed");
+        }
+
+        // Queue webhooks for all failures
+        let mut tx_context = webhook_queue.transaction_context_from_pipeline(&mut pipeline);
+        for (pending_transaction, error) in &failures {
+            let event = EoaExecutorEvent {
+                transaction_id: pending_transaction.transaction_id.clone(),
+                address: pending_transaction.user_request.from,
+            };
+
+            let fail_envelope = event.transaction_failed_envelope(error.clone(), 1);
+
+            if !pending_transaction.user_request.webhook_options.is_empty() {
+                if let Err(e) = queue_webhook_envelopes(
+                    fail_envelope,
+                    pending_transaction.user_request.webhook_options.clone(),
+                    &mut tx_context,
+                    webhook_queue.clone(),
+                ) {
+                    tracing::error!(
+                        transaction_id = %pending_transaction.transaction_id,
+                        error = ?e,
+                        "Failed to queue webhook for batch fail"
+                    );
+                }
+            }
+        }
+
+        // Execute the pipeline once
+        let mut conn = self.redis.clone();
+        pipeline
+            .query_async::<Vec<twmq::redis::Value>>(&mut conn)
+            .await?;
+
+        tracing::info!(
+            count = failures.len(),
+            eoa = ?self.eoa(),
+            chain_id = self.chain_id(),
+            worker_id = %self.worker_id(),
+            "JOB_LIFECYCLE - Batch deleted {} failed pending transactions from EOA",
+            failures.len()
+        );
+
+        Ok(())
+    }
+
     pub async fn clean_submitted_transactions(
         &self,
         confirmed_transactions: &[ConfirmedTransaction],
