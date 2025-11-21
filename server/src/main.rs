@@ -1,7 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
-use engine_core::{signer::{EoaSigner, SolanaSigner}, userop::UserOpSigner, credentials::KmsClientCache};
-use engine_executors::{eoa::authorization_cache::EoaAuthorizationCache, metrics::{ExecutorMetrics, initialize_metrics}, solana_executor::rpc_cache::{SolanaRpcCache, SolanaRpcUrls}};
+use engine_core::{
+    credentials::KmsClientCache,
+    signer::{EoaSigner, SolanaSigner},
+    userop::UserOpSigner,
+};
+use engine_executors::{
+    eoa::authorization_cache::EoaAuthorizationCache,
+    metrics::{ExecutorMetrics, initialize_metrics},
+    solana_executor::rpc_cache::{SolanaRpcCache, SolanaRpcUrls},
+};
 use thirdweb_core::{abi::ThirdwebAbiServiceBuilder, auth::ThirdwebAuth, iaw::IAWClient};
 use thirdweb_engine::{
     chains::ThirdwebChainService,
@@ -93,7 +101,10 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    tracing::info!("Queue manager initialized");
+    tracing::info!(
+        "Queue manager initialized with queue config: {:?}",
+        config.queue
+    );
 
     // Start queue workers
     tracing::info!("Starting queue workers...");
@@ -123,12 +134,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize metrics registry and executor metrics
     let metrics_registry = Arc::new(prometheus::Registry::new());
-    let executor_metrics = ExecutorMetrics::new(&metrics_registry)
-        .expect("Failed to create executor metrics");
-    
+    let executor_metrics =
+        ExecutorMetrics::new(&metrics_registry).expect("Failed to create executor metrics");
+
     // Initialize the executor metrics globally
     initialize_metrics(executor_metrics);
-    
+
     tracing::info!("Executor metrics initialized");
 
     let mut server = EngineServer::new(EngineServerState {
