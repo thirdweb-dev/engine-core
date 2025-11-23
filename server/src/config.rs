@@ -50,6 +50,9 @@ pub struct QueueConfig {
 
     #[serde(default)]
     pub monitoring: MonitoringConfig,
+
+    #[serde(default = "default_completed_transaction_ttl_seconds")]
+    pub completed_transaction_ttl_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,6 +71,10 @@ impl Default for MonitoringConfig {
             eoa_stuck_threshold_seconds: 600,           // 10 minutes
         }
     }
+}
+
+fn default_completed_transaction_ttl_seconds() -> u64 {
+    86400 // 1 day in seconds
 }
 
 #[derive(Debug, Clone, Deserialize)]

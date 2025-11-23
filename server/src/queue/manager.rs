@@ -261,6 +261,7 @@ impl QueueManager {
             max_recycled_nonces: 50,
             eoa_metrics,
             kms_client_cache,
+            completed_transaction_ttl_seconds: queue_config.completed_transaction_ttl_seconds,
         };
 
         let eoa_executor_queue = Queue::builder()

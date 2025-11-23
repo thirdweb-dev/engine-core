@@ -12,9 +12,9 @@ if (!process.env.REDIS_URL) {
 const CONFIG = {
   redisUrl: process.env.REDIS_URL,
   namespace: "engine-cloud" as string | undefined, // Set to your namespace if needed
-  batchSize: 2000,
-  dryRun: false, // Set to false when ready to actually delete
-  progressInterval: 2000, // Report progress every N transactions
+  batchSize: 10000,
+  dryRun: true, // Set to false when ready to actually delete
+  progressInterval: 10000, // Report progress every N transactions
 } as const;
 
 // === TYPES ===
@@ -219,12 +219,12 @@ class EoaRedisCleanup {
       return false;
     }
 
-    // CRITICAL SAFETY CHECK: Only clean transactions that are reasonably old (1 minute minimum)
+    // CRITICAL SAFETY CHECK: Only clean transactions that are reasonably old (1 month minimum)
     // This prevents cleaning transactions that just completed
-    const oneMinuteAgo = Date.now() - 60 * 1000;
-    if (completedMs > oneMinuteAgo) {
+    const oneMonthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    if (completedMs > oneMonthAgo) {
       this.log(
-        `🛡️  SAFETY: Skipping tx ${tx.id} - completed too recently (less than 1 minute ago)`
+        `🛡️  SAFETY: Skipping tx ${tx.id} - completed too recently (less than 1 month ago)`
       );
       return false;
     }
@@ -302,11 +302,11 @@ class EoaRedisCleanup {
         if (tx.status === "failed") this.stats.failed++;
 
         const keysToDelete = this.buildKeysToDelete(tx.id);
-        this.log(
-          `🔍 [DRY RUN] Would clean: ${tx.id} (${tx.status}) - ${keysToDelete.length} keys`
-        );
         this.stats.cleaned++;
       }
+      this.log(
+        `🔍 [DRY RUN] Would clean: ${transactions.length} transactions (${this.stats.confirmed} confirmed, ${this.stats.failed} failed)`
+      );
       return;
     }
 

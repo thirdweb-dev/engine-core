@@ -126,6 +126,9 @@ where
 
     // KMS client cache for AWS KMS credentials
     pub kms_client_cache: KmsClientCache,
+
+    // TTL for completed transactions
+    pub completed_transaction_ttl_seconds: u64,
 }
 
 impl<CS> DurableExecution for EoaExecutorJobHandler<CS>
@@ -161,6 +164,7 @@ where
             self.namespace.clone(),
             data.eoa_address,
             data.chain_id,
+            self.completed_transaction_ttl_seconds,
         )
         .acquire_eoa_lock_aggressively(&worker_id, self.eoa_metrics.clone())
         .await

@@ -453,6 +453,9 @@ impl ExecutionRouter {
             self.namespace.clone(),
             eoa_execution_options.from,
             base_execution_options.chain_id,
+            self.eoa_executor_queue
+                .handler
+                .completed_transaction_ttl_seconds,
         );
 
         // Add transaction to the store
