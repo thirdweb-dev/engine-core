@@ -10,7 +10,7 @@ if (!process.env.REDIS_URL) {
 const CONFIG = {
   redisUrl: process.env.REDIS_URL,
   batchSize: 5000,
-  dryRun: false, // Set to false to actually delete
+  dryRun: true, // Set to false to actually delete
 } as const;
 
 class SimpleRedisCleanup {

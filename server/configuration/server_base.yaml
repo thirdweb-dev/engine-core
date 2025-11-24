@@ -40,3 +40,4 @@ queue:
     eoa_send_degradation_threshold_seconds: 30
     eoa_confirmation_degradation_threshold_seconds: 60
     eoa_stuck_threshold_seconds: 300
+  completed_transaction_ttl_seconds: 86400  # 1 day

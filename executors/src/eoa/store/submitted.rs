@@ -200,6 +200,7 @@ pub struct CleanSubmittedTransactions<'a> {
     pub keys: &'a EoaExecutorStoreKeys,
     pub webhook_queue: Arc<twmq::Queue<WebhookJobHandler>>,
     pub eoa_metrics: &'a EoaMetrics,
+    pub completed_transaction_ttl_seconds: u64,
 }
 
 impl<'a> CleanSubmittedTransactions<'a> {
@@ -359,6 +360,11 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                             "receipt",
                             confirmed_tx.receipt_serialized.clone(),
                         );
+
+                        // Add TTL expiration
+                        let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
+                        pipeline.expire(&data_key_name, ttl_seconds);
+                        pipeline.expire(&self.keys.transaction_attempts_list_name(id), ttl_seconds);
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions

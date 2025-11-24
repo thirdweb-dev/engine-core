@@ -100,6 +100,7 @@ pub struct TransactionData {
 pub struct EoaExecutorStore {
     pub redis: ConnectionManager,
     pub keys: EoaExecutorStoreKeys,
+    pub completed_transaction_ttl_seconds: u64,
 }
 
 pub struct EoaExecutorStoreKeys {
@@ -298,6 +299,7 @@ impl EoaExecutorStore {
         namespace: Option<String>,
         eoa: Address,
         chain_id: u64,
+        completed_transaction_ttl_seconds: u64,
     ) -> Self {
         Self {
             redis,
@@ -306,6 +308,7 @@ impl EoaExecutorStore {
                 chain_id,
                 namespace,
             },
+            completed_transaction_ttl_seconds,
         }
     }
 }

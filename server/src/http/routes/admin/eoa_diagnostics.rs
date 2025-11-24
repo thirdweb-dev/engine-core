@@ -123,7 +123,12 @@ pub async fn get_eoa_state(
         .handler
         .namespace
         .clone();
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let ttl = state
+        .queue_manager
+        .eoa_executor_queue
+        .handler
+        .completed_transaction_ttl_seconds;
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
 
     // Get all the state information using store methods
     let cached_nonce = store.get_cached_transaction_count().await.ok();
@@ -207,7 +212,8 @@ pub async fn get_transaction_detail(
 
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let ttl = eoa_queue.handler.completed_transaction_ttl_seconds;
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
 
     // Get transaction data using store method
     let transaction_data = store
@@ -260,8 +266,9 @@ pub async fn get_pending_transactions(
 
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
+    let ttl = eoa_queue.handler.completed_transaction_ttl_seconds;
 
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
     let offset = pagination.offset.unwrap_or(0);
     let limit = pagination.limit.unwrap_or(1000).min(1000); // Cap at 100
 
@@ -323,8 +330,9 @@ pub async fn get_submitted_transactions(
 
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
+    let ttl = eoa_queue.handler.completed_transaction_ttl_seconds;
 
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
 
     // Use store method to get submitted transactions
     let submitted_txs = store.get_all_submitted_transactions().await.map_err(|e| {
@@ -368,8 +376,9 @@ pub async fn get_borrowed_transactions(
 
     // Get namespace from the config
     let namespace = eoa_queue.handler.namespace.clone();
+    let ttl = eoa_queue.handler.completed_transaction_ttl_seconds;
 
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
 
     // Use store method to get borrowed transactions
     let borrowed_txs = store.peek_borrowed_transactions().await.map_err(|e| {
@@ -410,8 +419,9 @@ pub async fn schedule_manual_reset(
     let redis_conn = eoa_queue.handler.redis.clone();
 
     let namespace = eoa_queue.handler.namespace.clone();
+    let ttl = eoa_queue.handler.completed_transaction_ttl_seconds;
 
-    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id);
+    let store = EoaExecutorStore::new(redis_conn, namespace, eoa_address, chain_id, ttl);
 
     store.schedule_manual_reset().await.map_err(|e| {
         ApiEngineError(engine_core::error::EngineError::InternalError {

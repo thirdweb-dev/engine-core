@@ -589,6 +589,14 @@ impl AtomicEoaExecutorStore {
         pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
         pipeline.hset(&tx_data_key, "status", "failed");
 
+        // Add TTL expiration
+        let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
+        pipeline.expire(&tx_data_key, ttl_seconds);
+        pipeline.expire(
+            &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+            ttl_seconds,
+        );
+
         let event = EoaExecutorEvent {
             transaction_id: pending_transaction.transaction_id.clone(),
             address: pending_transaction.user_request.from,
@@ -657,6 +665,14 @@ impl AtomicEoaExecutorStore {
             pipeline.hset(&tx_data_key, "completed_at", now);
             pipeline.hset(&tx_data_key, "failure_reason", error.to_string());
             pipeline.hset(&tx_data_key, "status", "failed");
+
+            // Add TTL expiration
+            let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
+            pipeline.expire(&tx_data_key, ttl_seconds);
+            pipeline.expire(
+                &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+                ttl_seconds,
+            );
         }
 
         // Queue webhooks for all failures
@@ -715,6 +731,7 @@ impl AtomicEoaExecutorStore {
             keys: &self.keys,
             webhook_queue,
             eoa_metrics: &self.eoa_metrics,
+            completed_transaction_ttl_seconds: self.store.completed_transaction_ttl_seconds,
         })
         .await
     }
@@ -732,6 +749,7 @@ impl AtomicEoaExecutorStore {
             keys: &self.keys,
             webhook_queue,
             eoa_metrics: &self.eoa_metrics,
+            completed_transaction_ttl_seconds: self.store.completed_transaction_ttl_seconds,
         })
         .await
     }
