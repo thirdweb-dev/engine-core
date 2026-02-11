@@ -98,7 +98,7 @@ config = "0.15.11"
 aws-arn = "0.3.1"
 
 # Redis
-redis = { version = "0.31.0", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.31.0", features = ["connection-manager", "tls-rustls", "tls-rustls-webpki-roots", "tokio-rustls-comp"] }
 
 # Dev dependencies
 criterion = { version = "0.6", features = ["html_reports", "async_tokio"] }
