@@ -98,11 +98,7 @@ config = "0.15.11"
 aws-arn = "0.3.1"
 
 # Redis
-redis = { version = "0.31.0", features = ["connection-manager", "tls-rustls", "tls-rustls-webpki-roots", "tokio-rustls-comp"] }
-
-# Rustls (required for TLS crypto provider selection).
-# Rustls 0.23 requires exactly one crypto provider feature (ring or aws-lc-rs).
-rustls = { version = "0.23.32", default-features = false, features = ["ring"] }
+redis = { version = "0.31.0", features = ["tokio-comp", "connection-manager"] }
 
 # Dev dependencies
 criterion = { version = "0.6", features = ["html_reports", "async_tokio"] }
