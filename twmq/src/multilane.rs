@@ -84,59 +84,89 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         &self.queue_id
     }
 
+    /// Redis Cluster hash tag used to keep all multilane keys in the same slot.
+    fn redis_hash_tag(&self) -> String {
+        format!("{{{}}}", self.queue_id())
+    }
+
     // Redis key naming methods with proper multilane namespacing
     pub fn lanes_zset_name(&self) -> String {
-        format!("twmq_multilane:{}:lanes", self.queue_id)
+        format!("twmq_multilane:{}:lanes", self.redis_hash_tag())
     }
 
     pub fn lane_pending_list_name(&self, lane_id: &str) -> String {
-        format!("twmq_multilane:{}:lane:{}:pending", self.queue_id, lane_id)
+        format!(
+            "twmq_multilane:{}:lane:{}:pending",
+            self.redis_hash_tag(),
+            lane_id
+        )
     }
 
     pub fn lane_delayed_zset_name(&self, lane_id: &str) -> String {
-        format!("twmq_multilane:{}:lane:{}:delayed", self.queue_id, lane_id)
+        format!(
+            "twmq_multilane:{}:lane:{}:delayed",
+            self.redis_hash_tag(),
+            lane_id
+        )
     }
 
     pub fn lane_active_hash_name(&self, lane_id: &str) -> String {
-        format!("twmq_multilane:{}:lane:{}:active", self.queue_id, lane_id)
+        format!(
+            "twmq_multilane:{}:lane:{}:active",
+            self.redis_hash_tag(),
+            lane_id
+        )
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("twmq_multilane:{}:success", self.queue_id)
+        format!("twmq_multilane:{}:success", self.redis_hash_tag())
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("twmq_multilane:{}:failed", self.queue_id)
+        format!("twmq_multilane:{}:failed", self.redis_hash_tag())
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!("twmq_multilane:{}:jobs:data", self.queue_id)
+        format!("twmq_multilane:{}:jobs:data", self.redis_hash_tag())
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!("twmq_multilane:{}:job:{}:meta", self.queue_id, job_id)
+        format!(
+            "twmq_multilane:{}:job:{}:meta",
+            self.redis_hash_tag(),
+            job_id
+        )
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!("twmq_multilane:{}:job:{}:errors", self.queue_id, job_id)
+        format!(
+            "twmq_multilane:{}:job:{}:errors",
+            self.redis_hash_tag(),
+            job_id
+        )
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!("twmq_multilane:{}:jobs:result", self.queue_id)
+        format!("twmq_multilane:{}:jobs:result", self.redis_hash_tag())
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("twmq_multilane:{}:dedup", self.queue_id)
+        format!("twmq_multilane:{}:dedup", self.redis_hash_tag())
     }
 
     pub fn pending_cancellation_set_name(&self) -> String {
-        format!("twmq_multilane:{}:pending_cancellations", self.queue_id)
+        format!(
+            "twmq_multilane:{}:pending_cancellations",
+            self.redis_hash_tag()
+        )
     }
 
     pub fn lease_key_name(&self, job_id: &str, lease_token: &str) -> String {
         format!(
             "twmq_multilane:{}:job:{}:lease:{}",
-            self.queue_id, job_id, lease_token
+            self.redis_hash_tag(),
+            job_id,
+            lease_token
         )
     }
 
@@ -229,7 +259,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             .key(self.job_data_hash_name())
             .key(self.job_meta_hash_name(&job.id))
             .key(self.dedupe_set_name())
-            .arg(&self.queue_id)
+            // Redis Cluster: ensure constructed keys match hash-tagged names
+            .arg(self.redis_hash_tag())
             .arg(lane_id)
             .arg(&job_options.id)
             .arg(job_data)
@@ -414,7 +445,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             .key(self.pending_cancellation_set_name())
             .key(self.job_meta_hash_name(job_id))
             .key(self.job_data_hash_name())
-            .arg(&self.queue_id)
+            // Redis Cluster: ensure constructed keys match hash-tagged names
+            .arg(self.redis_hash_tag())
             .arg(job_id)
             .arg(now)
             .invoke_async(&mut self.redis.clone())
@@ -760,7 +792,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             .key(self.pending_cancellation_set_name())
             .key(self.failed_list_name())
             .key(self.success_list_name())
-            .arg(&self.queue_id)
+            // Redis Cluster: ensure constructed keys match hash-tagged names
+            .arg(self.redis_hash_tag())
             .arg(now)
             .arg(batch_size)
             .arg(self.options.lease_duration.as_secs())
