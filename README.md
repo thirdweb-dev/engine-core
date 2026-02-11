@@ -147,8 +147,6 @@ thirdweb:
 
 redis:
   url: "redis://localhost:6379"
-# For Redis over TLS, use the `rediss://` scheme:
-# url: "rediss://localhost:6379"
 
 queue:
   webhook_workers: 50
@@ -168,8 +166,6 @@ export APP__QUEUE__LOCAL_CONCURRENCY=500
 
 # Custom Redis configuration
 export APP__REDIS__URL="redis://redis-cluster:6379"
-# For Redis over TLS, use the `rediss://` scheme:
-# export APP__REDIS__URL="rediss://redis-cluster:6379"
 
 # Debug logging for development
 export RUST_LOG="thirdweb_engine=debug,twmq=debug"

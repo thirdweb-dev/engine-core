@@ -175,63 +175,52 @@ impl<H: DurableExecution> Queue<H> {
         &self.name
     }
 
-    /// Redis Cluster hash tag used to keep all queue keys in the same slot.
-    /// See: https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/#hash-tags
-    fn redis_hash_tag(&self) -> String {
-        format!("{{{}}}", self.name())
-    }
-
     pub fn pending_list_name(&self) -> String {
-        format!("twmq:{}:pending", self.redis_hash_tag())
+        format!("twmq:{}:pending", self.name())
     }
 
     pub fn active_hash_name(&self) -> String {
-        format!("twmq:{}:active", self.redis_hash_tag())
+        format!("twmq:{}:active", self.name)
     }
 
     pub fn delayed_zset_name(&self) -> String {
-        format!("twmq:{}:delayed", self.redis_hash_tag())
+        format!("twmq:{}:delayed", self.name)
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("twmq:{}:success", self.redis_hash_tag())
+        format!("twmq:{}:success", self.name)
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("twmq:{}:failed", self.redis_hash_tag())
+        format!("twmq:{}:failed", self.name)
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:data", self.redis_hash_tag())
+        format!("twmq:{}:jobs:data", self.name)
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:meta", self.redis_hash_tag(), job_id)
+        format!("twmq:{}:job:{}:meta", self.name, job_id)
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:errors", self.redis_hash_tag(), job_id)
+        format!("twmq:{}:job:{}:errors", self.name, job_id)
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:result", self.redis_hash_tag())
+        format!("twmq:{}:jobs:result", self.name)
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("twmq:{}:dedup", self.redis_hash_tag())
+        format!("twmq:{}:dedup", self.name)
     }
 
     pub fn pending_cancellation_set_name(&self) -> String {
-        format!("twmq:{}:pending_cancellations", self.redis_hash_tag())
+        format!("twmq:{}:pending_cancellations", self.name)
     }
 
     pub fn lease_key_name(&self, job_id: &str, lease_token: &str) -> String {
-        format!(
-            "twmq:{}:job:{}:lease:{}",
-            self.redis_hash_tag(),
-            job_id,
-            lease_token
-        )
+        format!("twmq:{}:job:{}:lease:{}", self.name, job_id, lease_token)
     }
 
     pub async fn push(
@@ -312,8 +301,7 @@ impl<H: DurableExecution> Queue<H> {
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
-            // Redis Cluster: all KEYS must be in the same slot
-            .key(self.redis_hash_tag())
+            .key(&self.name)
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
             .key(self.job_data_hash_name())
@@ -754,8 +742,7 @@ impl<H: DurableExecution> Queue<H> {
             Vec<String>,
             Vec<String>,
         ) = script
-            // Redis Cluster: all KEYS must be in the same slot
-            .key(self.redis_hash_tag())
+            .key(self.name())
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
             .key(self.active_hash_name())
@@ -1003,8 +990,7 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            // Redis Cluster: all KEYS must be in the same slot
-            .key(self.redis_hash_tag())
+            .key(self.name())
             .key(self.success_list_name())
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name()) // results_hash
@@ -1182,8 +1168,7 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            // Redis Cluster: all KEYS must be in the same slot
-            .key(self.redis_hash_tag())
+            .key(self.name())
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
             .key(self.dedupe_set_name())
