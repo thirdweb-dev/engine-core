@@ -23,7 +23,8 @@ use twmq::{
 // Helper to clean up Redis keys for a given queue name pattern
 async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{queue_name}:*");
+    // twmq queue keys are hash-tagged for Redis Cluster compatibility
+    let keys_pattern = format!("twmq:{{{queue_name}}}:*");
 
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
