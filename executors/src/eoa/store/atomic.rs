@@ -4,7 +4,8 @@ use alloy::{
     consensus::{Signed, TypedTransaction},
     primitives::Address,
 };
-use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
+use twmq::redis::{AsyncCommands, Pipeline};
+use twmq::redis::cluster_async::ClusterConnection;
 
 use crate::{
     eoa::{
@@ -43,7 +44,7 @@ pub trait SafeRedisTransaction: Send + Sync {
     ) -> Self::OperationResult;
     fn validation(
         &self,
-        conn: &mut ConnectionManager,
+        conn: &mut ClusterConnection,
         store: &EoaExecutorStore,
     ) -> impl Future<Output = Result<Self::ValidationData, TransactionStoreError>> + Send;
     fn watch_keys(&self) -> Vec<String>;
@@ -815,7 +816,7 @@ impl SafeRedisTransaction for ResetNoncesTransaction<'_> {
 
     async fn validation(
         &self,
-        _conn: &mut ConnectionManager,
+        _conn: &mut ClusterConnection,
         store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;

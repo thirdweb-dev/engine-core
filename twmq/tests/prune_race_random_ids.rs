@@ -4,7 +4,7 @@
 
 mod fixtures;
 use fixtures::TestJobErrorData;
-use redis::{AsyncCommands, aio::ConnectionManager};
+use redis::{AsyncCommands, cluster_async::ClusterConnection};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use std::{
@@ -121,9 +121,9 @@ impl DurableExecution for RandomJobHandler {
 }
 
 // Helper to clean up Redis keys
-async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
+async fn cleanup_redis_keys(conn_manager: &ClusterConnection, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{queue_name}:*");
+    let keys_pattern = format!("twmq:{}:{queue_name}:*", twmq::ENGINE_HASH_TAG);
 
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
@@ -239,7 +239,7 @@ async fn test_prune_with_random_ids() {
     let success_job_ids: Vec<String> = conn.lrange(queue.success_list_name(), 0, -1).await.unwrap();
 
     // Count how many job metadata hashes still exist (should match success list length if pruning works)
-    let meta_pattern = format!("twmq:{}:job:*:meta", queue.name());
+    let meta_pattern = format!("twmq:{}:{}:job:*:meta", twmq::ENGINE_HASH_TAG, queue.name());
     let meta_keys: Vec<String> = redis::cmd("KEYS")
         .arg(&meta_pattern)
         .query_async(&mut conn)

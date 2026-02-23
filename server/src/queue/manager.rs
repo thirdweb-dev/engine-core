@@ -50,7 +50,7 @@ const EOA_EXECUTOR_QUEUE_NAME: &str = "eoa_executor";
 
 impl QueueManager {
     pub async fn new(
-        redis_client: twmq::redis::Client,
+        redis_client: twmq::redis::cluster::ClusterClient,
         queue_config: &QueueConfig,
         solana_config: &crate::config::SolanaConfig,
         chain_service: Arc<ThirdwebChainService>,
@@ -61,7 +61,7 @@ impl QueueManager {
     ) -> Result<Self, EngineError> {
         // Create transaction registry
         let transaction_registry = Arc::new(TransactionRegistry::new(
-            redis_client.get_connection_manager().await?,
+            redis_client.get_async_connection().await?,
             queue_config.execution_namespace.clone(),
         ));
 
@@ -255,7 +255,7 @@ impl QueueManager {
             eoa_signer: eoa_signer.clone(),
             webhook_queue: webhook_queue.clone(),
             namespace: queue_config.execution_namespace.clone(),
-            redis: redis_client.get_connection_manager().await?,
+            redis: redis_client.get_async_connection().await?,
             authorization_cache,
             max_inflight: 50,
             max_recycled_nonces: 50,
@@ -286,7 +286,7 @@ impl QueueManager {
         };
         let solana_rpc_cache = Arc::new(SolanaRpcCache::new(solana_rpc_urls));
         let solana_storage = SolanaTransactionStorage::new(
-            redis_client.get_connection_manager().await?,
+            redis_client.get_async_connection().await?,
             queue_config.execution_namespace.clone(),
         );
         let solana_executor_handler = SolanaExecutorJobHandler {

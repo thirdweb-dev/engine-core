@@ -3,8 +3,9 @@ use serde_with::{DisplayFromStr, serde_as};
 use solana_sdk::{hash::Hash, signature::Signature};
 use twmq::{
     redis,
-    redis::{AsyncCommands, aio::ConnectionManager},
+    redis::AsyncCommands,
 };
+use twmq::redis::cluster_async::ClusterConnection;
 
 /// Represents a single attempt to send a Solana transaction
 /// This is stored in Redis BEFORE sending to prevent duplicate transactions
@@ -45,7 +46,7 @@ impl SolanaTransactionAttempt {
 /// Represents a lock held on a transaction
 /// When dropped, the lock is automatically released
 pub struct TransactionLock {
-    redis: ConnectionManager,
+    redis: ClusterConnection,
     lock_key: String,
     lock_value: String,
 }
@@ -121,28 +122,30 @@ impl From<redis::RedisError> for LockError {
 /// Storage for Solana transaction attempts
 /// Provides atomic operations to prevent duplicate transactions
 pub struct SolanaTransactionStorage {
-    redis: ConnectionManager,
+    redis: ClusterConnection,
     namespace: Option<String>,
 }
 
 impl SolanaTransactionStorage {
-    pub fn new(redis: ConnectionManager, namespace: Option<String>) -> Self {
+    pub fn new(redis: ClusterConnection, namespace: Option<String>) -> Self {
         Self { redis, namespace }
     }
 
     /// Get the Redis key for a transaction's attempt
     fn attempt_key(&self, transaction_id: &str) -> String {
         match &self.namespace {
-            Some(ns) => format!("{ns}:solana_tx_attempt:{transaction_id}"),
-            None => format!("solana_tx_attempt:{transaction_id}"),
+            Some(ns) => {
+                format!("{ns}:{}:solana_tx_attempt:{transaction_id}", twmq::ENGINE_HASH_TAG)
+            }
+            None => format!("{}:solana_tx_attempt:{transaction_id}", twmq::ENGINE_HASH_TAG),
         }
     }
 
     /// Get the Redis key for a transaction's lock
     fn lock_key(&self, transaction_id: &str) -> String {
         match &self.namespace {
-            Some(ns) => format!("{ns}:solana_tx_lock:{transaction_id}"),
-            None => format!("solana_tx_lock:{transaction_id}"),
+            Some(ns) => format!("{ns}:{}:solana_tx_lock:{transaction_id}", twmq::ENGINE_HASH_TAG),
+            None => format!("{}:solana_tx_lock:{transaction_id}", twmq::ENGINE_HASH_TAG),
         }
     }
 

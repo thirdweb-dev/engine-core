@@ -15,7 +15,7 @@ use twmq::{
     hooks::TransactionContext,
     job::{BorrowedJob, JobError, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
-    redis::aio::ConnectionManager,
+    redis::cluster_async::ClusterConnection,
 };
 
 mod fixtures;
@@ -24,9 +24,9 @@ use fixtures::TestJobErrorData;
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Helper to clean up Redis keys
-async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
+async fn cleanup_redis_keys(conn_manager: &ClusterConnection, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{queue_name}:*");
+    let keys_pattern = format!("twmq:{}:{queue_name}:*", twmq::ENGINE_HASH_TAG);
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)

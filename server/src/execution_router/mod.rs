@@ -31,7 +31,8 @@ use engine_executors::{
     transaction_registry::TransactionRegistry,
     webhook::WebhookJobHandler,
 };
-use twmq::{Queue, error::TwmqError, redis::aio::ConnectionManager};
+use twmq::{Queue, error::TwmqError};
+use twmq::redis::cluster_async::ClusterConnection;
 use vault_sdk::VaultClient;
 use vault_types::{
     RegexRule, Rule,
@@ -42,7 +43,7 @@ use vault_types::{
 use crate::chains::ThirdwebChainService;
 
 pub struct ExecutionRouter {
-    pub redis: ConnectionManager,
+    pub redis: ClusterConnection,
     pub namespace: Option<String>,
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub external_bundler_send_queue: Arc<Queue<ExternalBundlerSendHandler<ThirdwebChainService>>>,

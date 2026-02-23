@@ -1,6 +1,7 @@
 use engine_core::error::EngineError;
 use thiserror::Error;
-use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
+use twmq::redis::{AsyncCommands, Pipeline};
+use twmq::redis::cluster_async::ClusterConnection;
 
 #[derive(Debug, Error)]
 pub enum TransactionRegistryError {
@@ -20,19 +21,19 @@ impl From<TransactionRegistryError> for EngineError {
 }
 
 pub struct TransactionRegistry {
-    redis: ConnectionManager,
+    redis: ClusterConnection,
     namespace: Option<String>,
 }
 
 impl TransactionRegistry {
-    pub fn new(redis: ConnectionManager, namespace: Option<String>) -> Self {
+    pub fn new(redis: ClusterConnection, namespace: Option<String>) -> Self {
         Self { redis, namespace }
     }
 
     fn registry_key(&self) -> String {
         match &self.namespace {
-            Some(ns) => format!("{ns}:tx_registry"),
-            None => "tx_registry".to_string(),
+            Some(ns) => format!("{ns}:{}:tx_registry", twmq::ENGINE_HASH_TAG),
+            None => format!("{}:tx_registry", twmq::ENGINE_HASH_TAG),
         }
     }
 
