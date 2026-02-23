@@ -22,6 +22,11 @@ use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::Subscrib
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls 0.23 requires selecting a process-wide crypto provider (ring or aws-lc-rs).
+    // Some dependency graphs do not enable either by default, which causes a runtime panic
+    // when a TLS client config is constructed (e.g. when connecting to `rediss://`).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let config = config::get_config();
 
     let subscriber = tracing_subscriber::registry()

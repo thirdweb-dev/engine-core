@@ -102,3 +102,10 @@ redis = { version = "0.31.0", features = ["tokio-comp", "connection-manager", "c
 
 # Dev dependencies
 criterion = { version = "0.6", features = ["html_reports", "async_tokio"] }
+
+# Rustls
+#
+# NOTE: Some upstream crates (including redis-rs' rustls integration) may depend on rustls with
+# default features disabled, which means no crypto provider (ring/aws-lc-rs) is selected.
+# We explicitly enable the ring provider to avoid runtime panics.
+rustls = { version = "0.23.32", default-features = false, features = ["std", "webpki", "ring"] }
