@@ -11,14 +11,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use twmq::job::{JobOptions, JobStatus}; // Assuming JobStatus is in twmq::job
-use twmq::redis::aio::ConnectionManager; // For cleanup utility
+use twmq::redis::cluster_async::ClusterConnection; // For cleanup utility
 
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Helper to clean up Redis keys for a given queue name pattern
-async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
+async fn cleanup_redis_keys(conn_manager: &ClusterConnection, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{queue_name}:*");
+    let keys_pattern = format!("twmq:{}:{queue_name}:*", twmq::ENGINE_HASH_TAG);
 
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)

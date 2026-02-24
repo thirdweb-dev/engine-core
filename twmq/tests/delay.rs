@@ -15,15 +15,15 @@ use twmq::{
     hooks::TransactionContext,
     job::{BorrowedJob, DelayOptions, JobResult, JobStatus, RequeuePosition},
     queue::QueueOptions,
-    redis::aio::ConnectionManager,
+    redis::cluster_async::ClusterConnection,
 };
 
 const REDIS_URL: &str = "redis://127.0.0.1:6379/";
 
 // Helper to clean up Redis keys
-async fn cleanup_redis_keys(conn_manager: &ConnectionManager, queue_name: &str) {
+async fn cleanup_redis_keys(conn_manager: &ClusterConnection, queue_name: &str) {
     let mut conn = conn_manager.clone();
-    let keys_pattern = format!("twmq:{queue_name}:*");
+    let keys_pattern = format!("twmq:{}:{queue_name}:*", twmq::ENGINE_HASH_TAG);
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg(&keys_pattern)
         .query_async(&mut conn)
@@ -131,8 +131,8 @@ async fn test_job_delay_basic() {
     };
 
     // Create Redis connection for the execution context
-    let redis_client = redis::Client::open(REDIS_URL).unwrap();
-    let redis_conn = Arc::new(redis_client.get_connection_manager().await.unwrap());
+    let redis_client = redis::cluster::ClusterClient::new(vec![REDIS_URL]).unwrap();
+    let redis_conn = Arc::new(redis_client.get_async_connection().await.unwrap());
 
     let handler = DelayTestJobHandler;
 
@@ -307,8 +307,8 @@ async fn test_delay_position_ordering() {
     };
 
     // Create Redis connection for the execution context
-    let redis_client = redis::Client::open(REDIS_URL).unwrap();
-    let redis_conn = Arc::new(redis_client.get_connection_manager().await.unwrap());
+    let redis_client = redis::cluster::ClusterClient::new(vec![REDIS_URL]).unwrap();
+    let redis_conn = Arc::new(redis_client.get_async_connection().await.unwrap());
 
     let handler = DelayTestJobHandler;
 

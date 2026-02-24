@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use alloy::{consensus::Transaction, primitives::Address};
-use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
+use twmq::redis::{AsyncCommands, Pipeline};
+use twmq::redis::cluster_async::ClusterConnection;
 
 use crate::eoa::{
     EoaExecutorStore,
@@ -46,7 +47,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithIncrementedNonces<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ConnectionManager,
+        conn: &mut ClusterConnection,
         _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         if self.transactions.is_empty() {
@@ -181,7 +182,7 @@ impl SafeRedisTransaction for MovePendingToBorrowedWithRecycledNonces<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ConnectionManager,
+        conn: &mut ClusterConnection,
         _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         if self.transactions.is_empty() {

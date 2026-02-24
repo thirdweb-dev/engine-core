@@ -98,7 +98,17 @@ config = "0.15.11"
 aws-arn = "0.3.1"
 
 # Redis
-redis = { version = "0.31.0", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.31.0", features = ["tokio-comp", "connection-manager", "cluster", "cluster-async", "tls-rustls", "tokio-rustls-comp"] }
 
 # Dev dependencies
 criterion = { version = "0.6", features = ["html_reports", "async_tokio"] }
+
+# Rustls
+#
+# NOTE: rustls 0.23 requires selecting exactly one process-wide crypto provider
+# (features: `ring` or `aws_lc_rs` / `aws-lc-rs`). Some dependency graphs (e.g. via
+# redis-rs' rustls integration) can end up with *no* provider enabled, which causes a
+# runtime panic when building TLS client/server configs.
+#
+# We explicitly enable the `ring` provider here to make TLS work reliably.
+rustls = { version = "0.23.32", default-features = false, features = ["std", "ring"] }

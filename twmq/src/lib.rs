@@ -18,7 +18,8 @@ use job::{
 pub use multilane::{MultilanePushableJob, MultilaneQueue};
 use queue::QueueOptions;
 use redis::Pipeline;
-use redis::{AsyncCommands, RedisResult, aio::ConnectionManager};
+use redis::{AsyncCommands, RedisResult};
+use redis::cluster_async::ClusterConnection;
 use serde::{Serialize, de::DeserializeOwned};
 use shutdown::WorkerHandle;
 use tokio::sync::Semaphore;
@@ -27,6 +28,10 @@ use tokio::time::sleep;
 pub use queue::IdempotencyMode;
 pub use redis;
 use tracing::Instrument;
+
+/// Global hash tag used to force all keys into the same cluster hash slot.
+/// This is the "easiest" Valkey Cluster strategy: correctness over sharding.
+pub const ENGINE_HASH_TAG: &str = "{engine}";
 
 // Trait for error types to implement user cancellation
 pub trait UserCancellable {
@@ -121,7 +126,7 @@ pub struct Queue<H>
 where
     H: DurableExecution,
 {
-    pub redis: ConnectionManager,
+    pub redis: ClusterConnection,
     pub handler: Arc<H>,
     pub options: QueueOptions,
     // concurrency: usize,
@@ -136,8 +141,13 @@ impl<H: DurableExecution> Queue<H> {
         options: Option<QueueOptions>,
         handler: H,
     ) -> Result<Self, TwmqError> {
-        let client = redis::Client::open(redis_url)?;
-        let redis = client.get_connection_manager().await?;
+        let initial_nodes: Vec<&str> = redis_url
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let client = redis::cluster::ClusterClient::new(initial_nodes)?;
+        let redis = client.get_async_connection().await?;
 
         let queue = Self {
             redis,
@@ -176,51 +186,60 @@ impl<H: DurableExecution> Queue<H> {
     }
 
     pub fn pending_list_name(&self) -> String {
-        format!("twmq:{}:pending", self.name())
+        format!("twmq:{}:{}:pending", ENGINE_HASH_TAG, self.name())
     }
 
     pub fn active_hash_name(&self) -> String {
-        format!("twmq:{}:active", self.name)
+        format!("twmq:{}:{}:active", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn delayed_zset_name(&self) -> String {
-        format!("twmq:{}:delayed", self.name)
+        format!("twmq:{}:{}:delayed", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("twmq:{}:success", self.name)
+        format!("twmq:{}:{}:success", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("twmq:{}:failed", self.name)
+        format!("twmq:{}:{}:failed", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:data", self.name)
+        format!("twmq:{}:{}:jobs:data", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:meta", self.name, job_id)
+        format!("twmq:{}:{}:job:{}:meta", ENGINE_HASH_TAG, self.name, job_id)
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!("twmq:{}:job:{}:errors", self.name, job_id)
+        format!(
+            "twmq:{}:{}:job:{}:errors",
+            ENGINE_HASH_TAG, self.name, job_id
+        )
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!("twmq:{}:jobs:result", self.name)
+        format!("twmq:{}:{}:jobs:result", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("twmq:{}:dedup", self.name)
+        format!("twmq:{}:{}:dedup", ENGINE_HASH_TAG, self.name)
     }
 
     pub fn pending_cancellation_set_name(&self) -> String {
-        format!("twmq:{}:pending_cancellations", self.name)
+        format!(
+            "twmq:{}:{}:pending_cancellations",
+            ENGINE_HASH_TAG, self.name
+        )
     }
 
     pub fn lease_key_name(&self, job_id: &str, lease_token: &str) -> String {
-        format!("twmq:{}:job:{}:lease:{}", self.name, job_id, lease_token)
+        format!(
+            "twmq:{}:{}:job:{}:lease:{}",
+            ENGINE_HASH_TAG, self.name, job_id, lease_token
+        )
     }
 
     pub async fn push(
@@ -230,20 +249,20 @@ impl<H: DurableExecution> Queue<H> {
         // Check for duplicates and handle job creation with deduplication
         let script = redis::Script::new(
             r#"
-            local job_id = ARGV[1]
-            local job_data = ARGV[2]
-            local now = ARGV[3]
-            local delay = ARGV[4]
-            local reentry_position = ARGV[5]  -- "first" or "last"
+            local queue_id = ARGV[1]
+            local job_id = ARGV[2]
+            local job_data = ARGV[3]
+            local now = ARGV[4]
+            local delay = ARGV[5]
+            local reentry_position = ARGV[6]  -- "first" or "last"
 
-            local queue_id = KEYS[1]
-            local delayed_zset_name = KEYS[2]
-            local pending_list_name = KEYS[3]
+            local delayed_zset_name = KEYS[1]
+            local pending_list_name = KEYS[2]
 
-            local job_data_hash_name = KEYS[4]
-            local job_meta_hash_name = KEYS[5]
+            local job_data_hash_name = KEYS[3]
+            local job_meta_hash_name = KEYS[4]
 
-            local dedupe_set_name = KEYS[6]
+            local dedupe_set_name = KEYS[5]
 
             -- Check if job already exists in any queue
             if redis.call('SISMEMBER', dedupe_set_name, job_id) == 1 then
@@ -301,12 +320,12 @@ impl<H: DurableExecution> Queue<H> {
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
-            .key(&self.name)
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
             .key(self.job_data_hash_name())
             .key(self.job_meta_hash_name(&job.id))
             .key(self.dedupe_set_name())
+            .arg(self.name())
             .arg(job_options.id)
             .arg(job_data)
             .arg(now)
@@ -588,14 +607,15 @@ impl<H: DurableExecution> Queue<H> {
             local batch_size = tonumber(ARGV[3])
             local lease_seconds = tonumber(ARGV[4])
 
-            local queue_id = KEYS[1]
-            local delayed_zset_name = KEYS[2]
-            local pending_list_name = KEYS[3]
-            local active_hash_name = KEYS[4]
-            local job_data_hash_name = KEYS[5]
-            local pending_cancellation_set = KEYS[6]
-            local failed_list_name = KEYS[7]
-            local success_list_name = KEYS[8]
+            local queue_id = ARGV[5]
+
+            local delayed_zset_name = KEYS[1]
+            local pending_list_name = KEYS[2]
+            local active_hash_name = KEYS[3]
+            local job_data_hash_name = KEYS[4]
+            local pending_cancellation_set = KEYS[5]
+            local failed_list_name = KEYS[6]
+            local success_list_name = KEYS[7]
 
             local result_jobs = {}
             local timed_out_jobs = {}
@@ -610,14 +630,14 @@ impl<H: DurableExecution> Queue<H> {
             for i = 1, #active_jobs, 2 do
                 local job_id = active_jobs[i]
                 local attempts = active_jobs[i + 1]
-                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
                 
                 -- Get the current lease token from job metadata
                 local current_lease_token = redis.call('HGET', job_meta_hash_name, 'lease_token')
                 
                 if current_lease_token then
                     -- Build the lease key and check if it exists (Redis auto-expires)
-                    local lease_key = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
+                    local lease_key = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
                     local lease_exists = redis.call('EXISTS', lease_key)
                     
                     -- If lease doesn't exist (expired), move job back to pending
@@ -657,7 +677,7 @@ impl<H: DurableExecution> Queue<H> {
                         -- Job not successful, cancel it now
                         redis.call('LPUSH', failed_list_name, job_id)
                         -- Add cancellation timestamp
-                        local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                        local job_meta_hash_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
                         redis.call('HSET', job_meta_hash_name, 'finished_at', now)
                         table.insert(cancelled_jobs, job_id)
                     end
@@ -669,7 +689,7 @@ impl<H: DurableExecution> Queue<H> {
             -- Step 3: Move expired delayed jobs to pending
             local delayed_jobs = redis.call('ZRANGEBYSCORE', delayed_zset_name, 0, now)
             for i, job_id in ipairs(delayed_jobs) do
-                local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
                 local reentry_position = redis.call('HGET', job_meta_hash_name, 'reentry_position') or 'last'
 
                 -- Remove from delayed
@@ -704,7 +724,7 @@ impl<H: DurableExecution> Queue<H> {
                 -- Only process if we have data
                 if job_data then
                     -- Update metadata
-                    local job_meta_hash_name = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
                     redis.call('HSET', job_meta_hash_name, 'processed_at', now)
                     local created_at = redis.call('HGET', job_meta_hash_name, 'created_at') or now
                     local attempts = redis.call('HINCRBY', job_meta_hash_name, 'attempts', 1)
@@ -713,7 +733,7 @@ impl<H: DurableExecution> Queue<H> {
                     local lease_token = now .. '_' .. job_id .. '_' .. attempts .. '_' .. pop_id
 
                     -- Create separate lease key with TTL
-                    local lease_key = 'twmq:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
+                    local lease_key = 'twmq:{engine}:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
                     redis.call('SET', lease_key, '1')
                     redis.call('EXPIRE', lease_key, lease_seconds)
 
@@ -742,7 +762,6 @@ impl<H: DurableExecution> Queue<H> {
             Vec<String>,
             Vec<String>,
         ) = script
-            .key(self.name())
             .key(self.delayed_zset_name())
             .key(self.pending_list_name())
             .key(self.active_hash_name())
@@ -754,6 +773,7 @@ impl<H: DurableExecution> Queue<H> {
             .arg(pop_id)
             .arg(batch_size)
             .arg(self.options.lease_duration.as_secs())
+            .arg(self.name())
             .invoke_async(&mut self.redis.clone())
             .await?;
 
@@ -942,14 +962,14 @@ impl<H: DurableExecution> Queue<H> {
         // Separate call for pruning with data deletion using Lua
         let trim_script = redis::Script::new(
             r#"
-                local queue_id = KEYS[1]
-                local list_name = KEYS[2]
-                local job_data_hash = KEYS[3]
-                local results_hash = KEYS[4] -- e.g., "myqueue:results"
-                local dedupe_set_name = KEYS[5]
-                local active_hash = KEYS[6]
-                local pending_list = KEYS[7]
-                local delayed_zset = KEYS[8]
+                local queue_id = ARGV[2]
+                local list_name = KEYS[1]
+                local job_data_hash = KEYS[2]
+                local results_hash = KEYS[3] -- e.g., "myqueue:results"
+                local dedupe_set_name = KEYS[4]
+                local active_hash = KEYS[5]
+                local pending_list = KEYS[6]
+                local delayed_zset = KEYS[7]
 
                 local max_len = tonumber(ARGV[1])
 
@@ -971,8 +991,8 @@ impl<H: DurableExecution> Queue<H> {
                         
                         -- Only delete if the job is NOT currently in the system
                         if not is_active and not is_pending and not is_delayed then
-                            local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
-                            local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                            local job_meta_hash = 'twmq:{engine}:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                            local errors_list_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
                             redis.call('SREM', dedupe_set_name, j_id)
                             redis.call('HDEL', job_data_hash, j_id)
@@ -990,7 +1010,6 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            .key(self.name())
             .key(self.success_list_name())
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name()) // results_hash
@@ -999,6 +1018,7 @@ impl<H: DurableExecution> Queue<H> {
             .key(self.pending_list_name()) // Check if job is pending
             .key(self.delayed_zset_name()) // Check if job is delayed
             .arg(self.options.max_success) // max_len (LTRIM is 0 to max_success-1)
+            .arg(self.name())
             .invoke_async(&mut self.redis.clone())
             .await?;
 
@@ -1123,13 +1143,13 @@ impl<H: DurableExecution> Queue<H> {
         // Separate call for pruning with data deletion using Lua
         let trim_script = redis::Script::new(
             r#"
-                local queue_id = KEYS[1]
-                local list_name = KEYS[2]
-                local job_data_hash = KEYS[3]
-                local dedupe_set_name = KEYS[4]
-                local active_hash = KEYS[5]
-                local pending_list = KEYS[6]
-                local delayed_zset = KEYS[7]
+                local queue_id = ARGV[2]
+                local list_name = KEYS[1]
+                local job_data_hash = KEYS[2]
+                local dedupe_set_name = KEYS[3]
+                local active_hash = KEYS[4]
+                local pending_list = KEYS[5]
+                local delayed_zset = KEYS[6]
 
                 local max_len = tonumber(ARGV[1])
 
@@ -1151,8 +1171,8 @@ impl<H: DurableExecution> Queue<H> {
                         
                         -- Only delete if the job is NOT currently in the system
                         if not is_active and not is_pending and not is_delayed then
-                            local errors_list_name = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':errors'
-                            local job_meta_hash = 'twmq:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                            local errors_list_name = 'twmq:{engine}:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                            local job_meta_hash = 'twmq:{engine}:' .. queue_id .. ':job:' .. j_id .. ':meta'
 
                             redis.call('SREM', dedupe_set_name, j_id)
                             redis.call('HDEL', job_data_hash, j_id)
@@ -1168,7 +1188,6 @@ impl<H: DurableExecution> Queue<H> {
         );
 
         let trimmed_count: usize = trim_script
-            .key(self.name())
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
             .key(self.dedupe_set_name())
@@ -1176,6 +1195,7 @@ impl<H: DurableExecution> Queue<H> {
             .key(self.pending_list_name()) // Check if job is pending
             .key(self.delayed_zset_name()) // Check if job is delayed
             .arg(self.options.max_failed)
+            .arg(self.name())
             .invoke_async(&mut self.redis.clone())
             .await?;
 

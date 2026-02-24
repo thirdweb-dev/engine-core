@@ -22,6 +22,11 @@ use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::Subscrib
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls 0.23 requires selecting a process-wide crypto provider (ring or aws-lc-rs).
+    // Some dependency graphs do not enable either by default, which causes a runtime panic
+    // when a TLS client config is constructed (e.g. when connecting to `rediss://`).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let config = config::get_config();
 
     let subscriber = tracing_subscriber::registry()
@@ -70,7 +75,14 @@ async fn main() -> anyhow::Result<()> {
     });
     let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client.clone()));
     let solana_signer = Arc::new(SolanaSigner::new(vault_client.clone(), iaw_client));
-    let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
+    let initial_nodes: Vec<&str> = config
+        .redis
+        .url
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let redis_client = twmq::redis::cluster::ClusterClient::new(initial_nodes)?;
 
     let authorization_cache = EoaAuthorizationCache::new(
         moka::future::Cache::builder()
@@ -118,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
 
     let execution_router = ExecutionRouter {
         namespace: config.queue.execution_namespace.clone(),
-        redis: redis_client.get_connection_manager().await?,
+        redis: redis_client.get_async_connection().await?,
         authorization_cache,
         webhook_queue: queue_manager.webhook_queue.clone(),
         external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),
