@@ -18,6 +18,7 @@ use crate::{
 };
 
 const NONCE_STALL_LIMIT_MS: u64 = 60_000; // 1 minute in milliseconds - after this time, attempt gas bump
+const EOA_QUEUE_ID: &str = "eoa_executor";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -406,13 +407,35 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         if should_update_balance_threshold(inner_error)
                             && let Err(e) = self.update_balance_threshold().await
                         {
-                            tracing::error!("Failed to update balance threshold: {}", e);
+                            tracing::error!(
+                                transaction_id = ?newest_transaction_data.transaction_id,
+                                chain_id = newest_transaction_data.user_request.chain_id,
+                                client_id = newest_transaction_data
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                "Failed to update balance threshold: {}",
+                                e
+                            );
                         }
                     } else if let EoaExecutorWorkerError::RpcError { inner_error, .. } = &e
                         && should_update_balance_threshold(inner_error)
                         && let Err(e) = self.update_balance_threshold().await
                     {
-                        tracing::error!("Failed to update balance threshold: {}", e);
+                        tracing::error!(
+                            transaction_id = ?newest_transaction_data.transaction_id,
+                            chain_id = newest_transaction_data.user_request.chain_id,
+                            client_id = newest_transaction_data
+                                .user_request
+                                .rpc_credentials
+                                .client_id_for_logs()
+                                .unwrap_or("unknown"),
+                            queue_id = EOA_QUEUE_ID,
+                            "Failed to update balance threshold: {}",
+                            e
+                        );
                     }
                     // Check if nonce has moved ahead since we started the gas bump
                     // This handles the race condition where the original transaction

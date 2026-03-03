@@ -16,6 +16,8 @@ use crate::eoa::{
 use crate::metrics::{EoaMetrics, calculate_duration_seconds, current_timestamp_ms};
 use crate::webhook::{WebhookJobHandler, queue_webhook_envelopes};
 
+const EOA_QUEUE_ID: &str = "eoa_executor";
+
 #[derive(Debug, Clone)]
 pub enum SubmissionResultType {
     Success,
@@ -173,7 +175,19 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                             &mut tx_context,
                             self.webhook_queue.clone(),
                         ) {
-                            tracing::error!("Failed to queue webhook for success: {}", e);
+                            tracing::error!(
+                                transaction_id = transaction_id,
+                                chain_id = result.transaction.user_request.chain_id,
+                                client_id = result
+                                    .transaction
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                "Failed to queue webhook for success: {}",
+                                e
+                            );
                         } else {
                             report.webhook_events_queued += 1;
                         }
@@ -213,7 +227,19 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                             &mut tx_context,
                             self.webhook_queue.clone(),
                         ) {
-                            tracing::error!("Failed to queue webhook for nack: {}", e);
+                            tracing::error!(
+                                transaction_id = transaction_id,
+                                chain_id = result.transaction.user_request.chain_id,
+                                client_id = result
+                                    .transaction
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                "Failed to queue webhook for nack: {}",
+                                e
+                            );
                         } else {
                             report.webhook_events_queued += 1;
                         }
@@ -255,7 +281,19 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                             &mut tx_context,
                             self.webhook_queue.clone(),
                         ) {
-                            tracing::error!("Failed to queue webhook for fail: {}", e);
+                            tracing::error!(
+                                transaction_id = transaction_id,
+                                chain_id = result.transaction.user_request.chain_id,
+                                client_id = result
+                                    .transaction
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                "Failed to queue webhook for fail: {}",
+                                e
+                            );
                         } else {
                             report.webhook_events_queued += 1;
                         }

@@ -36,6 +36,9 @@ use crate::{
 
 use super::confirm::{Eip7702ConfirmationHandler, Eip7702ConfirmationJobData};
 
+const EIP7702_SEND_QUEUE_ID: &str = "eip7702_send";
+const EIP7702_CONFIRM_QUEUE_ID: &str = "eip7702_confirm";
+
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -175,7 +178,7 @@ where
     type ErrorData = Eip7702SendError;
     type JobData = Eip7702SendJobData;
 
-    #[tracing::instrument(skip(self, job), fields(transaction_id = job.job.id, stage = Self::stage_name(), executor = Self::executor_name()))]
+    #[tracing::instrument(skip(self, job), fields(transaction_id = job.job.id, chain_id = job.job.data.chain_id, client_id = ?job.job.data.rpc_credentials.client_id_for_logs(), queue_id = EIP7702_SEND_QUEUE_ID, stage = Self::stage_name(), executor = Self::executor_name()))]
     async fn process(
         &self,
         job: &BorrowedJob<Self::JobData>,
@@ -386,7 +389,15 @@ where
 
         if let Err(e) = tx.queue_job(confirmation_job) {
             tracing::error!(
-                transaction_id = job.job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
+                chain_id = job.job.data.chain_id,
+                client_id = job
+                    .job
+                    .data
+                    .rpc_credentials
+                    .client_id_for_logs()
+                    .unwrap_or("unknown"),
+                queue_id = EIP7702_CONFIRM_QUEUE_ID,
                 error = ?e,
                 "Failed to enqueue confirmation job"
             );
@@ -395,7 +406,15 @@ where
         // Send webhook
         if let Err(e) = self.queue_success_webhook(job, success_data, tx) {
             tracing::error!(
-                transaction_id = job.job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
+                chain_id = job.job.data.chain_id,
+                client_id = job
+                    .job
+                    .data
+                    .rpc_credentials
+                    .client_id_for_logs()
+                    .unwrap_or("unknown"),
+                queue_id = EIP7702_SEND_QUEUE_ID,
                 error = ?e,
                 "Failed to queue success webhook"
             );
@@ -411,7 +430,15 @@ where
         // Don't modify transaction registry on NACK - job will be retried
         if let Err(e) = self.queue_nack_webhook(job, nack_data, tx) {
             tracing::error!(
-                transaction_id = job.job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
+                chain_id = job.job.data.chain_id,
+                client_id = job
+                    .job
+                    .data
+                    .rpc_credentials
+                    .client_id_for_logs()
+                    .unwrap_or("unknown"),
+                queue_id = EIP7702_SEND_QUEUE_ID,
                 error = ?e,
                 "Failed to queue nack webhook"
             );
@@ -429,14 +456,30 @@ where
             .add_remove_command(tx.pipeline(), &job.job.data.transaction_id);
 
         tracing::error!(
-            transaction_id = job.job.data.transaction_id,
+            transaction_id = %job.job.data.transaction_id,
+            chain_id = job.job.data.chain_id,
+            client_id = job
+                .job
+                .data
+                .rpc_credentials
+                .client_id_for_logs()
+                .unwrap_or("unknown"),
+            queue_id = EIP7702_SEND_QUEUE_ID,
             error = ?fail_data.error,
             "EIP-7702 send job failed"
         );
 
         if let Err(e) = self.queue_fail_webhook(job, fail_data, tx) {
             tracing::error!(
-                transaction_id = job.job.data.transaction_id,
+                transaction_id = %job.job.data.transaction_id,
+                chain_id = job.job.data.chain_id,
+                client_id = job
+                    .job
+                    .data
+                    .rpc_credentials
+                    .client_id_for_logs()
+                    .unwrap_or("unknown"),
+                queue_id = EIP7702_SEND_QUEUE_ID,
                 error = ?e,
                 "Failed to queue fail webhook"
             );
