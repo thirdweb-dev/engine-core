@@ -17,6 +17,7 @@ use crate::{
 };
 
 const HEALTH_CHECK_INTERVAL_MS: u64 = 60 * 5 * 1000; // 5 minutes in milliseconds
+const EOA_QUEUE_ID: &str = "eoa_executor";
 
 impl<C: Chain> EoaExecutorWorker<C> {
     // ========== SEND FLOW ==========
@@ -348,7 +349,14 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     if !is_retryable_preparation_error(&e) {
                         tracing::error!(
                             error = ?e,
-                            transaction_id = pending.transaction_id,
+                            transaction_id = %pending.transaction_id,
+                            chain_id = pending.user_request.chain_id,
+                            client_id = pending
+                                .user_request
+                                .rpc_credentials
+                                .client_id_for_logs()
+                                .unwrap_or("unknown"),
+                            queue_id = EOA_QUEUE_ID,
                             "Transaction permanently failed due to non-retryable preparation error",
                         );
                         non_retryable_failures.push((pending, e.clone()));
@@ -548,11 +556,35 @@ impl<C: Chain> EoaExecutorWorker<C> {
                     match &result.result {
                         SubmissionResultType::Success => result,
                         SubmissionResultType::Nack(e) => {
-                            tracing::error!(error = ?e, transaction_id = borrowed_tx.transaction_id, nonce = borrowed_tx.data.signed_transaction.nonce(), "Transaction nack error during send");
+                            tracing::error!(
+                                error = ?e,
+                                transaction_id = %borrowed_tx.transaction_id,
+                                chain_id = borrowed_tx.user_request.chain_id,
+                                client_id = borrowed_tx
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                nonce = borrowed_tx.data.signed_transaction.nonce(),
+                                "Transaction nack error during send"
+                            );
                             result
                         }
                         SubmissionResultType::Fail(e) => {
-                            tracing::error!(error = ?e, transaction_id = borrowed_tx.transaction_id, nonce = borrowed_tx.data.signed_transaction.nonce(), "Transaction failed during send");
+                            tracing::error!(
+                                error = ?e,
+                                transaction_id = %borrowed_tx.transaction_id,
+                                chain_id = borrowed_tx.user_request.chain_id,
+                                client_id = borrowed_tx
+                                    .user_request
+                                    .rpc_credentials
+                                    .client_id_for_logs()
+                                    .unwrap_or("unknown"),
+                                queue_id = EOA_QUEUE_ID,
+                                nonce = borrowed_tx.data.signed_transaction.nonce(),
+                                "Transaction failed during send"
+                            );
                             result
                         }
                     }

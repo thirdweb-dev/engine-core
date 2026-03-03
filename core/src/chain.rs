@@ -25,6 +25,15 @@ impl RpcCredentials {
 
         Ok(header_map)
     }
+
+    pub fn client_id_for_logs(&self) -> Option<&str> {
+        match self {
+            RpcCredentials::Thirdweb(ThirdwebAuth::ClientIdServiceKey(creds)) => {
+                Some(&creds.client_id)
+            }
+            RpcCredentials::Thirdweb(ThirdwebAuth::SecretKey(_)) => None,
+        }
+    }
 }
 
 pub trait Chain: Send + Sync {
