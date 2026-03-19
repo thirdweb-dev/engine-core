@@ -90,8 +90,7 @@ impl MultilaneTestHarness {
     /// Clean up all Redis keys for this test
     async fn cleanup(&self) {
         let mut conn = self.queue.redis.clone();
-        // twmq multilane keys are hash-tagged for Redis Cluster compatibility
-        let keys_pattern = format!("twmq_multilane:{{{}}}:*", self.queue_id);
+        let keys_pattern = format!("twmq_multilane:{}:*", self.queue_id);
 
         let keys: Vec<String> = redis::cmd("KEYS")
             .arg(&keys_pattern)
@@ -166,7 +165,7 @@ impl Drop for MultilaneTestHarness {
 
         tokio::spawn(async move {
             let mut conn = redis;
-            let keys_pattern = format!("twmq_multilane:{{{queue_id}}}:*");
+            let keys_pattern = format!("twmq_multilane:{queue_id}:*");
             let keys: Vec<String> = redis::cmd("KEYS")
                 .arg(&keys_pattern)
                 .query_async(&mut conn)
