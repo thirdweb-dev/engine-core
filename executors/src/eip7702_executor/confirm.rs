@@ -407,3 +407,34 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::transaction_hash_retry_delay;
+
+    #[test]
+    fn transaction_hash_retry_delay_respects_bucket_boundaries() {
+        assert_eq!(transaction_hash_retry_delay(5), Duration::from_secs(2));
+        assert_eq!(transaction_hash_retry_delay(6), Duration::from_secs(10));
+
+        assert_eq!(transaction_hash_retry_delay(20), Duration::from_secs(10));
+        assert_eq!(transaction_hash_retry_delay(21), Duration::from_secs(30));
+
+        assert_eq!(transaction_hash_retry_delay(100), Duration::from_secs(30));
+        assert_eq!(
+            transaction_hash_retry_delay(101),
+            Duration::from_secs(5 * 60)
+        );
+
+        assert_eq!(
+            transaction_hash_retry_delay(1000),
+            Duration::from_secs(5 * 60)
+        );
+        assert_eq!(
+            transaction_hash_retry_delay(1001),
+            Duration::from_secs(30 * 60)
+        );
+    }
+}
