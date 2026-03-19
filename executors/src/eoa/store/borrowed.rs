@@ -231,7 +231,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
                     let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
                     pipeline.expire(&tx_data_key, ttl_seconds);
                     pipeline.expire(
-                        &self.keys.transaction_attempts_list_name(transaction_id),
+                        self.keys.transaction_attempts_list_name(transaction_id),
                         ttl_seconds,
                     );
 

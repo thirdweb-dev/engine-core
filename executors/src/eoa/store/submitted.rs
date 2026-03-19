@@ -364,7 +364,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                         // Add TTL expiration
                         let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
                         pipeline.expire(&data_key_name, ttl_seconds);
-                        pipeline.expire(&self.keys.transaction_attempts_list_name(id), ttl_seconds);
+                        pipeline.expire(self.keys.transaction_attempts_list_name(id), ttl_seconds);
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions

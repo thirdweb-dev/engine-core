@@ -593,7 +593,7 @@ impl AtomicEoaExecutorStore {
         let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
         pipeline.expire(&tx_data_key, ttl_seconds);
         pipeline.expire(
-            &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+            self.transaction_attempts_list_name(&pending_transaction.transaction_id),
             ttl_seconds,
         );
 
@@ -670,7 +670,7 @@ impl AtomicEoaExecutorStore {
             let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
             pipeline.expire(&tx_data_key, ttl_seconds);
             pipeline.expire(
-                &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+                self.transaction_attempts_list_name(&pending_transaction.transaction_id),
                 ttl_seconds,
             );
         }
