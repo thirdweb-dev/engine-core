@@ -29,6 +29,16 @@ use crate::{
     },
 };
 
+fn transaction_hash_retry_delay(attempts: u32) -> Duration {
+    match attempts {
+        0..=5 => Duration::from_secs(2),
+        6..=20 => Duration::from_secs(10),
+        21..=100 => Duration::from_secs(30),
+        101..=1000 => Duration::from_secs(5 * 60),
+        _ => Duration::from_secs(30 * 60),
+    }
+}
+
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -174,6 +184,7 @@ where
         job: &BorrowedJob<Self::JobData>,
     ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
+        let transaction_hash_delay = transaction_hash_retry_delay(job.attempts());
 
         // 1. Get Chain
         let chain = self
@@ -214,10 +225,16 @@ where
                     }
                     .fail()
                 } else {
+                    tracing::warn!(
+                        bundler_transaction_id = job_data.bundler_transaction_id,
+                        attempt = job.attempts(),
+                        retry_delay_seconds = transaction_hash_delay.as_secs(),
+                        "Retrying transaction hash fetch after bundler error"
+                    );
                     Eip7702ConfirmationError::TransactionHashError {
                         message: e.to_string(),
                     }
-                    .nack(Some(Duration::from_secs(2)), RequeuePosition::Last)
+                    .nack(Some(transaction_hash_delay), RequeuePosition::Last)
                 }
             })?;
 
@@ -232,10 +249,16 @@ where
             }
 
             TwGetTransactionHashResponse::Pending => {
+                tracing::debug!(
+                    bundler_transaction_id = job_data.bundler_transaction_id,
+                    attempt = job.attempts(),
+                    retry_delay_seconds = transaction_hash_delay.as_secs(),
+                    "Transaction hash still pending, scheduling retry"
+                );
                 return Err(Eip7702ConfirmationError::TransactionHashPending {
                     message: "Transaction hash not yet available".to_string(),
                 })
-                .map_err_nack(Some(Duration::from_secs(1)), RequeuePosition::Last);
+                .map_err_nack(Some(transaction_hash_delay), RequeuePosition::Last);
             }
         };
 
