@@ -25,6 +25,8 @@ The following environment variables must be set when running the container:
 ```bash
 # Redis Configuration
 APP__REDIS__URL=redis://localhost:6379
+# For Redis over TLS, use the `rediss://` scheme:
+# APP__REDIS__URL=rediss://localhost:6379
 
 # Thirdweb Configuration
 APP__THIRDWEB__SECRET=your_secret_key_here
@@ -68,6 +70,8 @@ Create a `.env` file with your configuration:
 ```bash
 # .env file
 APP__REDIS__URL=redis://localhost:6379
+# For Redis over TLS, use the `rediss://` scheme:
+# APP__REDIS__URL=rediss://localhost:6379
 APP__THIRDWEB__SECRET=your_secret_key_here
 APP__THIRDWEB__CLIENT_ID=your_client_id_here
 APP__THIRDWEB__URLS__RPC=https://your-rpc-url.com
@@ -128,6 +132,8 @@ services:
       - "8080:8080"
     environment:
       - APP__REDIS__URL=redis://redis:6379
+# For Redis over TLS, use the `rediss://` scheme:
+#     - APP__REDIS__URL=rediss://redis:6379
       - APP__THIRDWEB__SECRET=${APP__THIRDWEB__SECRET}
       - APP__THIRDWEB__CLIENT_ID=${APP__THIRDWEB__CLIENT_ID}
       - APP__THIRDWEB__URLS__RPC=${APP__THIRDWEB__URLS__RPC}

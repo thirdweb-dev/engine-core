@@ -70,6 +70,14 @@ async fn main() -> anyhow::Result<()> {
     });
     let eoa_signer = Arc::new(EoaSigner::new(vault_client.clone(), iaw_client.clone()));
     let solana_signer = Arc::new(SolanaSigner::new(vault_client.clone(), iaw_client));
+
+    // Rustls 0.23 requires selecting a process-level CryptoProvider (ring or aws-lc-rs)
+    // before any TLS client configuration is created (e.g. when using `rediss://`).
+    // If another crate already installed a provider, this will be a no-op error.
+    if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
+        tracing::debug!(error = ?e, "Rustls CryptoProvider already installed");
+    }
+
     let redis_client = twmq::redis::Client::open(config.redis.url.as_str())?;
 
     let authorization_cache = EoaAuthorizationCache::new(

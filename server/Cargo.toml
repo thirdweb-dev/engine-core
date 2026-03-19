@@ -51,3 +51,4 @@ moka = { workspace = true }
 engine-eip7702-core = { path = "../eip7702-core" }
 prometheus = { workspace = true }
 thiserror = { workspace = true }
+rustls = { workspace = true }
