@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     match config.server.log_format {
         config::LogFormat::Json => subscriber
-            .with(tracing_subscriber::fmt::layer().json().flatten_event(false))
+            .with(tracing_subscriber::fmt::layer().json())
             .init(),
         config::LogFormat::Pretty => subscriber.with(tracing_subscriber::fmt::layer()).init(),
     }

@@ -31,7 +31,6 @@ use crate::{
 
 const MAX_RETRIES: u32 = 10;
 const RETRY_BASE_DELAY_MS: u64 = 10;
-const EOA_QUEUE_ID: &str = "eoa_executor";
 
 pub trait SafeRedisTransaction: Send + Sync {
     type ValidationData;
@@ -614,18 +613,7 @@ impl AtomicEoaExecutorStore {
                 &mut tx_context,
                 webhook_queue.clone(),
             ) {
-                tracing::error!(
-                    transaction_id = %pending_transaction.transaction_id,
-                    chain_id = pending_transaction.user_request.chain_id,
-                    client_id = pending_transaction
-                        .user_request
-                        .rpc_credentials
-                        .client_id_for_logs()
-                        .unwrap_or("unknown"),
-                    queue_id = EOA_QUEUE_ID,
-                    "Failed to queue webhook for fail: {}",
-                    e
-                );
+                tracing::error!("Failed to queue webhook for fail: {}", e);
             }
         }
 
@@ -707,13 +695,6 @@ impl AtomicEoaExecutorStore {
                 ) {
                     tracing::error!(
                         transaction_id = %pending_transaction.transaction_id,
-                        chain_id = pending_transaction.user_request.chain_id,
-                        client_id = pending_transaction
-                            .user_request
-                            .rpc_credentials
-                            .client_id_for_logs()
-                            .unwrap_or("unknown"),
-                        queue_id = EOA_QUEUE_ID,
                         error = ?e,
                         "Failed to queue webhook for batch fail"
                     );

@@ -22,8 +22,6 @@ use crate::{
     webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
 
-const EOA_QUEUE_ID: &str = "eoa_executor";
-
 #[derive(Debug, Clone)]
 pub struct SubmittedTransaction {
     pub data: SubmittedTransactionDehydrated,
@@ -399,14 +397,6 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                     self.webhook_queue.clone(),
                                 ) {
                                     tracing::error!(
-                                        transaction_id = %tx.transaction_id,
-                                        chain_id = tx.user_request.chain_id,
-                                        client_id = tx
-                                            .user_request
-                                            .rpc_credentials
-                                            .client_id_for_logs()
-                                            .unwrap_or("unknown"),
-                                        queue_id = EOA_QUEUE_ID,
                                         "Failed to queue webhook for confirmed transaction: {}",
                                         e
                                     );
@@ -446,14 +436,6 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                         self.webhook_queue.clone(),
                                     ) {
                                         tracing::error!(
-                                            transaction_id = %tx.transaction_id,
-                                            chain_id = tx.user_request.chain_id,
-                                            client_id = tx
-                                                .user_request
-                                                .rpc_credentials
-                                                .client_id_for_logs()
-                                                .unwrap_or("unknown"),
-                                            queue_id = EOA_QUEUE_ID,
                                             "Failed to queue webhook for replaced transaction: {}",
                                             e
                                         );
