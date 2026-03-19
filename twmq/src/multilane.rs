@@ -9,7 +9,7 @@ use tracing::Instrument;
 
 use crate::{
     CancelResult, DurableExecution, FailHookData, NackHookData, QueueInternalErrorHookData,
-    SuccessHookData, UserCancellable,
+    SuccessHookData, UserCancellable, delay_to_queue_seconds,
     error::TwmqError,
     hooks::TransactionContext,
     job::{
@@ -219,7 +219,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             position: RequeuePosition::Last,
         });
 
-        let delay_secs = delay.delay.as_secs();
+        let delay_secs = delay_to_queue_seconds(delay.delay);
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
@@ -1226,7 +1226,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
                         .as_secs();
-                    let delay_until = now + delay_duration.as_secs();
+                    let delay_until = now + delay_to_queue_seconds(*delay_duration);
                     let pos_str = position.to_string();
 
                     hook_pipeline

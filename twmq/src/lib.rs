@@ -28,6 +28,18 @@ pub use queue::IdempotencyMode;
 pub use redis;
 use tracing::Instrument;
 
+pub(crate) fn delay_to_queue_seconds(delay: Duration) -> u64 {
+    let delay_secs = delay.as_secs();
+
+    if delay.is_zero() {
+        0
+    } else if delay_secs == 0 {
+        1
+    } else {
+        delay_secs
+    }
+}
+
 // Trait for error types to implement user cancellation
 pub trait UserCancellable {
     fn user_cancelled() -> Self;
@@ -297,7 +309,7 @@ impl<H: DurableExecution> Queue<H> {
             position: RequeuePosition::Last,
         });
 
-        let delay_secs = delay.delay.as_secs();
+        let delay_secs = delay_to_queue_seconds(delay.delay);
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
@@ -1049,7 +1061,7 @@ impl<H: DurableExecution> Queue<H> {
 
         // Add to proper queue based on delay and position
         if let Some(delay_duration) = delay {
-            let delay_until = now + delay_duration.as_secs();
+            let delay_until = now + delay_to_queue_seconds(delay_duration);
             let pos_str = position.to_string();
 
             pipeline
