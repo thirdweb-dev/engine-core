@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{DurableExecution, error::TwmqError, job::PushableJob};
+use crate::{DurableExecution, delay_to_queue_seconds, error::TwmqError, job::PushableJob};
 
 // A minimal transaction context that hooks can use
 pub struct TransactionContext<'a> {
@@ -51,7 +51,7 @@ impl<'a> TransactionContext<'a> {
             .sadd(job.queue.dedupe_set_name(), &job.options.id);
 
         if let Some(delay_options) = job.options.delay {
-            let process_at = now + delay_options.delay.as_secs();
+            let process_at = now + delay_to_queue_seconds(delay_options.delay);
             self.pipeline
                 .hset(
                     job.queue.job_meta_hash_name(&job.options.id),

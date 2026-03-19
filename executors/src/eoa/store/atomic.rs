@@ -4,8 +4,7 @@ use alloy::{
     consensus::{Signed, TypedTransaction},
     primitives::Address,
 };
-use twmq::redis::{AsyncCommands, Pipeline};
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::{
     eoa::{
@@ -31,7 +30,6 @@ use crate::{
 
 const MAX_RETRIES: u32 = 10;
 const RETRY_BASE_DELAY_MS: u64 = 10;
-const EOA_QUEUE_ID: &str = "eoa_executor";
 
 pub trait SafeRedisTransaction: Send + Sync {
     type ValidationData;
@@ -45,7 +43,7 @@ pub trait SafeRedisTransaction: Send + Sync {
     ) -> Self::OperationResult;
     fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         store: &EoaExecutorStore,
     ) -> impl Future<Output = Result<Self::ValidationData, TransactionStoreError>> + Send;
     fn watch_keys(&self) -> Vec<String>;
@@ -595,7 +593,7 @@ impl AtomicEoaExecutorStore {
         let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
         pipeline.expire(&tx_data_key, ttl_seconds);
         pipeline.expire(
-            &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+            self.transaction_attempts_list_name(&pending_transaction.transaction_id),
             ttl_seconds,
         );
 
@@ -614,18 +612,7 @@ impl AtomicEoaExecutorStore {
                 &mut tx_context,
                 webhook_queue.clone(),
             ) {
-                tracing::error!(
-                    transaction_id = %pending_transaction.transaction_id,
-                    chain_id = pending_transaction.user_request.chain_id,
-                    client_id = pending_transaction
-                        .user_request
-                        .rpc_credentials
-                        .client_id_for_logs()
-                        .unwrap_or("unknown"),
-                    queue_id = EOA_QUEUE_ID,
-                    "Failed to queue webhook for fail: {}",
-                    e
-                );
+                tracing::error!("Failed to queue webhook for fail: {}", e);
             }
         }
 
@@ -683,7 +670,7 @@ impl AtomicEoaExecutorStore {
             let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
             pipeline.expire(&tx_data_key, ttl_seconds);
             pipeline.expire(
-                &self.transaction_attempts_list_name(&pending_transaction.transaction_id),
+                self.transaction_attempts_list_name(&pending_transaction.transaction_id),
                 ttl_seconds,
             );
         }
@@ -707,13 +694,6 @@ impl AtomicEoaExecutorStore {
                 ) {
                     tracing::error!(
                         transaction_id = %pending_transaction.transaction_id,
-                        chain_id = pending_transaction.user_request.chain_id,
-                        client_id = pending_transaction
-                            .user_request
-                            .rpc_credentials
-                            .client_id_for_logs()
-                            .unwrap_or("unknown"),
-                        queue_id = EOA_QUEUE_ID,
                         error = ?e,
                         "Failed to queue webhook for batch fail"
                     );
@@ -835,7 +815,7 @@ impl SafeRedisTransaction for ResetNoncesTransaction<'_> {
 
     async fn validation(
         &self,
-        _conn: &mut ClusterConnection,
+        _conn: &mut ConnectionManager,
         store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;

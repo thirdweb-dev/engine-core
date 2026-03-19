@@ -45,7 +45,7 @@ impl SolanaRpcCache {
         };
 
         let key = RpcCacheKey {
-            chain_id: chain_id.clone(),
+            chain_id,
             rpc_url: rpc_url.clone(),
         };
 

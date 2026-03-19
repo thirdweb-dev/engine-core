@@ -2,16 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use redis::{AsyncCommands, Pipeline, RedisResult};
-use redis::cluster_async::ClusterConnection;
+use redis::{AsyncCommands, Pipeline, RedisResult, aio::ConnectionManager};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tracing::Instrument;
 
 use crate::{
     CancelResult, DurableExecution, FailHookData, NackHookData, QueueInternalErrorHookData,
-    SuccessHookData, UserCancellable,
-    ENGINE_HASH_TAG,
+    SuccessHookData, UserCancellable, delay_to_queue_seconds,
     error::TwmqError,
     hooks::TransactionContext,
     job::{
@@ -28,7 +26,7 @@ pub struct MultilaneQueue<H>
 where
     H: DurableExecution,
 {
-    pub redis: ClusterConnection,
+    pub redis: ConnectionManager,
     handler: Arc<H>,
     options: QueueOptions,
     /// Unique identifier for this multilane queue instance
@@ -52,13 +50,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         options: Option<QueueOptions>,
         handler: H,
     ) -> Result<Self, TwmqError> {
-        let initial_nodes: Vec<&str> = redis_url
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let client = redis::cluster::ClusterClient::new(initial_nodes)?;
-        let redis = client.get_async_connection().await?;
+        let client = redis::Client::open(redis_url)?;
+        let redis = client.get_connection_manager().await?;
 
         let queue = Self {
             redis,
@@ -93,81 +86,57 @@ impl<H: DurableExecution> MultilaneQueue<H> {
 
     // Redis key naming methods with proper multilane namespacing
     pub fn lanes_zset_name(&self) -> String {
-        format!("twmq_multilane:{}:{}:lanes", ENGINE_HASH_TAG, self.queue_id)
+        format!("twmq_multilane:{}:lanes", self.queue_id)
     }
 
     pub fn lane_pending_list_name(&self, lane_id: &str) -> String {
-        format!(
-            "twmq_multilane:{}:{}:lane:{}:pending",
-            ENGINE_HASH_TAG, self.queue_id, lane_id
-        )
+        format!("twmq_multilane:{}:lane:{}:pending", self.queue_id, lane_id)
     }
 
     pub fn lane_delayed_zset_name(&self, lane_id: &str) -> String {
-        format!(
-            "twmq_multilane:{}:{}:lane:{}:delayed",
-            ENGINE_HASH_TAG, self.queue_id, lane_id
-        )
+        format!("twmq_multilane:{}:lane:{}:delayed", self.queue_id, lane_id)
     }
 
     pub fn lane_active_hash_name(&self, lane_id: &str) -> String {
-        format!(
-            "twmq_multilane:{}:{}:lane:{}:active",
-            ENGINE_HASH_TAG, self.queue_id, lane_id
-        )
+        format!("twmq_multilane:{}:lane:{}:active", self.queue_id, lane_id)
     }
 
     pub fn success_list_name(&self) -> String {
-        format!("twmq_multilane:{}:{}:success", ENGINE_HASH_TAG, self.queue_id)
+        format!("twmq_multilane:{}:success", self.queue_id)
     }
 
     pub fn failed_list_name(&self) -> String {
-        format!("twmq_multilane:{}:{}:failed", ENGINE_HASH_TAG, self.queue_id)
+        format!("twmq_multilane:{}:failed", self.queue_id)
     }
 
     pub fn job_data_hash_name(&self) -> String {
-        format!(
-            "twmq_multilane:{}:{}:jobs:data",
-            ENGINE_HASH_TAG, self.queue_id
-        )
+        format!("twmq_multilane:{}:jobs:data", self.queue_id)
     }
 
     pub fn job_meta_hash_name(&self, job_id: &str) -> String {
-        format!(
-            "twmq_multilane:{}:{}:job:{}:meta",
-            ENGINE_HASH_TAG, self.queue_id, job_id
-        )
+        format!("twmq_multilane:{}:job:{}:meta", self.queue_id, job_id)
     }
 
     pub fn job_errors_list_name(&self, job_id: &str) -> String {
-        format!(
-            "twmq_multilane:{}:{}:job:{}:errors",
-            ENGINE_HASH_TAG, self.queue_id, job_id
-        )
+        format!("twmq_multilane:{}:job:{}:errors", self.queue_id, job_id)
     }
 
     pub fn job_result_hash_name(&self) -> String {
-        format!(
-            "twmq_multilane:{}:{}:jobs:result",
-            ENGINE_HASH_TAG, self.queue_id
-        )
+        format!("twmq_multilane:{}:jobs:result", self.queue_id)
     }
 
     pub fn dedupe_set_name(&self) -> String {
-        format!("twmq_multilane:{}:{}:dedup", ENGINE_HASH_TAG, self.queue_id)
+        format!("twmq_multilane:{}:dedup", self.queue_id)
     }
 
     pub fn pending_cancellation_set_name(&self) -> String {
-        format!(
-            "twmq_multilane:{}:{}:pending_cancellations",
-            ENGINE_HASH_TAG, self.queue_id
-        )
+        format!("twmq_multilane:{}:pending_cancellations", self.queue_id)
     }
 
     pub fn lease_key_name(&self, job_id: &str, lease_token: &str) -> String {
         format!(
-            "twmq_multilane:{}:{}:job:{}:lease:{}",
-            ENGINE_HASH_TAG, self.queue_id, job_id, lease_token
+            "twmq_multilane:{}:job:{}:lease:{}",
+            self.queue_id, job_id, lease_token
         )
     }
 
@@ -250,7 +219,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             position: RequeuePosition::Last,
         });
 
-        let delay_secs = delay.delay.as_secs();
+        let delay_secs = delay_to_queue_seconds(delay.delay);
         let position_string = delay.position.to_string();
 
         let _result: (i32, String) = script
@@ -403,9 +372,9 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 return "not_found"
             end
             
-            local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
-            local lane_delayed_zset = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
-            local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
             
             -- Try to remove from pending queue
             if redis.call('LREM', lane_pending_list, 0, job_id) > 0 then
@@ -594,20 +563,20 @@ impl<H: DurableExecution> MultilaneQueue<H> {
 
             -- Helper function to cleanup expired leases for a specific lane
             local function cleanup_lane_leases(lane_id)
-                        local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
-                        local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
                 
                 local active_jobs = redis.call('HGETALL', lane_active_hash)
                 
                 for i = 1, #active_jobs, 2 do
                     local job_id = active_jobs[i]
                     local attempts = active_jobs[i + 1]
-                    local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                    local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
                     
                     local current_lease_token = redis.call('HGET', job_meta_hash, 'lease_token')
                     
                     if current_lease_token then
-                        local lease_key = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
+                        local lease_key = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. current_lease_token
                         local lease_exists = redis.call('EXISTS', lease_key)
                         
                         if lease_exists == 0 then
@@ -628,12 +597,12 @@ impl<H: DurableExecution> MultilaneQueue<H> {
 
             -- Helper function to move delayed jobs to pending for a specific lane
             local function process_delayed_jobs(lane_id)
-                local lane_delayed_zset = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
-                local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
                 
                 local delayed_jobs = redis.call('ZRANGEBYSCORE', lane_delayed_zset, 0, now)
                 for i, job_id in ipairs(delayed_jobs) do
-                    local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                    local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
                     local reentry_position = redis.call('HGET', job_meta_hash, 'reentry_position') or 'last'
 
                     redis.call('ZREM', lane_delayed_zset, job_id)
@@ -649,8 +618,8 @@ impl<H: DurableExecution> MultilaneQueue<H> {
 
             -- Helper function to pop one job from a lane
             local function pop_job_from_lane(lane_id)
-                local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
-                local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
                 
                 local job_id = redis.call('RPOP', lane_pending_list)
                 if not job_id then
@@ -662,13 +631,13 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                     return nil
                 end
 
-                local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
                 redis.call('HSET', job_meta_hash, 'processed_at', now)
                 local created_at = redis.call('HGET', job_meta_hash, 'created_at') or now
                 local attempts = redis.call('HINCRBY', job_meta_hash, 'attempts', 1)
 
                 local lease_token = now .. '_' .. job_id .. '_' .. attempts
-                local lease_key = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
+                local lease_key = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':lease:' .. lease_token
                 
                 redis.call('SET', lease_key, '1')
                 redis.call('EXPIRE', lease_key, lease_seconds)
@@ -682,11 +651,11 @@ impl<H: DurableExecution> MultilaneQueue<H> {
             local cancel_requests = redis.call('SMEMBERS', pending_cancellation_set)
             
             for i, job_id in ipairs(cancel_requests) do
-                local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. job_id .. ':meta'
+                local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. job_id .. ':meta'
                 local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
                 
                 if lane_id then
-                    local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                    local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
                     
                     if redis.call('HEXISTS', lane_active_hash, job_id) == 1 then
                         -- Still processing, keep in cancellation set
@@ -751,9 +720,9 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         empty_lanes_count = empty_lanes_count + 1
                         
                         -- Check if lane should be removed from Redis
-                        local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
-                        local lane_delayed_zset = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
-                        local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                        local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                        local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                        local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
                         
                         local pending_count = redis.call('LLEN', lane_pending_list)
                         local delayed_count = redis.call('ZCARD', lane_delayed_zset)
@@ -987,12 +956,12 @@ impl<H: DurableExecution> MultilaneQueue<H> {
     async fn post_success_completion(&self) -> Result<(), TwmqError> {
         let trim_script = redis::Script::new(
             r#"
-                local queue_id = ARGV[2]
-                local list_name = KEYS[1]
-                local job_data_hash = KEYS[2]
-                local results_hash = KEYS[3]
-                local dedupe_set_name = KEYS[4]
-                local lanes_zset = KEYS[5]
+                local queue_id = KEYS[1]
+                local list_name = KEYS[2]
+                local job_data_hash = KEYS[3]
+                local results_hash = KEYS[4]
+                local dedupe_set_name = KEYS[5]
+                local lanes_zset = KEYS[6]
 
                 local max_len = tonumber(ARGV[1])
 
@@ -1002,16 +971,16 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
                         -- Get the lane_id for this job to check if it's active/pending/delayed
-                        local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
                         local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
                         
                         local should_delete = true
                         
                         if lane_id then
                             -- Check if job is in any active state for this lane
-                            local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
-                            local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
-                            local lane_delayed_zset = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
                             
                             local is_active = redis.call('HEXISTS', lane_active_hash, j_id) == 1
                             local is_pending = redis.call('LPOS', lane_pending_list, j_id) ~= nil
@@ -1024,7 +993,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         end
                         
                         if should_delete then
-                            local errors_list_name = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                            local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
                             redis.call('SREM', dedupe_set_name, j_id)
                             redis.call('HDEL', job_data_hash, j_id)
@@ -1041,13 +1010,13 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         );
 
         let trimmed_count: usize = trim_script
+            .key(self.queue_id())
             .key(self.success_list_name())
             .key(self.job_data_hash_name())
             .key(self.job_result_hash_name())
             .key(self.dedupe_set_name())
             .key(self.lanes_zset_name()) // Need to check lanes
             .arg(self.options.max_success)
-            .arg(self.queue_id())
             .invoke_async(&mut self.redis.clone())
             .await?;
 
@@ -1137,10 +1106,10 @@ impl<H: DurableExecution> MultilaneQueue<H> {
     async fn post_fail_completion(&self) -> Result<(), TwmqError> {
         let trim_script = redis::Script::new(
             r#"
-                local queue_id = ARGV[2]
-                local list_name = KEYS[1]
-                local job_data_hash = KEYS[2]
-                local dedupe_set_name = KEYS[3]
+                local queue_id = KEYS[1]
+                local list_name = KEYS[2]
+                local job_data_hash = KEYS[3]
+                local dedupe_set_name = KEYS[4]
 
                 local max_len = tonumber(ARGV[1])
 
@@ -1150,16 +1119,16 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                 if #job_ids_to_delete > 0 then
                     for _, j_id in ipairs(job_ids_to_delete) do
                         -- Get the lane_id for this job to check if it's active/pending/delayed
-                        local job_meta_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. j_id .. ':meta'
+                        local job_meta_hash = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':meta'
                         local lane_id = redis.call('HGET', job_meta_hash, 'lane_id')
                         
                         local should_delete = true
                         
                         if lane_id then
                             -- Check if job is in any active state for this lane
-                            local lane_active_hash = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':active'
-                            local lane_pending_list = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
-                            local lane_delayed_zset = 'twmq_multilane:{engine}:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
+                            local lane_active_hash = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':active'
+                            local lane_pending_list = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':pending'
+                            local lane_delayed_zset = 'twmq_multilane:' .. queue_id .. ':lane:' .. lane_id .. ':delayed'
                             
                             local is_active = redis.call('HEXISTS', lane_active_hash, j_id) == 1
                             local is_pending = redis.call('LPOS', lane_pending_list, j_id) ~= nil
@@ -1172,7 +1141,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         end
                         
                         if should_delete then
-                            local errors_list_name = 'twmq_multilane:{engine}:' .. queue_id .. ':job:' .. j_id .. ':errors'
+                            local errors_list_name = 'twmq_multilane:' .. queue_id .. ':job:' .. j_id .. ':errors'
 
                             redis.call('SREM', dedupe_set_name, j_id)
                             redis.call('HDEL', job_data_hash, j_id)
@@ -1188,11 +1157,11 @@ impl<H: DurableExecution> MultilaneQueue<H> {
         );
 
         let trimmed_count: usize = trim_script
+            .key(self.queue_id())
             .key(self.failed_list_name())
             .key(self.job_data_hash_name())
             .key(self.dedupe_set_name())
             .arg(self.options.max_failed)
-            .arg(self.queue_id())
             .invoke_async(&mut self.redis.clone())
             .await?;
 
@@ -1257,7 +1226,7 @@ impl<H: DurableExecution> MultilaneQueue<H> {
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
                         .as_secs();
-                    let delay_until = now + delay_duration.as_secs();
+                    let delay_until = now + delay_to_queue_seconds(*delay_duration);
                     let pos_str = position.to_string();
 
                     hook_pipeline

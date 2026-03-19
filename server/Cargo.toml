@@ -27,7 +27,6 @@ futures = { workspace = true }
 serde-bool = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
-rustls = { workspace = true }
 solana-sdk = { workspace = true }
 solana-client = { workspace = true }
 aide = { workspace = true, features = [

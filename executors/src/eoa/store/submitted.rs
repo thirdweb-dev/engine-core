@@ -5,8 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use twmq::redis::{AsyncCommands, Pipeline};
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::{
     TransactionCounts,
@@ -21,8 +20,6 @@ use crate::{
     metrics::{EoaMetrics, calculate_duration_seconds, current_timestamp_ms},
     webhook::{WebhookJobHandler, queue_webhook_envelopes},
 };
-
-const EOA_QUEUE_ID: &str = "eoa_executor";
 
 #[derive(Debug, Clone)]
 pub struct SubmittedTransaction {
@@ -282,7 +279,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         // Fetch transactions up to the latest confirmed nonce for replacements
@@ -367,7 +364,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                         // Add TTL expiration
                         let ttl_seconds = self.completed_transaction_ttl_seconds as i64;
                         pipeline.expire(&data_key_name, ttl_seconds);
-                        pipeline.expire(&self.keys.transaction_attempts_list_name(id), ttl_seconds);
+                        pipeline.expire(self.keys.transaction_attempts_list_name(id), ttl_seconds);
 
                         if let SubmittedTransactionHydrated::Real(tx) = tx {
                             // Record metrics: transaction queued to mined for confirmed transactions
@@ -399,14 +396,6 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                     self.webhook_queue.clone(),
                                 ) {
                                     tracing::error!(
-                                        transaction_id = %tx.transaction_id,
-                                        chain_id = tx.user_request.chain_id,
-                                        client_id = tx
-                                            .user_request
-                                            .rpc_credentials
-                                            .client_id_for_logs()
-                                            .unwrap_or("unknown"),
-                                        queue_id = EOA_QUEUE_ID,
                                         "Failed to queue webhook for confirmed transaction: {}",
                                         e
                                     );
@@ -446,14 +435,6 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
                                         self.webhook_queue.clone(),
                                     ) {
                                         tracing::error!(
-                                            transaction_id = %tx.transaction_id,
-                                            chain_id = tx.user_request.chain_id,
-                                            client_id = tx
-                                                .user_request
-                                                .rpc_credentials
-                                                .client_id_for_logs()
-                                                .unwrap_or("unknown"),
-                                            queue_id = EOA_QUEUE_ID,
                                             "Failed to queue webhook for replaced transaction: {}",
                                             e
                                         );
@@ -611,7 +592,7 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         // get the highest submitted nonce

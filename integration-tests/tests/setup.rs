@@ -168,15 +168,8 @@ impl TestEnvironment {
         let solana_signer = Arc::new(SolanaSigner::new(vault_client.clone(), iaw_client));
 
         // Setup Redis
-        let initial_nodes: Vec<&str> = config
-            .redis
-            .url
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let redis_client = twmq::redis::cluster::ClusterClient::new(initial_nodes)
-            .context("Failed to connect to Valkey Cluster")?;
+        let redis_client = twmq::redis::Client::open(config.redis.url.as_str())
+            .context("Failed to connect to Redis")?;
 
         let authorization_cache = EoaAuthorizationCache::new(
             moka::future::Cache::builder()
@@ -260,7 +253,7 @@ impl TestEnvironment {
 
         let execution_router = thirdweb_engine::ExecutionRouter {
             namespace: queue_config.execution_namespace.clone(),
-            redis: redis_client.get_async_connection().await?,
+            redis: redis_client.get_connection_manager().await?,
             authorization_cache,
             webhook_queue: queue_manager.webhook_queue.clone(),
             external_bundler_send_queue: queue_manager.external_bundler_send_queue.clone(),

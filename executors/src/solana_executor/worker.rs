@@ -221,7 +221,7 @@ impl DurableExecution for SolanaExecutorJobHandler {
     type JobData = SolanaExecutorJobData;
 
     #[tracing::instrument(
-        skip(self, job), 
+        skip(self, job),
         fields(
             transaction_id = job.job.id,
             stage = Self::stage_name()
@@ -648,7 +648,6 @@ impl SolanaExecutorJobHandler {
                                         let has_signatures = versioned_tx.signatures.iter().any(|sig| {
                                             sig.as_ref() != [0u8; 64]
                                         });
-                                        
                                         if has_signatures {
                                             error!(
                                                 transaction_id = %transaction_id,
