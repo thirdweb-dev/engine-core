@@ -7,10 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use twmq::{
     error::TwmqError,
-    redis::{AsyncCommands, Pipeline},
+    redis::{AsyncCommands, Pipeline, aio::ConnectionManager},
 };
-use twmq::redis::cluster_async::ClusterConnection;
-use twmq::redis::cluster::ClusterClient;
 use uuid::Uuid;
 
 const CACHE_PREFIX: &str = "deployment_cache";
@@ -18,12 +16,12 @@ const LOCK_PREFIX: &str = "deployment_lock";
 
 #[derive(Clone)]
 pub struct RedisDeploymentCache {
-    connection: ClusterConnection,
+    connection_manager: twmq::redis::aio::ConnectionManager,
 }
 
 #[derive(Clone)]
 pub struct RedisDeploymentLock {
-    connection: ClusterConnection,
+    connection_manager: twmq::redis::aio::ConnectionManager,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -33,21 +31,18 @@ struct LockData {
 }
 
 impl RedisDeploymentCache {
-    pub async fn new(client: ClusterClient) -> Result<Self, TwmqError> {
+    pub async fn new(client: twmq::redis::Client) -> Result<Self, TwmqError> {
         Ok(Self {
-            connection: client.get_async_connection().await?,
+            connection_manager: ConnectionManager::new(client).await?,
         })
     }
 
-    pub fn conn(&self) -> &ClusterConnection {
-        &self.connection
+    pub fn conn(&self) -> &ConnectionManager {
+        &self.connection_manager
     }
 
     fn cache_key(&self, chain_id: u64, account_address: &Address) -> String {
-        format!(
-            "{}:{CACHE_PREFIX}:{chain_id}:{account_address}",
-            twmq::ENGINE_HASH_TAG
-        )
+        format!("{CACHE_PREFIX}:{chain_id}:{account_address}")
     }
 }
 
@@ -65,28 +60,22 @@ impl DeploymentCache for RedisDeploymentCache {
 }
 
 impl RedisDeploymentLock {
-    pub async fn new(client: ClusterClient) -> Result<Self, TwmqError> {
+    pub async fn new(client: twmq::redis::Client) -> Result<Self, TwmqError> {
         Ok(Self {
-            connection: client.get_async_connection().await?,
+            connection_manager: ConnectionManager::new(client).await?,
         })
     }
 
-    pub fn conn(&self) -> &ClusterConnection {
-        &self.connection
+    pub fn conn(&self) -> &ConnectionManager {
+        &self.connection_manager
     }
 
     fn lock_key(&self, chain_id: u64, account_address: &Address) -> String {
-        format!(
-            "{}:{LOCK_PREFIX}:{chain_id}:{account_address}",
-            twmq::ENGINE_HASH_TAG
-        )
+        format!("{LOCK_PREFIX}:{chain_id}:{account_address}")
     }
 
     fn cache_key(&self, chain_id: u64, account_address: &Address) -> String {
-        format!(
-            "{}:{CACHE_PREFIX}:{chain_id}:{account_address}",
-            twmq::ENGINE_HASH_TAG
-        )
+        format!("{CACHE_PREFIX}:{chain_id}:{account_address}")
     }
 
     /// Release a deployment lock using the provided pipeline

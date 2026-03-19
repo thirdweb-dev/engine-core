@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use twmq::Queue;
-use twmq::redis::{AsyncCommands, Pipeline};
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::eoa::EoaExecutorStore;
 use crate::eoa::{
@@ -72,7 +71,7 @@ impl SafeRedisTransaction for ProcessBorrowedTransactions<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         // Get all borrowed transaction IDs

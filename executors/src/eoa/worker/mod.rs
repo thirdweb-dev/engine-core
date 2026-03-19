@@ -11,7 +11,7 @@ use engine_eip7702_core::delegated_account::DelegatedAccount;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use twmq::Queue;
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::aio::ConnectionManager;
 use twmq::{
     DurableExecution, FailHookData, NackHookData, SuccessHookData,
     hooks::TransactionContext,
@@ -114,7 +114,7 @@ where
     pub webhook_queue: Arc<Queue<WebhookJobHandler>>,
     pub authorization_cache: EoaAuthorizationCache,
 
-    pub redis: ClusterConnection,
+    pub redis: ConnectionManager,
     pub namespace: Option<String>,
 
     pub eoa_signer: Arc<EoaSigner>,

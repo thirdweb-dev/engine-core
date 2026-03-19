@@ -9,8 +9,7 @@ use engine_core::transaction::TransactionTypeData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Deref;
-use twmq::redis::AsyncCommands;
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::{AsyncCommands, aio::ConnectionManager};
 
 mod atomic;
 mod borrowed;
@@ -99,7 +98,7 @@ pub struct TransactionData {
 
 /// Transaction store focused on transaction_id operations and nonce indexing
 pub struct EoaExecutorStore {
-    pub redis: ClusterConnection,
+    pub redis: ConnectionManager,
     pub keys: EoaExecutorStoreKeys,
     pub completed_transaction_ttl_seconds: u64,
 }
@@ -122,14 +121,8 @@ impl EoaExecutorStoreKeys {
     /// Lock key name for EOA processing
     pub fn eoa_lock_key_name(&self) -> String {
         match &self.namespace {
-            Some(ns) => format!(
-                "{ns}:{}:eoa_executor:lock:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
-            None => format!(
-                "{}:eoa_executor:lock:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            Some(ns) => format!("{ns}:eoa_executor:lock:{}:{}", self.chain_id, self.eoa),
+            None => format!("eoa_executor:lock:{}:{}", self.chain_id, self.eoa),
         }
     }
 
@@ -144,14 +137,8 @@ impl EoaExecutorStoreKeys {
     /// - "failure_reason": String failure reason (optional)
     pub fn transaction_data_key_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
-            Some(ns) => format!(
-                "{ns}:{}:eoa_executor:tx_data:{transaction_id}",
-                twmq::ENGINE_HASH_TAG
-            ),
-            None => format!(
-                "{}:eoa_executor:tx_data:{transaction_id}",
-                twmq::ENGINE_HASH_TAG
-            ),
+            Some(ns) => format!("{ns}:eoa_executor:tx_data:{transaction_id}"),
+            None => format!("eoa_executor:tx_data:{transaction_id}"),
         }
     }
 
@@ -161,14 +148,8 @@ impl EoaExecutorStoreKeys {
     /// of a TransactionAttempt. This allows efficient append operations.
     pub fn transaction_attempts_list_name(&self, transaction_id: &str) -> String {
         match &self.namespace {
-            Some(ns) => format!(
-                "{ns}:{}:eoa_executor:tx_attempts:{transaction_id}",
-                twmq::ENGINE_HASH_TAG
-            ),
-            None => format!(
-                "{}:eoa_executor:tx_attempts:{transaction_id}",
-                twmq::ENGINE_HASH_TAG
-            ),
+            Some(ns) => format!("{ns}:eoa_executor:tx_attempts:{transaction_id}"),
+            None => format!("eoa_executor:tx_attempts:{transaction_id}"),
         }
     }
 
@@ -178,13 +159,10 @@ impl EoaExecutorStoreKeys {
     pub fn pending_transactions_zset_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:pending_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:pending_txs:{}:{}",
+                self.chain_id, self.eoa
             ),
-            None => format!(
-                "{}:eoa_executor:pending_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            None => format!("eoa_executor:pending_txs:{}:{}", self.chain_id, self.eoa),
         }
     }
 
@@ -194,27 +172,18 @@ impl EoaExecutorStoreKeys {
     pub fn submitted_transactions_zset_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:submitted_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:submitted_txs:{}:{}",
+                self.chain_id, self.eoa
             ),
-            None => format!(
-                "{}:eoa_executor:submitted_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            None => format!("eoa_executor:submitted_txs:{}:{}", self.chain_id, self.eoa),
         }
     }
 
     /// Name of the key that maps transaction hash to transaction id
     pub fn transaction_hash_to_id_key_name(&self, hash: &str) -> String {
         match &self.namespace {
-            Some(ns) => format!(
-                "{ns}:{}:eoa_executor:tx_hash_to_id:{hash}",
-                twmq::ENGINE_HASH_TAG
-            ),
-            None => format!(
-                "{}:eoa_executor:tx_hash_to_id:{hash}",
-                twmq::ENGINE_HASH_TAG
-            ),
+            Some(ns) => format!("{ns}:eoa_executor:tx_hash_to_id:{hash}"),
+            None => format!("eoa_executor:tx_hash_to_id:{hash}"),
         }
     }
 
@@ -228,13 +197,10 @@ impl EoaExecutorStoreKeys {
     pub fn borrowed_transactions_hashmap_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:borrowed_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:borrowed_txs:{}:{}",
+                self.chain_id, self.eoa
             ),
-            None => format!(
-                "{}:eoa_executor:borrowed_txs:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            None => format!("eoa_executor:borrowed_txs:{}:{}", self.chain_id, self.eoa),
         }
     }
 
@@ -248,12 +214,12 @@ impl EoaExecutorStoreKeys {
     pub fn recycled_nonces_zset_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:recycled_nonces:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:recycled_nonces:{}:{}",
+                self.chain_id, self.eoa
             ),
             None => format!(
-                "{}:eoa_executor:recycled_nonces:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "eoa_executor:recycled_nonces:{}:{}",
+                self.chain_id, self.eoa
             ),
         }
     }
@@ -270,12 +236,12 @@ impl EoaExecutorStoreKeys {
     pub fn optimistic_transaction_count_key_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:optimistic_nonce:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:optimistic_nonce:{}:{}",
+                self.chain_id, self.eoa
             ),
             None => format!(
-                "{}:eoa_executor:optimistic_nonce:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "eoa_executor:optimistic_nonce:{}:{}",
+                self.chain_id, self.eoa
             ),
         }
     }
@@ -290,13 +256,10 @@ impl EoaExecutorStoreKeys {
     pub fn last_transaction_count_key_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:last_tx_nonce:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:last_tx_nonce:{}:{}",
+                self.chain_id, self.eoa
             ),
-            None => format!(
-                "{}:eoa_executor:last_tx_nonce:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            None => format!("eoa_executor:last_tx_nonce:{}:{}", self.chain_id, self.eoa),
         }
     }
 
@@ -308,14 +271,8 @@ impl EoaExecutorStoreKeys {
     /// - timestamp of the last 5 nonce resets
     pub fn eoa_health_key_name(&self) -> String {
         match &self.namespace {
-            Some(ns) => format!(
-                "{ns}:{}:eoa_executor:health:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
-            None => format!(
-                "{}:eoa_executor:health:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
-            ),
+            Some(ns) => format!("{ns}:eoa_executor:health:{}:{}", self.chain_id, self.eoa),
+            None => format!("eoa_executor:health:{}:{}", self.chain_id, self.eoa),
         }
     }
 
@@ -325,12 +282,12 @@ impl EoaExecutorStoreKeys {
     pub fn manual_reset_key_name(&self) -> String {
         match &self.namespace {
             Some(ns) => format!(
-                "{ns}:{}:eoa_executor:pending_manual_reset:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "{ns}:eoa_executor:pending_manual_reset:{}:{}",
+                self.chain_id, self.eoa
             ),
             None => format!(
-                "{}:eoa_executor:pending_manual_reset:{}:{}",
-                twmq::ENGINE_HASH_TAG, self.chain_id, self.eoa
+                "eoa_executor:pending_manual_reset:{}:{}",
+                self.chain_id, self.eoa
             ),
         }
     }
@@ -338,7 +295,7 @@ impl EoaExecutorStoreKeys {
 
 impl EoaExecutorStore {
     pub fn new(
-        redis: ClusterConnection,
+        redis: ConnectionManager,
         namespace: Option<String>,
         eoa: Address,
         chain_id: u64,

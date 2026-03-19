@@ -5,8 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use twmq::redis::{AsyncCommands, Pipeline};
-use twmq::redis::cluster_async::ClusterConnection;
+use twmq::redis::{AsyncCommands, Pipeline, aio::ConnectionManager};
 
 use crate::{
     TransactionCounts,
@@ -280,7 +279,7 @@ impl SafeRedisTransaction for CleanSubmittedTransactions<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         // Fetch transactions up to the latest confirmed nonce for replacements
@@ -593,7 +592,7 @@ impl SafeRedisTransaction for CleanAndGetRecycledNonces<'_> {
 
     async fn validation(
         &self,
-        conn: &mut ClusterConnection,
+        conn: &mut ConnectionManager,
         _store: &EoaExecutorStore,
     ) -> Result<Self::ValidationData, TransactionStoreError> {
         // get the highest submitted nonce

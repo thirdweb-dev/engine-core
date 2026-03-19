@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use redis::cluster::ClusterClient;
-use redis::cluster_async::ClusterConnection;
+use redis::{Client, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
 
 use crate::{DurableExecution, Queue, error::TwmqError};
@@ -66,8 +65,8 @@ pub struct HasHandler;
 
 enum RedisSource {
     Url(String),
-    ClusterClient(ClusterClient),
-    ClusterConnection(ClusterConnection),
+    Client(Client),
+    ConnectionManager(ConnectionManager),
 }
 
 // Builder with typestate pattern
@@ -115,9 +114,9 @@ impl<H: DurableExecution, N, Hn> QueueBuilder<H, NoRedis, N, Hn> {
     }
 
     /// Set Redis connection from existing client
-    pub fn redis_client(self, client: ClusterClient) -> QueueBuilder<H, HasRedis, N, Hn> {
+    pub fn redis_client(self, client: Client) -> QueueBuilder<H, HasRedis, N, Hn> {
         QueueBuilder {
-            redis_source: Some(RedisSource::ClusterClient(client)),
+            redis_source: Some(RedisSource::Client(client)),
             name: self.name,
             options: self.options,
             handler: self.handler,
@@ -125,10 +124,13 @@ impl<H: DurableExecution, N, Hn> QueueBuilder<H, NoRedis, N, Hn> {
         }
     }
 
-    /// Set Redis connection from an existing cluster connection
-    pub fn redis_connection(self, conn: ClusterConnection) -> QueueBuilder<H, HasRedis, N, Hn> {
+    /// Set Redis connection from existing connection manager
+    pub fn redis_connection_manager(
+        self,
+        manager: ConnectionManager,
+    ) -> QueueBuilder<H, HasRedis, N, Hn> {
         QueueBuilder {
-            redis_source: Some(RedisSource::ClusterConnection(conn)),
+            redis_source: Some(RedisSource::ConnectionManager(manager)),
             name: self.name,
             options: self.options,
             handler: self.handler,
@@ -190,16 +192,11 @@ impl<H: DurableExecution> QueueBuilder<H, HasRedis, HasName, HasHandler> {
 
         let redis = match redis_source {
             RedisSource::Url(url) => {
-                let initial_nodes: Vec<&str> = url
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                let client = ClusterClient::new(initial_nodes)?;
-                client.get_async_connection().await?
+                let client = Client::open(url)?;
+                client.get_connection_manager().await?
             }
-            RedisSource::ClusterClient(client) => client.get_async_connection().await?,
-            RedisSource::ClusterConnection(conn) => conn,
+            RedisSource::Client(client) => client.get_connection_manager().await?,
+            RedisSource::ConnectionManager(manager) => manager,
         };
 
         Ok(Queue {
