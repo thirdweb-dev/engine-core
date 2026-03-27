@@ -3,6 +3,11 @@ use std::time::Duration;
 /// Fixed overhead added to gas estimates to account for estimation inaccuracies
 const GAS_ESTIMATION_FIXED_OVERHEAD: u64 = 50_000;
 
+/// Etherlink chain ID - requires extra gas per authorization list item
+const ETHERLINK_CHAIN_ID: u64 = 42793;
+/// Extra gas to add per authorization list item on Etherlink
+const ETHERLINK_GAS_PER_AUTHORIZATION: u64 = 500_000;
+
 use alloy::{
     consensus::{
         SignableTransaction, Signed, TxEip4844Variant, TxEip4844WithSidecar, TypedTransaction,
@@ -361,6 +366,22 @@ impl<C: Chain> EoaExecutorWorker<C> {
                         inner_error: engine_error,
                     });
                 }
+            }
+        }
+
+        // Etherlink (42793) requires extra gas per authorization list item
+        // because their node's gas estimation doesn't account for it.
+        if request.chain_id == ETHERLINK_CHAIN_ID {
+            if let Some(auth_list) = &tx_request.authorization_list {
+                let extra = auth_list.len() as u64 * ETHERLINK_GAS_PER_AUTHORIZATION;
+                let current_gas = tx_request.gas.unwrap_or(0);
+                tracing::debug!(
+                    chain_id = ETHERLINK_CHAIN_ID,
+                    authorization_count = auth_list.len(),
+                    extra_gas = extra,
+                    "Adding Etherlink authorization list gas overhead"
+                );
+                tx_request = tx_request.with_gas_limit(current_gas + extra);
             }
         }
 
