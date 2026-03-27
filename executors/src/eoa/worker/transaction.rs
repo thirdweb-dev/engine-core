@@ -3,7 +3,7 @@ use std::time::Duration;
 /// Fixed overhead added to gas estimates to account for estimation inaccuracies
 const GAS_ESTIMATION_FIXED_OVERHEAD: u64 = 50_000;
 
-use alloy:{
+use alloy::{
     consensus::{
         SignableTransaction, Signed, TxEip4844Variant, TxEip4844WithSidecar, TypedTransaction,
     },
@@ -313,7 +313,8 @@ impl<C: Chain> EoaExecutorWorker<C> {
         if tx_request.gas.is_none() {
             match self.chain.provider().estimate_gas(tx_request.clone()).await {
                 Ok(gas_limit) => {
-                    tx_request = tx_request.with_gas_limit(gas_limit * 120 / 100 + GAS_ESTIMATION_FIXED_OVERHEAD); // 20% buffer + fixed overhead
+                    tx_request = tx_request
+                        .with_gas_limit(gas_limit * 120 / 100 + GAS_ESTIMATION_FIXED_OVERHEAD); // 20% buffer + fixed overhead
                 }
                 Err(e) => {
                     // Check if this is a revert
