@@ -127,14 +127,23 @@ impl<C: Chain> EoaExecutorWorker<C> {
         // Send 0 ETH to self with minimal gas
 
         // Build no-op transaction (send 0 to self)
-        let tx_request = AlloyTransactionRequest::default()
+        let mut tx_request = AlloyTransactionRequest::default()
             .with_from(self.eoa)
             .with_to(self.eoa) // Send to self
             .with_value(U256::ZERO) // Send 0 value
             .with_input(Bytes::new()) // No data
             .with_chain_id(self.chain.chain_id())
-            .with_nonce(nonce)
-            .with_gas_limit(21000); // Minimal gas for basic transfer
+            .with_nonce(nonce);
+
+        // Estimate gas for the noop — some chains charge
+        // significantly more than the standard 21k for a basic transfer.
+        let gas_limit = self
+            .chain
+            .provider()
+            .estimate_gas(tx_request.clone())
+            .await
+            .unwrap_or(21000);
+        tx_request = tx_request.with_gas_limit(gas_limit);
 
         let tx_request = self.estimate_gas_fees(tx_request).await?;
         let built_tx = tx_request.build_typed_tx().map_err(|e| {
