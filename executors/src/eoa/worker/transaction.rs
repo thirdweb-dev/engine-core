@@ -310,7 +310,7 @@ impl<C: Chain> EoaExecutorWorker<C> {
         if tx_request.gas.is_none() {
             match self.chain.provider().estimate_gas(tx_request.clone()).await {
                 Ok(gas_limit) => {
-                    tx_request = tx_request.with_gas_limit(gas_limit * 110 / 100); // 10% buffer
+                    tx_request = tx_request.with_gas_limit(gas_limit * 120 / 100 + 50_000); // 20% buffer + 50k overhead
                 }
                 Err(e) => {
                     // Check if this is a revert
