@@ -268,10 +268,11 @@ impl<C: Chain> EoaExecutorWorker<C> {
         if let Some(account_address) = to {
             match self.chain.provider().get_code_at(account_address).await {
                 Ok(code) => {
+                    let prefix_len = EIP_7702_DELEGATION_PREFIX.len();
                     if code.len() >= EIP_7702_DELEGATION_CODE_LENGTH
                         && code.starts_with(&EIP_7702_DELEGATION_PREFIX)
                     {
-                        let delegated_to = Address::from_slice(&code[3..23]);
+                        let delegated_to = Address::from_slice(&code[prefix_len..prefix_len + 20]);
 
                         // Filter out any auth entries whose target matches the existing delegation
                         let filtered: Vec<_> = authorization_list
