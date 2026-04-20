@@ -25,6 +25,22 @@ const HEADER_AWS_KMS_ARN: &str = "x-aws-kms-arn";
 const HEADER_AWS_ACCESS_KEY_ID: &str = "x-aws-access-key-id";
 const HEADER_AWS_SECRET_ACCESS_KEY: &str = "x-aws-secret-access-key";
 const HEADER_DIAGNOSTIC_ACCESS_PASSWORD: &str = "x-diagnostic-access-password";
+const HEADER_ECOSYSTEM_ID: &str = "x-ecosystem-id";
+const HEADER_ECOSYSTEM_PARTNER_ID: &str = "x-ecosystem-partner-id";
+
+fn extract_ecosystem_headers(parts: &Parts) -> (Option<String>, Option<String>) {
+    let ecosystem_id = parts
+        .headers
+        .get(HEADER_ECOSYSTEM_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let ecosystem_partner_id = parts
+        .headers
+        .get(HEADER_ECOSYSTEM_PARTNER_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    (ecosystem_id, ecosystem_partner_id)
+}
 
 /// Extractor for RPC credentials from headers
 #[derive(OperationIo)]
@@ -70,10 +86,14 @@ where
                 })
             })?;
 
+        let (ecosystem_id, ecosystem_partner_id) = extract_ecosystem_headers(parts);
+
         Ok(RpcCredentialsExtractor(RpcCredentials::Thirdweb(
             ThirdwebAuth::ClientIdServiceKey(thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
                 client_id: client_id.to_string(),
                 service_key: service_key.to_string(),
+                ecosystem_id,
+                ecosystem_partner_id,
             }),
         )))
     }
@@ -231,10 +251,14 @@ impl SigningCredentialsExtractor {
                     })
                 })?;
 
+            let (ecosystem_id, ecosystem_partner_id) = extract_ecosystem_headers(parts);
+
             let thirdweb_auth = ThirdwebAuth::ClientIdServiceKey(
                 thirdweb_core::auth::ThirdwebClientIdAndServiceKey {
                     client_id: client_id.to_string(),
                     service_key: service_key.to_string(),
+                    ecosystem_id,
+                    ecosystem_partner_id,
                 },
             );
 

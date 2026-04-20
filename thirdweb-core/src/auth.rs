@@ -7,6 +7,10 @@ use crate::error::ThirdwebError;
 pub struct ThirdwebClientIdAndServiceKey {
     pub client_id: String,
     pub service_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem_partner_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,6 +34,21 @@ impl ThirdwebAuth {
                     HeaderValue::from_str(&creds.service_key)
                         .map_err(|_| ThirdwebError::header_value(creds.client_id.clone()))?,
                 );
+                if let Some(ecosystem_id) = &creds.ecosystem_id {
+                    headers.insert(
+                        "x-ecosystem-id",
+                        HeaderValue::from_str(ecosystem_id)
+                            .map_err(|_| ThirdwebError::header_value(ecosystem_id.clone()))?,
+                    );
+                }
+                if let Some(ecosystem_partner_id) = &creds.ecosystem_partner_id {
+                    headers.insert(
+                        "x-ecosystem-partner-id",
+                        HeaderValue::from_str(ecosystem_partner_id).map_err(|_| {
+                            ThirdwebError::header_value(ecosystem_partner_id.clone())
+                        })?,
+                    );
+                }
                 Ok(headers)
             }
             ThirdwebAuth::SecretKey(secret_key) => {
