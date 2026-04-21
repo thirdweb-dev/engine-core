@@ -28,6 +28,16 @@ use crate::{
 
 use super::deployment::RedisDeploymentLock;
 
+const MAX_CONFIRMATION_JOB_AGE_SECONDS: u64 = 24 * 60 * 60;
+
+fn job_age_seconds<T: Clone>(job: &BorrowedJob<T>) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(job.job.created_at)
+}
+
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +163,23 @@ where
         job: &BorrowedJob<Self::JobData>,
     ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
+
+        let age_seconds = job_age_seconds(job);
+        if age_seconds > MAX_CONFIRMATION_JOB_AGE_SECONDS {
+            tracing::error!(
+                transaction_id = job_data.transaction_id,
+                user_op_hash = ?job_data.user_op_hash,
+                attempts = job.job.attempts,
+                age_seconds,
+                max_age_seconds = MAX_CONFIRMATION_JOB_AGE_SECONDS,
+                "User-op confirmation job exceeded max age, failing permanently"
+            );
+            return Err(UserOpConfirmationError::ReceiptNotAvailable {
+                user_op_hash: job_data.user_op_hash.clone(),
+                attempt_number: job.job.attempts,
+            })
+            .map_err_fail();
+        }
 
         // 1. Get Chain
         let chain = self

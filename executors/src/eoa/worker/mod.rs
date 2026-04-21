@@ -38,6 +38,9 @@ const MAX_RECYCLED_THRESHOLD: u64 = 50; // Circuit breaker from spec
 const TARGET_TRANSACTIONS_PER_EOA: u64 = 10; // Fleet management from spec
 const MIN_TRANSACTIONS_PER_EOA: u64 = 1; // Fleet management from spec
 
+const MAX_PENDING_TRANSACTION_AGE_MS: u64 = 24 * 60 * 60 * 1000;
+const MAX_STALE_PENDING_PER_CYCLE: u64 = 500;
+
 // ========== JOB DATA ==========
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -308,6 +311,15 @@ impl<C: Chain> EoaExecutorWorker<C> {
     async fn execute_main_workflow(
         &self,
     ) -> JobResult<EoaExecutorWorkerResult, EoaExecutorWorkerError> {
+        if let Err(e) = self.cull_stale_pending_transactions().await {
+            tracing::error!(
+                error = ?e,
+                eoa = ?self.eoa,
+                chain_id = self.chain_id,
+                "Error culling stale pending transactions, continuing with main workflow"
+            );
+        }
+
         // 1. CRASH RECOVERY
         let start_time = current_timestamp_ms();
         let recovered = self
@@ -400,6 +412,55 @@ impl<C: Chain> EoaExecutorWorker<C> {
             borrowed_transactions: counts.borrowed_transactions as u32,
             recycled_nonces: counts.recycled_nonces as u32,
         })
+    }
+
+    // ========== STALE TRANSACTION CULLING ==========
+    #[tracing::instrument(skip_all)]
+    async fn cull_stale_pending_transactions(&self) -> Result<(), EoaExecutorWorkerError> {
+        let now_ms = current_timestamp_ms();
+        let cutoff = now_ms.saturating_sub(MAX_PENDING_TRANSACTION_AGE_MS);
+
+        let stale = self
+            .store
+            .peek_pending_transactions_older_than(cutoff, MAX_STALE_PENDING_PER_CYCLE)
+            .await
+            .map_err(EoaExecutorWorkerError::from)?;
+
+        if stale.is_empty() {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            eoa = ?self.eoa,
+            chain_id = self.chain_id,
+            count = stale.len(),
+            cutoff_unix_ms = cutoff,
+            max_age_ms = MAX_PENDING_TRANSACTION_AGE_MS,
+            "Culling stale pending transactions older than max age"
+        );
+
+        let failures: Vec<(&crate::eoa::store::PendingTransaction, EoaExecutorWorkerError)> = stale
+            .iter()
+            .map(|p| {
+                let age_ms = now_ms.saturating_sub(p.queued_at);
+                (
+                    p,
+                    EoaExecutorWorkerError::InternalError {
+                        message: format!(
+                            "Transaction exceeded maximum pending age of {}ms (was pending for {}ms); failing to prevent zombie retries",
+                            MAX_PENDING_TRANSACTION_AGE_MS, age_ms
+                        ),
+                    },
+                )
+            })
+            .collect();
+
+        self.store
+            .fail_pending_transactions_batch(failures, self.webhook_queue.clone())
+            .await
+            .map_err(EoaExecutorWorkerError::from)?;
+
+        Ok(())
     }
 
     // ========== CRASH RECOVERY ==========

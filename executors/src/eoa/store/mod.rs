@@ -549,6 +549,77 @@ impl EoaExecutorStore {
         self.peek_pending_transactions_paginated(0, limit).await
     }
 
+    /// Peek at pending transactions whose `queued_at` (unix ms) is strictly older than
+    /// `older_than_unix_ms`.
+    pub async fn peek_pending_transactions_older_than(
+        &self,
+        older_than_unix_ms: u64,
+        limit: u64,
+    ) -> Result<Vec<PendingTransaction>, TransactionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let pending_key = self.pending_transactions_zset_name();
+        let mut conn = self.redis.clone();
+
+        let max_exclusive = format!("({older_than_unix_ms}");
+        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> = twmq::redis::cmd(
+            "ZRANGEBYSCORE",
+        )
+        .arg(&pending_key)
+        .arg(0)
+        .arg(&max_exclusive)
+        .arg("WITHSCORES")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(limit as isize)
+        .query_async(&mut conn)
+        .await?;
+
+        if transaction_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut pipe = twmq::redis::pipe();
+        for (transaction_id, _) in &transaction_ids {
+            let tx_data_key = self.transaction_data_key_name(transaction_id);
+            pipe.hget(&tx_data_key, "user_request");
+        }
+        let user_requests: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+
+        let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
+        let mut deletion_pipe = twmq::redis::pipe();
+
+        for ((transaction_id, queued_at), user_request) in
+            transaction_ids.into_iter().zip(user_requests)
+        {
+            match user_request {
+                Some(user_request) => {
+                    let user_request_parsed = serde_json::from_str(&user_request)?;
+                    pending_transactions.push(PendingTransaction {
+                        transaction_id,
+                        queued_at,
+                        user_request: user_request_parsed,
+                    });
+                }
+                None => {
+                    tracing::warn!(
+                        "Transaction {} data was missing, deleting transaction from redis",
+                        transaction_id
+                    );
+                    deletion_pipe.zrem(self.keys.pending_transactions_zset_name(), transaction_id);
+                }
+            }
+        }
+
+        if !deletion_pipe.is_empty() {
+            deletion_pipe.query_async::<()>(&mut conn).await?;
+        }
+
+        Ok(pending_transactions)
+    }
+
     /// Peek at pending transactions with pagination support
     pub async fn peek_pending_transactions_paginated(
         &self,
