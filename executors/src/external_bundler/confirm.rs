@@ -79,6 +79,16 @@ pub enum UserOpConfirmationError {
         attempt_number: u32,
     },
 
+    #[error(
+        "Confirmation job aged out after {age_seconds}s (attempt {attempt_number}) for user operation {user_op_hash}"
+    )]
+    #[serde(rename_all = "camelCase")]
+    StaleJob {
+        user_op_hash: Bytes,
+        attempt_number: u32,
+        age_seconds: u64,
+    },
+
     #[error("Failed to query user operation receipt: {message}")]
     #[serde(rename_all = "camelCase")]
     ReceiptQueryFailed {
@@ -174,9 +184,10 @@ where
                 max_age_seconds = MAX_CONFIRMATION_JOB_AGE_SECONDS,
                 "User-op confirmation job exceeded max age, failing permanently"
             );
-            return Err(UserOpConfirmationError::ReceiptNotAvailable {
+            return Err(UserOpConfirmationError::StaleJob {
                 user_op_hash: job_data.user_op_hash.clone(),
                 attempt_number: job.job.attempts,
+                age_seconds,
             })
             .map_err_fail();
         }
@@ -360,6 +371,9 @@ where
             let failure_reason = match fail_data.error {
                 UserOpConfirmationError::ReceiptNotAvailable { .. } => {
                     "Max confirmation attempts exceeded"
+                }
+                UserOpConfirmationError::StaleJob { .. } => {
+                    "Confirmation job aged out after exceeding max retry lifetime"
                 }
                 _ => "Confirmation job failed permanently",
             };

@@ -311,14 +311,17 @@ impl<C: Chain> EoaExecutorWorker<C> {
     async fn execute_main_workflow(
         &self,
     ) -> JobResult<EoaExecutorWorkerResult, EoaExecutorWorkerError> {
-        if let Err(e) = self.cull_stale_pending_transactions().await {
-            tracing::error!(
-                error = ?e,
-                eoa = ?self.eoa,
-                chain_id = self.chain_id,
-                "Error culling stale pending transactions, continuing with main workflow"
-            );
-        }
+        self.cull_stale_pending_transactions()
+            .await
+            .inspect_err(|e| {
+                tracing::error!(
+                    error = ?e,
+                    eoa = ?self.eoa,
+                    chain_id = self.chain_id,
+                    "Error culling stale pending transactions"
+                );
+            })
+            .map_err(|e| e.handle())?;
 
         // 1. CRASH RECOVERY
         let start_time = current_timestamp_ms();

@@ -564,18 +564,17 @@ impl EoaExecutorStore {
         let mut conn = self.redis.clone();
 
         let max_exclusive = format!("({older_than_unix_ms}");
-        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> = twmq::redis::cmd(
-            "ZRANGEBYSCORE",
-        )
-        .arg(&pending_key)
-        .arg(0)
-        .arg(&max_exclusive)
-        .arg("WITHSCORES")
-        .arg("LIMIT")
-        .arg(0)
-        .arg(limit as isize)
-        .query_async(&mut conn)
-        .await?;
+        let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> =
+            twmq::redis::cmd("ZRANGEBYSCORE")
+                .arg(&pending_key)
+                .arg(0)
+                .arg(&max_exclusive)
+                .arg("WITHSCORES")
+                .arg("LIMIT")
+                .arg(0)
+                .arg(limit as isize)
+                .query_async(&mut conn)
+                .await?;
 
         if transaction_ids.is_empty() {
             return Ok(Vec::new());
