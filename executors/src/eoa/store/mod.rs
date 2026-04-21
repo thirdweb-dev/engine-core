@@ -576,6 +576,22 @@ impl EoaExecutorStore {
                 .query_async(&mut conn)
                 .await?;
 
+        self.hydrate_pending_transactions(&mut conn, transaction_ids)
+            .await
+    }
+
+    /// Given a list of (transaction_id, queued_at) tuples, fetch each transaction's
+    /// `user_request` via a pipelined HGET, deserialize into `PendingTransaction`,
+    /// and ZREM any entries whose transaction data has gone missing.
+    ///
+    /// Shared by the various `peek_pending_transactions*` methods to centralize
+    /// hydration, deserialization error handling, and cleanup of orphaned zset
+    /// entries.
+    async fn hydrate_pending_transactions(
+        &self,
+        conn: &mut ConnectionManager,
+        transaction_ids: Vec<PendingTransactionStringWithQueuedAt>,
+    ) -> Result<Vec<PendingTransaction>, TransactionStoreError> {
         if transaction_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -585,9 +601,10 @@ impl EoaExecutorStore {
             let tx_data_key = self.transaction_data_key_name(transaction_id);
             pipe.hget(&tx_data_key, "user_request");
         }
-        let user_requests: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+        let user_requests: Vec<Option<String>> = pipe.query_async(conn).await?;
 
-        let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
+        let mut pending_transactions: Vec<PendingTransaction> =
+            Vec::with_capacity(transaction_ids.len());
         let mut deletion_pipe = twmq::redis::pipe();
 
         for ((transaction_id, queued_at), user_request) in
@@ -613,7 +630,7 @@ impl EoaExecutorStore {
         }
 
         if !deletion_pipe.is_empty() {
-            deletion_pipe.query_async::<()>(&mut conn).await?;
+            deletion_pipe.query_async::<()>(conn).await?;
         }
 
         Ok(pending_transactions)
@@ -639,66 +656,8 @@ impl EoaExecutorStore {
         let transaction_ids: Vec<PendingTransactionStringWithQueuedAt> =
             conn.zrange_withscores(&pending_key, start, stop).await?;
 
-        if transaction_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut pipe = twmq::redis::pipe();
-
-        for (transaction_id, _) in &transaction_ids {
-            let tx_data_key = self.transaction_data_key_name(transaction_id);
-            pipe.hget(&tx_data_key, "user_request");
-        }
-
-        let user_requests: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
-
-        let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
-        let mut deletion_pipe = twmq::redis::pipe();
-
-        for ((transaction_id, queued_at), user_request) in
-            transaction_ids.into_iter().zip(user_requests)
-        {
-            match user_request {
-                Some(user_request) => {
-                    let user_request_parsed = serde_json::from_str(&user_request)?;
-                    pending_transactions.push(PendingTransaction {
-                        transaction_id,
-                        queued_at,
-                        user_request: user_request_parsed,
-                    });
-                }
-                None => {
-                    tracing::warn!(
-                        "Transaction {} data was missing, deleting transaction from redis",
-                        transaction_id
-                    );
-                    deletion_pipe.zrem(self.keys.pending_transactions_zset_name(), transaction_id);
-                }
-            }
-        }
-
-        if !deletion_pipe.is_empty() {
-            deletion_pipe.query_async::<()>(&mut conn).await?;
-        }
-
-        // let user_requests: Vec<EoaTransactionRequest> = user_requests
-        //     .into_iter()
-        //     .map(|user_request_json| serde_json::from_str(&user_request_json))
-        //     .collect::<Result<Vec<EoaTransactionRequest>, serde_json::Error>>()?;
-
-        // let pending_transactions: Vec<PendingTransaction> = transaction_ids
-        //     .into_iter()
-        //     .zip(user_requests)
-        //     .map(
-        //         |((transaction_id, queued_at), user_request)| PendingTransaction {
-        //             transaction_id,
-        //             queued_at,
-        //             user_request,
-        //         },
-        //     )
-        //     .collect();
-
-        Ok(pending_transactions)
+        self.hydrate_pending_transactions(&mut conn, transaction_ids)
+            .await
     }
 
     /// Peek at pending transactions and get optimistic nonce in a single operation
@@ -731,47 +690,9 @@ impl EoaExecutorStore {
 
         let optimistic = optimistic_nonce.ok_or_else(|| self.nonce_sync_required_error())?;
 
-        if transaction_ids.is_empty() {
-            return Ok((Vec::new(), optimistic));
-        }
-
-        // Second pipeline: Get transaction data
-        let mut pipe = twmq::redis::pipe();
-        for (transaction_id, _) in &transaction_ids {
-            let tx_data_key = self.transaction_data_key_name(transaction_id);
-            pipe.hget(&tx_data_key, "user_request");
-        }
-
-        let user_requests: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
-
-        let mut pending_transactions: Vec<PendingTransaction> = Vec::new();
-        let mut deletion_pipe = twmq::redis::pipe();
-
-        for ((transaction_id, queued_at), user_request) in
-            transaction_ids.into_iter().zip(user_requests)
-        {
-            match user_request {
-                Some(user_request) => {
-                    let user_request_parsed = serde_json::from_str(&user_request)?;
-                    pending_transactions.push(PendingTransaction {
-                        transaction_id,
-                        queued_at,
-                        user_request: user_request_parsed,
-                    });
-                }
-                None => {
-                    tracing::warn!(
-                        "Transaction {} data was missing, deleting transaction from redis",
-                        transaction_id
-                    );
-                    deletion_pipe.zrem(self.keys.pending_transactions_zset_name(), transaction_id);
-                }
-            }
-        }
-
-        if !deletion_pipe.is_empty() {
-            deletion_pipe.query_async::<()>(&mut conn).await?;
-        }
+        let pending_transactions = self
+            .hydrate_pending_transactions(&mut conn, transaction_ids)
+            .await?;
 
         Ok((pending_transactions, optimistic))
     }
