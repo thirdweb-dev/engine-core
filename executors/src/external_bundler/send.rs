@@ -258,6 +258,27 @@ where
     ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
 
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let age_seconds = now_secs.saturating_sub(job.job.created_at);
+        if age_seconds > 24 * 60 * 60 {
+            tracing::error!(
+                transaction_id = job_data.transaction_id,
+                attempts = job.attempts(),
+                age_seconds,
+                "External bundler send job exceeded max age, failing permanently"
+            );
+            return Err(ExternalBundlerSendError::InternalError {
+                message: format!(
+                    "Send job exceeded maximum retry age of 24h (current age: {age_seconds}s, attempts: {attempts}); failing to prevent zombie retries",
+                    attempts = job.attempts()
+                ),
+            })
+            .map_err_fail();
+        }
+
         // 1. Get Chain
         let chain = self
             .chain_service

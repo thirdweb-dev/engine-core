@@ -28,6 +28,16 @@ use crate::{
 
 use super::deployment::RedisDeploymentLock;
 
+const MAX_CONFIRMATION_JOB_AGE_SECONDS: u64 = 24 * 60 * 60;
+
+fn job_age_seconds<T: Clone>(job: &BorrowedJob<T>) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(job.job.created_at)
+}
+
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +77,16 @@ pub enum UserOpConfirmationError {
     ReceiptNotAvailable {
         user_op_hash: Bytes,
         attempt_number: u32,
+    },
+
+    #[error(
+        "Confirmation job aged out after {age_seconds}s (attempt {attempt_number}) for user operation {user_op_hash}"
+    )]
+    #[serde(rename_all = "camelCase")]
+    StaleJob {
+        user_op_hash: Bytes,
+        attempt_number: u32,
+        age_seconds: u64,
     },
 
     #[error("Failed to query user operation receipt: {message}")]
@@ -153,6 +173,24 @@ where
         job: &BorrowedJob<Self::JobData>,
     ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
+
+        let age_seconds = job_age_seconds(job);
+        if age_seconds > MAX_CONFIRMATION_JOB_AGE_SECONDS {
+            tracing::error!(
+                transaction_id = job_data.transaction_id,
+                user_op_hash = ?job_data.user_op_hash,
+                attempts = job.job.attempts,
+                age_seconds,
+                max_age_seconds = MAX_CONFIRMATION_JOB_AGE_SECONDS,
+                "User-op confirmation job exceeded max age, failing permanently"
+            );
+            return Err(UserOpConfirmationError::StaleJob {
+                user_op_hash: job_data.user_op_hash.clone(),
+                attempt_number: job.job.attempts,
+                age_seconds,
+            })
+            .map_err_fail();
+        }
 
         // 1. Get Chain
         let chain = self
@@ -333,6 +371,9 @@ where
             let failure_reason = match fail_data.error {
                 UserOpConfirmationError::ReceiptNotAvailable { .. } => {
                     "Max confirmation attempts exceeded"
+                }
+                UserOpConfirmationError::StaleJob { .. } => {
+                    "Confirmation job aged out after exceeding max retry lifetime"
                 }
                 _ => "Confirmation job failed permanently",
             };

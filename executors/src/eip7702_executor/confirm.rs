@@ -39,6 +39,17 @@ fn transaction_hash_retry_delay(attempts: u32) -> Duration {
     }
 }
 
+/// Maximum age (in seconds) of a confirmation job before it is permanently failed.
+const MAX_CONFIRMATION_JOB_AGE_SECONDS: u64 = 24 * 60 * 60;
+
+fn job_age_seconds<T: Clone>(job: &BorrowedJob<T>) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(job.job.created_at)
+}
+
 // --- Job Payload ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +196,25 @@ where
     ) -> JobResult<Self::Output, Self::ErrorData> {
         let job_data = &job.job.data;
         let transaction_hash_delay = transaction_hash_retry_delay(job.attempts());
+
+        let age_seconds = job_age_seconds(job);
+        if age_seconds > MAX_CONFIRMATION_JOB_AGE_SECONDS {
+            tracing::error!(
+                bundler_transaction_id = job_data.bundler_transaction_id,
+                transaction_id = job_data.transaction_id,
+                attempts = job.attempts(),
+                age_seconds,
+                max_age_seconds = MAX_CONFIRMATION_JOB_AGE_SECONDS,
+                "EIP-7702 confirmation job exceeded max age, failing permanently"
+            );
+            return Err(Eip7702ConfirmationError::TransactionHashError {
+                message: format!(
+                    "Job exceeded maximum retry age of {MAX_CONFIRMATION_JOB_AGE_SECONDS}s (current age: {age_seconds}s, attempts: {attempts}); failing to prevent zombie retries",
+                    attempts = job.attempts()
+                ),
+            })
+            .map_err_fail();
+        }
 
         // 1. Get Chain
         let chain = self
