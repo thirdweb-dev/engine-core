@@ -104,9 +104,13 @@ where
                 if is_deployed {
                     return Ok(DeploymentStatus::Deployed);
                 }
+
+                // Stale lock, not deployed: previous holder died without releasing.
+                // Reclaim it so the caller can retry.
+                self.lock.release_lock(chain_id, account_address).await?;
+                return Ok(DeploymentStatus::NotDeployed);
             }
 
-            // Either fresh lock or stale but not deployed
             return Ok(DeploymentStatus::BeingDeployed {
                 stale: is_stale,
                 lock_id,

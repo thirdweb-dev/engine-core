@@ -7,12 +7,16 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use twmq::{
     error::TwmqError,
-    redis::{AsyncCommands, Pipeline, aio::ConnectionManager},
+    redis::{AsyncCommands, Pipeline, SetExpiry, SetOptions, aio::ConnectionManager},
 };
 use uuid::Uuid;
 
 const CACHE_PREFIX: &str = "deployment_cache";
 const LOCK_PREFIX: &str = "deployment_lock";
+
+/// Fallback TTL so a lock that's never explicitly released (e.g. worker crash)
+/// can't block the account forever.
+const LOCK_TTL_SECONDS: u64 = 300;
 
 #[derive(Clone)]
 pub struct RedisDeploymentCache {
@@ -165,9 +169,13 @@ impl DeploymentLock for RedisDeploymentLock {
                 message: format!("Serialization failed: {e}"),
             })?;
 
-        // Use SET NX EX for atomic acquire
+        // SET NX EX: atomic acquire with a fallback expiry.
+        let opts = SetOptions::default()
+            .conditional_set(twmq::redis::ExistenceCheck::NX)
+            .with_expiration(SetExpiry::EX(LOCK_TTL_SECONDS));
+
         let result: Option<String> =
-            conn.set_nx(&key, &lock_data_str)
+            conn.set_options(&key, &lock_data_str, opts)
                 .await
                 .map_err(|e| EngineError::InternalError {
                     message: format!("Lock acquire failed: {e}"),
