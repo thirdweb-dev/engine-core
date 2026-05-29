@@ -220,4 +220,38 @@ impl DeploymentLock for RedisDeploymentLock {
 
         Ok(deleted > 0)
     }
+
+    async fn release_lock_if_owner(
+        &self,
+        chain_id: u64,
+        account_address: &Address,
+        lock_id: &str,
+    ) -> Result<bool, EngineError> {
+        let mut conn = self.conn().clone();
+        let key = self.lock_key(chain_id, account_address);
+
+        // Atomic compare-and-delete: only DEL if the stored lock's lock_id matches.
+        let script = twmq::redis::Script::new(
+            r#"
+            local v = redis.call('GET', KEYS[1])
+            if not v then return 0 end
+            local ok, data = pcall(cjson.decode, v)
+            if ok and data.lock_id == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            "#,
+        );
+
+        let deleted: i64 = script
+            .key(&key)
+            .arg(lock_id)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| EngineError::InternalError {
+                message: format!("Failed to release lock for account {account_address}: {e}"),
+            })?;
+
+        Ok(deleted > 0)
+    }
 }
