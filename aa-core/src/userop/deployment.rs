@@ -42,6 +42,15 @@ pub trait DeploymentLock: Send + Sync {
         chain_id: u64,
         account_address: &Address,
     ) -> impl Future<Output = Result<bool, EngineError>> + Send;
+
+    /// Release a deployment lock only if it still holds the given `lock_id`.
+    /// Atomic compare-and-delete; returns true if a matching lock was removed.
+    fn release_lock_if_owner(
+        &self,
+        chain_id: u64,
+        account_address: &Address,
+        lock_id: &str,
+    ) -> impl Future<Output = Result<bool, EngineError>> + Send;
 }
 
 pub enum DeploymentStatus {
@@ -104,9 +113,16 @@ where
                 if is_deployed {
                     return Ok(DeploymentStatus::Deployed);
                 }
+
+                // Stale lock, not deployed: previous holder died without releasing.
+                // Reclaim only the lock we observed, so we don't delete a lock that
+                // another worker acquired while we were checking chain state.
+                self.lock
+                    .release_lock_if_owner(chain_id, account_address, &lock_id)
+                    .await?;
+                return Ok(DeploymentStatus::NotDeployed);
             }
 
-            // Either fresh lock or stale but not deployed
             return Ok(DeploymentStatus::BeingDeployed {
                 stale: is_stale,
                 lock_id,
